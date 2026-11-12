@@ -3,10 +3,11 @@
 # file, so no served drv moves; x86 only (null gtkMeson on aarch64 drops it), as c-qnew.nix. Store-only builds (nativeTools), each with
 # an in-build check that runs it on real input. Sources, patches and flags are nixpkgs f4a03c0's, pinned by sha256 (equal to nixpkgs'
 # flat or NAR hash); where a recipe departs from it, the comment says why.
-{ base, mkSrcPkg, world, chk, hostTools, autoreconfTools, autoreconf, cmake, python3, perl, texinfo, lzip, gtkMeson, ... }:
+{ base, mkSrcPkg, world, chk, hostTools, autoreconfTools, autoreconf, cmake, python3, perl, texinfo, lzip, gnupatch, groff, gtkMeson, ... }:
 let
-  inherit (base) zlib pkgconf gettext diffutils;
+  inherit (base) zlib pkgconf gettext diffutils libiconv;
   curl = base.nixChain.curl;
+  fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   cmakeB = extra: ''
     cmake -S . -B _b -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_INSTALL_LIBDIR=lib/amd64 -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_SKIP_RPATH=ON -DCMAKE_IGNORE_PREFIX_PATH="/usr;/usr/local;/opt" \
@@ -31,6 +32,12 @@ TPROG
     ${cc} -I"$out/include" "$W/t.${ext}" -L"$out/lib/amd64" ${libs} -Wl,-R,"$out/lib/amd64" -o "$W/t"
   '';
   tprog = tprogX ''"$CC"'' "c";
+  # svanderburg's AC_INIT([...], m4_esyscmd[_s]([echo -n $(cat ./version)$VERSION_SUFFIX])): `echo -n` -> printf %s (illumos sh echo)
+  echoN = ''
+    grep -qE 'm4_esyscmd(_s)?\(\[echo -n \$\(cat \./version\)\$VERSION_SUFFIX\]\)' configure.ac || { echo "FATAL: echo -n anchor" >&2; exit 1; }
+    sed -Ei 's/m4_esyscmd(_s)?\(\[echo -n (\$\(cat \.\/version\)\$VERSION_SUFFIX)\]\)/m4_esyscmd\1([printf %s \2])/' configure.ac
+    grep -qE 'm4_esyscmd(_s)?\(\[printf %s \$\(cat \./version\)\$VERSION_SUFFIX\]\)' configure.ac || { echo "FATAL: echo -n edit" >&2; exit 1; }
+  '';
   schemesSrc = { url = "https://github.com/tinted-theming/schemes/archive/43dd14f6466a782bd57419fdfb5f398c74d6ac53.tar.gz";
                  sha256 = "909aa9702bfa67deabe35b5fd1ad235d15122e195c02373b9b59dc277b787914"; };
   # header-only .zip sources (no tarball, so not mk-src-pkg: GNU tar cannot unpack them): the store python's zipfile and coreutils, as
@@ -395,6 +402,279 @@ MKPDF
 int main(int c, char **v){ uPDFParser::Parser p; try { p.parse(v[1]); } catch (uPDFParser::Exception &e) { std::printf("%s\n", e.what()); return 1; }
 std::printf("ok %d\n", (int)p.objects().size()); return 0; }'' "-lupdfparser"}
       ${chk ''"$W/t" "$W/a.pdf"'' "^ok 1$"}
+    '';
+  };
+
+  # ---- batch 2: the leaves' dependents (RANKING.md's last column), and the leaves that needed more ---------------------------------
+  # libee (LGPL-2.1-or-later): rsyslog's event expression library (libee, libee-convert), autotools from the release tarball, on
+  # libestr above (pkg-config), as nixpkgs.
+  libee = mkSrcPkg {
+    pname = "libee"; version = "0.4.1";
+    src = { url = "http://www.libee.org/download/files/download/libee-0.4.1.tar.gz";
+            sha256 = "c0dac01938593deee06c3d161e4eda4ecc0fd7317e1321bd96e301aceb7fb027"; };
+    deps = [ world libestr ]; nativeTools = [ pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      # serial, as nixpkgs (enableParallelBuilding unset): src/Makefile links libee-convert without a dependency on libee.la (measured)
+      gmake; gmake check; gmake install
+      ${tprog ''#include <libestr.h>
+#include <libee/libee.h>
+#include <stdio.h>
+int main(void){ ee_ctx c = ee_initCtx(); if (!c) return 1; struct ee_event *e = ee_newEvent(c); printf("ok %s %d\n", ee_version(), e != NULL); ee_exitCtx(c); return 0; }'' "-I${libestr}/include -L${libestr}/lib/amd64 -lee -lestr"}
+      ${chk ''"$W/t"'' "^ok 0\\.4\\.1 1$"}
+    '';
+  };
+
+  # libmrss (LGPL-2.0-only): RSS/Atom parsing on libnxml and libcurl, autotools from the tag (autoreconf; an empty NEWS, nixpkgs'
+  # postPatch, upstream issue 3), as nixpkgs. Its check program `new` runs.
+  libmrss = mkSrcPkg {
+    pname = "libmrss"; version = "0.19.4";
+    src = { url = "https://github.com/bakulf/libmrss/archive/refs/tags/0.19.4.tar.gz";
+            sha256 = "28022247056b04ca3f12a9e21134d42304526b2a67b7d6baf139e556af1151c6"; };
+    deps = [ world curl libnxml ]; nativeTools = autoreconfTools ++ [ pkgconf ] ++ hostTools;
+    build = ''
+      touch NEWS; mkdir -p m4
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j''${NIX_BUILD_CORES}; gmake check; gmake install
+      ${tprog ''#include <mrss.h>
+#include <stdio.h>
+int main(void){ char b[] = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>sol</title><item><title>nix</title></item></channel></rss>";
+mrss_t *m = NULL; if (mrss_parse_buffer(b, sizeof b - 1, &m)) return 1; printf("ok %s %s\n", m->title, m->item->title); mrss_free(m); return 0; }'' "-I${libnxml}/include -lmrss"}
+      ${chk ''"$W/t"'' "^ok sol nix$"}
+    '';
+  };
+
+  # lockfile-progs (GPL-2.0-only): command-line lock files (lockfile-create/-check/-touch/-remove, mail-lock...), on liblockfile above,
+  # its GNUmakefile and check, as nixpkgs (bin/ and man/man1 in $out; NIX_CFLAGS_COMPILE's -Wno-error=format-overflow for gcc).
+  # The variants are hard links to lockfile-create, as upstream builds them.
+  lockfile-progs = mkSrcPkg {
+    pname = "lockfile-progs"; version = "0.2.0";
+    src = { url = "https://deb.debian.org/debian/pool/main/l/lockfile-progs/lockfile-progs_0.2.0.tar.xz";
+            sha256 = "2988fb5a8b407e52e2aa6282ce45497f465c921d591138c100f4898215844c90"; };
+    deps = [ world liblockfile ]; nativeTools = hostTools;
+    build = ''
+      # rewrite-time.c defines a bare _XOPEN_SOURCE (XPG3 on illumos, which then hides strptime): __EXTENSIONS__ shows it. glibc's
+      # <string.h> declares rindex under _GNU_SOURCE; illumos keeps it in <strings.h>
+      f='CFLAGS=-Wno-error=format-overflow'; c="CPPFLAGS=-D__EXTENSIONS__ -include strings.h -I${liblockfile}/include"; l="LDFLAGS=-L${liblockfile}/lib/amd64"
+      gmake "$f" "$c" "$l"; gmake check "$f" "$c" "$l"
+      mkdir -p "$out/bin" "$out/man/man1"; install bin/* "$out/bin"; install man/*.1 "$out/man/man1"
+      "$out/bin/lockfile-create" "$W/f"; "$out/bin/lockfile-check" "$W/f"
+      ${chk ''"$out/bin/lockfile-remove" "$W/f" && ls "$W" | grep -c "^f\\.lock$"'' "^0$"}
+    '';
+  };
+
+  # m4rie (GPL-2.0-or-later): M4RI over small finite fields GF(2^e), autotools from the tag (autoreconf), on m4ri above (pkg-config),
+  # make check, as nixpkgs.
+  m4rie = mkSrcPkg {
+    pname = "m4rie"; version = "20250128";
+    src = { url = "https://github.com/malb/m4rie/archive/20250128.tar.gz";
+            sha256 = "cf2a053de5086d6150ab44cb82e27c112a285c8786d88bea2e6518ed80984d5c"; };
+    deps = [ world m4ri ]; nativeTools = autoreconfTools ++ [ pkgconf ] ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j''${NIX_BUILD_CORES}; gmake check; gmake install
+      ${tprog ''#include <m4rie/m4rie.h>
+#include <stdio.h>
+int main(void){ gf2e *f = gf2e_init(irreducible_polynomials[4][1]); mzed_t *a = mzed_init(f, 50, 50); mzed_randomize(a); mzed_t *s = mzed_add(NULL, a, a);
+printf("ok %d %d\n", f->degree, mzed_is_zero(s)); return 0; }'' "-I${m4ri}/include -L${m4ri}/lib/amd64 -lm4rie -lm4ri"}
+      ${chk ''"$W/t"'' "^ok 4 1$"}
+    '';
+  };
+
+  # libxnd (BSD-3-Clause-like, bsdOriginal in nixpkgs): xnd's typed memory containers on libndtypes above, its own configure with
+  # LD = the compiler and libndtypes' include/lib dirs, its test suite, overflow.h installed, as nixpkgs. illumos ld's soname is -h.
+  libxnd = mkSrcPkg {
+    pname = "libxnd"; version = "0.2.0-unstable-2023-11-17";
+    src = { url = "https://github.com/xnd-project/libxnd/archive/e1a06d9f6175f4f4e1da369b7e907ad6b2952c00.tar.gz";
+            sha256 = "53fcb7a226296091a31831a88ba2470a8cde3f4c3359748c3e51ad8b9e334409"; };
+    deps = [ world libndtypes ]; nativeTools = hostTools;
+    build = ''
+      grep -q 'CONFIGURE_LDFLAGS="-shared -Wl,-soname,$LIBSONAME"' configure || { echo "FATAL: libxnd soname anchor" >&2; exit 1; }
+      sed -i 's/CONFIGURE_LDFLAGS="-shared -Wl,-soname,\$LIBSONAME"/CONFIGURE_LDFLAGS="-shared -Wl,-h,$LIBSONAME"/' configure
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" LD=gcc --with-includes=${libndtypes}/include --with-libs=${libndtypes}/lib/amd64
+      gmake -j''${NIX_BUILD_CORES}; gmake check; gmake install
+      cp libxnd/overflow.h "$out/include/overflow.h"
+      /usr/bin/elfdump -d "$out/lib/amd64/libxnd.so.0.2.0dev3" | grep -Eq 'SONAME +0x[0-9a-f]+ +libxnd\.so\.0$' || { echo "FATAL: libxnd soname" >&2; exit 1; }
+      ${tprog ''#include <ndtypes.h>
+#include <xnd.h>
+#include <stdio.h>
+int main(void){ ndt_context_t *c = ndt_context_new(); if (ndt_init(c) < 0 || xnd_init_float(c) < 0) return 1; xnd_master_t *x = xnd_empty_from_string("4 * int32", XND_OWN_ALL, c);
+if (!x) { printf("err %s\n", ndt_context_msg(c)); return 1; } ((int32_t *)x->master.ptr)[3] = 42; printf("ok %lld %d\n", (long long)x->master.type->datasize, ((int32_t *)x->master.ptr)[3]); xnd_del(x); return 0; }'' "-I${libndtypes}/include -L${libndtypes}/lib/amd64 -lxnd -lndtypes"}
+      ${chk ''"$W/t"'' "^ok 16 42$"}
+    '';
+  };
+
+  # c-siphash (Apache-2.0 OR LGPL-2.1-or-later): c-util's SipHash, meson on c-stdaux above (pkg-config; no subproject download), its
+  # tests, as nixpkgs. Its version script needs GNU ld (c-stdaux's version_scripts probe says no on illumos ld): no symbol versions.
+  c-siphash = mkSrcPkg {
+    pname = "c-siphash"; version = "1.1.0";
+    src = { url = "https://github.com/c-util/c-siphash/archive/refs/tags/v1.1.0.tar.gz";
+            sha256 = "a70c71effbcd553858250d109dd39599b9e3d5a91d46f0beb731bf6799893e63"; };
+    deps = [ world c-stdaux ]; nativeTools = mesonTools;
+    build = ''
+      ${mesonBuild ""}
+      ${tprog ''#include <c-siphash.h>
+#include <stdio.h>
+int main(void){ uint8_t k[16]; for (int i = 0; i < 16; i++) k[i] = (uint8_t)i; uint8_t m[15]; for (int i = 0; i < 15; i++) m[i] = (uint8_t)i;
+printf("ok %016llx\n", (unsigned long long)c_siphash_hash(k, m, 15)); return 0; }'' "-I${c-stdaux}/include -lcsiphash-1"}
+      # the SipHash-2-4 paper's test vector for a 15-byte message (key 00..0f, message 00..0e)
+      ${chk ''"$W/t"'' "^ok a129ca6149be45e5$"}
+    '';
+  };
+
+  # plzip (GPL-2.0-or-later): parallel lzip on lzlib above, its own configure, its make check, man and info pages in $out, as nixpkgs
+  # (its source the .tar.lz by the release email's hash).
+  plzip = mkSrcPkg {
+    pname = "plzip"; version = "1.13";
+    src = { url = "https://download.savannah.gnu.org/releases/lzip/plzip/plzip-1.13.tar.lz";
+            sha256 = "7fe0141b72eaf084d82aad3b14b3a4d96dff0bdefaf7c389f755d8948b3637c8"; };
+    deps = [ world lzlib ]; nativeTools = [ lzip texinfo ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" CXX=g++ CPPFLAGS="-I${lzlib}/include" LDFLAGS="-L${lzlib}/lib/amd64"
+      gmake -j''${NIX_BUILD_CORES}; gmake check; gmake install
+      rm -f "$out/share/info/dir"
+      head -c 300000 /dev/zero | tr '\0' 's' > "$W/in"
+      ${chk ''"$out/bin/plzip" -n 2 -c "$W/in" > "$W/in.lz" && "$out/bin/plzip" -t "$W/in.lz" && "$out/bin/plzip" -dc "$W/in.lz" | cmp - "$W/in" && echo same'' "^same$"}
+    '';
+  };
+
+  # tarlz (GPL-2.0-or-later): tar with parallel lzip compression on lzlib above, its own configure, man and info pages in $out, as nixpkgs
+  # (no make check there: "system clock issues"; its installCheck runs --version, and here a create/extract round trip).
+  tarlz = mkSrcPkg {
+    pname = "tarlz"; version = "0.30";
+    src = { url = "https://download.savannah.gnu.org/releases/lzip/tarlz/tarlz-0.30.tar.lz";
+            sha256 = "c6339319413f37fc4b155b1ba8a58640a7fee36498b095d3b6d3c13d9c7f286c"; };
+    deps = [ world lzlib ]; nativeTools = [ lzip texinfo ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" CXX=g++ CPPFLAGS="-I${lzlib}/include" LDFLAGS="-L${lzlib}/lib/amd64"
+      gmake -j''${NIX_BUILD_CORES}; gmake install
+      rm -f "$out/share/info/dir"
+      ${chk ''"$out/bin/tarlz" --version'' "^tarlz 0\\.30$"}
+      mkdir -p "$W/d/sub"; printf solnix > "$W/d/sub/f"; cd "$W"
+      "$out/bin/tarlz" -cf a.tar.lz d; mkdir x; cd x; "$out/bin/tarlz" -xf ../a.tar.lz; cd "$SRC"
+      ${chk ''cat "$W/x/d/sub/f"'' "^solnix$"}
+    '';
+  };
+
+  # pkgdiff (GPL-2.0-only): compares package contents (perl), installed by its Makefile.pl, as nixpkgs (no build); nixpkgs wraps it
+  # with wdiff on PATH: here the same through a two-line sh wrapper (the store bash and the wdiff above).
+  pkgdiff = mkSrcPkg {
+    pname = "pkgdiff"; version = "1.8";
+    src = { url = "https://github.com/lvc/pkgdiff/archive/1.8.tar.gz";
+            sha256 = "4b44a933a776500937887134cf89b94a89199304c416ad05b2ac365cce1076d8"; };
+    deps = [ world perl wdiff base.bash ]; nativeTools = [ perl ] ++ hostTools;
+    build = ''
+      mkdir -p "$out"; gmake install prefix="$out"
+      mv "$out/bin/pkgdiff" "$out/bin/.pkgdiff-wrapped"
+      printf '#!%s\nPATH=%s/bin${"$"}{PATH:+:$PATH} exec %s "%s" "$@"\n' "${base.bash}/bin/bash" "${wdiff}" "${perl}/bin/perl" "$out/bin/.pkgdiff-wrapped" > "$out/bin/pkgdiff"
+      chmod 755 "$out/bin/pkgdiff"
+      ${chk ''"$out/bin/pkgdiff" -dumpversion'' "^1\\.8$"}
+    '';
+  };
+
+  # id3lib (LGPL-2.0-or-later): ID3v1/v2 tag library (C++) and its id3info/id3tag/id3cp/id3convert tools, autotools from the 2003
+  # release, nixpkgs' two patches (gcc 4.3 headers; the UTF-16 writing fix), on zlib and GNU libiconv (nixpkgs' libiconv: the world's
+  # iconv has no UTF-16 converters for amd64). Its 2003 config.guess/sub/ltconfig predate x86_64 Solaris: autoreconf with the store
+  # autotools, as nixpkgs does on newer hosts. nixpkgs has doCheck = false (its tests do not compile).
+  id3lib = let np = f: sha256: fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/by-name/id/id3lib/${f}" sha256;
+  in mkSrcPkg {
+    pname = "id3lib"; version = "3.8.3";
+    src = { url = "https://downloads.sourceforge.net/id3lib/id3lib-3.8.3.tar.gz";
+            sha256 = "2749cc3c0cd7280b299518b1ddf5a5bcfe2d1100614519b68702230e26c7d079"; };
+    deps = [ world zlib libiconv ]; nativeTools = autoreconfTools ++ [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${np "id3lib-3.8.3-gcc43-1.patch" "cc7390f77bfc3c0a03bfff8b30fed65dfd93d6033ddc73e46b21cd26db3153ff"}
+      patch -p1 < ${np "patch_id3lib_3.8.3_UTF16_writing_bug.diff" "71c79002d9485965a3a93e87ecbd7fed8f89f64340433b7ccd263d21385ac969"}
+      # the 2003 configure.in's AC_DEFINEs have no templates (it read the obsolete acconfig.h, which autoheader no longer does): keep
+      # the release's config.h.in, which has them all, and regenerate the rest (aclocal, libtoolize, autoconf, automake)
+      export AUTOHEADER=true
+      ${autoreconf}
+      # -L gcc.lib: libtool's C++ link would otherwise bake libstdc++.la's dir in as -R (as zimg). The regenerated configure (autoconf
+      # 2.73) would add -std=gnu23, where examples/getopt.h's `extern int getopt ();` means (void) and conflicts: no C23 probe, so the
+      # wrapper's -std=gnu17 stands
+      ac_cv_prog_cc_c23=no ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static CPPFLAGS="-I${libiconv}/include" LDFLAGS="-L${libiconv}/lib/amd64 -L$gccLib/amd64"
+      grep -q '^#define HAVE_ICONV_H 1' config.h && grep -q '^ICONV_LIB.*-liconv\|^LIBS = .*-liconv' Makefile src/Makefile || { echo "FATAL: id3lib without GNU libiconv" >&2; grep -n iconv config.h src/Makefile >&2; exit 1; }
+      gmake -j''${NIX_BUILD_CORES}; gmake install
+      # write a title with id3tag, read it back with id3info (the library's v2 render and parse, on a zero-filled mp3 stand-in)
+      head -c 2048 /dev/zero > "$W/a.mp3"
+      "$out/bin/id3tag" --song=solnix --artist=qnew5 "$W/a.mp3" > /dev/null
+      ${chk ''"$out/bin/id3info" "$W/a.mp3"'' "TIT2.*: solnix"}
+    '';
+  };
+
+  # id3v2 (GPL-2.0-or-later): the id3v2 tag editor on id3lib above, its Makefile (PREFIX=$out; clean then all, as nixpkgs: the tarball
+  # ships prebuilt Linux objects), the man page through groff (the served groff).
+  id3v2 = mkSrcPkg {
+    pname = "id3v2"; version = "0.1.12";
+    src = { url = "https://downloads.sourceforge.net/id3v2/id3v2-0.1.12.tar.gz";
+            sha256 = "8105fad3189dbb0e4cb381862b4fa18744233c3bbe6def6f81ff64f5101722bf"; };
+    deps = [ world id3lib zlib ]; nativeTools = [ groff ] ++ hostTools;
+    build = ''
+      gmake PREFIX="$out" clean; gmake PREFIX="$out" all
+      # upstream's install runs `install -s` (the world's SVR4 strip would take the symbols split-debug wants) and nroff: the same by hand
+      mkdir -p "$out/bin" "$out/share/man/man1"; install -m755 id3v2 "$out/bin/id3v2"; nroff -man id3v2.1 > "$out/share/man/man1/id3v2.1"
+      head -c 2048 /dev/zero > "$W/a.mp3"; "$out/bin/id3v2" -t solnix -a qnew5 "$W/a.mp3"
+      ${chk ''"$out/bin/id3v2" -l "$W/a.mp3"'' "TIT2.*: solnix"}
+    '';
+  };
+
+  # help2man (GPL-3.0-or-later): man pages from --help output, the perl script and its own manual, autotools from the release tarball.
+  # Here for libiff/libilbm's man pages (x86 has no help2man job; aarch64 does). nixpkgs builds it with --enable-nls on perl's
+  # Locale::gettext (localised pages through an LD_PRELOAD shim): the served perl has no Locale::gettext, so --disable-nls, English only.
+  help2man = mkSrcPkg {
+    pname = "help2man"; version = "1.49.3";
+    src = { url = "https://mirrors.kernel.org/gnu/help2man/help2man-1.49.3.tar.xz";
+            sha256 = "4d7e4fdef2eca6afe07a2682151cea78781e0a4e8f9622142d9f70c083a2fd4f"; };
+    deps = [ world perl ]; nativeTools = [ perl texinfo ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --disable-nls
+      gmake; gmake install
+      rm -f "$out/share/info/dir"
+      ${chk ''"$out/bin/help2man" --version'' "^GNU help2man 1\\.49\\.3$"}
+      ${chk ''"$out/bin/help2man" -N "$out/bin/help2man" | grep -c "^\\.SH"'' "^ *[3-9]$"}
+    '';
+  };
+
+  # libiff (MIT): EA-IFF 85 parser library (libiff, iffpp, iffjoin), autotools from the git rev (autoreconf), help2man for the two man
+  # pages, its test suite, as nixpkgs. Its AC_INIT reads the version with `echo -n`: illumos sh's echo has no -n, so it was "-n 0.1"
+  # (and libiff.pc's Version, which libilbm's pkg-config check compares): printf instead.
+  libiff = mkSrcPkg {
+    pname = "libiff"; version = "0-unstable-2024-03-02";
+    src = { url = "https://github.com/svanderburg/libiff/archive/b5f542a83c824f26e0816770c9a17c22bd388606.tar.gz";
+            sha256 = "3dfacd01e88f5fe528281396b2d171e2b5d80897fda3576a8fcdc0d17331891e"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ [ help2man ] ++ hostTools;
+    build = ''
+      ${echoN}
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      grep -q '^PACKAGE_VERSION = 0\.1$' Makefile || { echo "FATAL: libiff version" >&2; grep '^PACKAGE_VERSION' Makefile >&2; exit 1; }
+      # serial, as nixpkgs: `iffjoin.1: main.c` runs help2man on ./iffjoin without depending on it (a parallel make ran it first)
+      # tests/pp-text.sh (#!/bin/sh) nests "..." in `...`: illumos /bin/sh (ksh93) splits it there and the test fails (measured: the
+      # same line passes under bash, fails under /bin/sh); the store bash runs it, as /bin/sh is bash on NixOS
+      sed -i "1s|^#!/bin/sh -e$|#!$BASH -e|" tests/pp-text.sh; head -1 tests/pp-text.sh | grep -qF "$BASH" || { echo "FATAL: libiff pp-text #!" >&2; exit 1; }
+      gmake; gmake check; gmake install
+      ls "$out/share/man/man1/iffpp.1" "$out/share/man/man1/iffjoin.1" > /dev/null
+      ${chk ''"$out/bin/iffpp" tests/pp-text.TEST'' "Hello world"}
+    '';
+  };
+
+  # libilbm (MIT): the IFF ILBM image format on libiff above (pkg-config), its tools (ilbmpp, ilbmpack, ilbm2acbm, acbm2ilbm), autotools
+  # from the git rev (autoreconf), help2man man pages, its test suite, as nixpkgs.
+  libilbm = mkSrcPkg {
+    pname = "libilbm"; version = "0-unstable-2024-03-02";
+    src = { url = "https://github.com/svanderburg/libilbm/archive/586f5822275ef5780509a851cb90c7407b2633d9.tar.gz";
+            sha256 = "881c6efdb4de462b5383e3c4b554064cf63ee7208cc1ee00a3ff5fd133c0c3eb"; };
+    deps = [ world libiff ]; nativeTools = autoreconfTools ++ [ help2man pkgconf ] ++ hostTools;
+    build = ''
+      ${echoN}
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      grep -q '^PACKAGE_VERSION = 0\.1$' Makefile || { echo "FATAL: libilbm version" >&2; grep '^PACKAGE_VERSION' Makefile >&2; exit 1; }
+      gmake; gmake check; gmake install   # serial: the man page rules run help2man on programs they do not depend on (libiff's case)
+      ls "$out/share/man/man1/ilbmpp.1" > /dev/null
+      ${chk ''"$out/bin/ilbmpp" --version'' "/bin/ilbmpp \\(libilbm\\) 0\\.1$"}
     '';
   };
 }
