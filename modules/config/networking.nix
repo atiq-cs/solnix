@@ -125,14 +125,17 @@ let
         /usr/sbin/ipadm create-if ${ifname} 2>/dev/null
         /usr/sbin/ipadm show-addr -p -o type ${ifname}/ 2>/dev/null | grep -q '^dhcp$' || \
           /usr/sbin/ipadm create-addr -T dhcp -w 60 ${ifname}/dhcp 2>/dev/null
+        # A lease is an IPv4 address on the dhcp addrobj, not its state: on a reboot the persistent
+        # addrobj is "ok" with ADDR "?" (0.0.0.0, ipadm.c print_sa_cb) until dhcpagent binds (dixi, 2026-11-12).
         __w=0
-        until /usr/sbin/ipadm show-addr -p -o type,state ${ifname}/ 2>/dev/null | grep -q '^dhcp:ok$'; do
+        until /usr/sbin/ipadm show-addr -p -o type,state,addr ${ifname}/ 2>/dev/null | grep -q '^dhcp:ok:[0-9][0-9]*\.'; do
           /usr/sbin/ipadm show-addr -p -o type ${ifname}/ 2>/dev/null | grep -q '^dhcp$' || break
           [ $__w -ge 60 ] && break
           sleep 2; __w=$((__w + 2))
         done
-        if ! /usr/sbin/ipadm show-addr -p -o type,state ${ifname}/ 2>/dev/null | grep -q '^dhcp:ok$'; then
-          echo "   ipadm failed (ena link STATE unknown?); using legacy ifconfig"
+        echo "   ${ifname}: after $__w s: ipadm $(/usr/sbin/ipadm show-addr -p -o type,state,addr ${ifname}/ 2>/dev/null | grep '^dhcp:' | head -1), Yiaddr '$(/sbin/dhcpinfo -i ${ifname} Yiaddr 2>/dev/null)'"
+        if ! /usr/sbin/ipadm show-addr -p -o type,state,addr ${ifname}/ 2>/dev/null | grep -q '^dhcp:ok:[0-9][0-9]*\.'; then
+          echo "   ${ifname}: no lease through ipadm (ena link STATE unknown?); using legacy ifconfig"
           /usr/sbin/ifconfig ${ifname} plumb 2>&1
           /usr/sbin/ifconfig ${ifname} dhcp start wait 60 2>&1
         fi
@@ -199,17 +202,23 @@ let
       # too, but it runs before this service has a lease and finds none (measured
       # on the X1: net-svc at 12:21:35, the lease at 12:22:37, no /etc/resolv.conf,
       # dns/client offline "Dependency file://localhost/etc/resolv.conf is absent").
-      __ns=""; __dom=""
-      for __if in ${concatStringsSep " " dhcpIfs} $(/usr/sbin/ipadm show-addr -p -o addrobj,type 2>/dev/null | awk -F: '$2 == "dhcp" { sub("/.*", "", $1); print $1 }'); do
-        __ns=$(/sbin/dhcpinfo -i $__if DNSserv 2>/dev/null); __dom=$(/sbin/dhcpinfo -i $__if DNSdmain 2>/dev/null)
+      # A lease that is still binding has no options yet: poll, bounded, before deciding it has no servers.
+      __ns=""; __dom=""; __if=""; __w=0
+      while :; do
+        for __if in ${concatStringsSep " " dhcpIfs} $(/usr/sbin/ipadm show-addr -p -o addrobj,type 2>/dev/null | awk -F: '$2 == "dhcp" { sub("/.*", "", $1); print $1 }'); do
+          __ns=$(/sbin/dhcpinfo -i $__if DNSserv 2>/dev/null); __dom=$(/sbin/dhcpinfo -i $__if DNSdmain 2>/dev/null)
+          [ -n "$__ns" ] && break
+        done
         [ -n "$__ns" ] && break
+        [ $__w -ge 30 ] && break
+        sleep 2; __w=$((__w + 2))
       done
       if [ -n "$__ns" ]; then
         { [ -n "$__dom" ] && echo "domain $__dom"; for __s in $__ns; do echo "nameserver $__s"; done; } > /etc/resolv.conf.dhcp
         chmod 0644 /etc/resolv.conf.dhcp; mv -f /etc/resolv.conf.dhcp /etc/resolv.conf
-        echo "-- resolv.conf from the DHCP lease: $(echo $__ns)"
+        echo "-- resolv.conf from the DHCP lease on $__if after $__w s: DNSserv '$(echo $__ns)', DNSdmain '$__dom'"
       else
-        echo "-- no DNS servers in the DHCP lease; /etc/resolv.conf left as it is"
+        echo "-- no DNS servers in a DHCP lease after $__w s (last tried '$__if', DNSserv empty); /etc/resolv.conf left as it is"
       fi
     ''}
     /usr/bin/hostname ${cfg.hostName} 2>/dev/null || true
@@ -334,9 +343,9 @@ in
           { ${netBringup} } 2>&1
           exit $SMF_EXIT_OK
         ''}";
-        # the link wait, then create-addr (60 s), the lease poll (60 s) and the
-        # ifconfig fallback (60 s), with room to spare
-        start.timeoutSeconds = linkWaitSeconds + 240;
+        # the link wait, then create-addr (60 s), the lease poll (60 s), the
+        # ifconfig fallback (60 s) and the DNS poll (30 s), with room to spare
+        start.timeoutSeconds = linkWaitSeconds + 270;
         stop.exec = ":true";
       };
     })
