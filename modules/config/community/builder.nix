@@ -166,6 +166,7 @@ in
       # (2026-11-05 00:53-00:59Z). The same reason as nix-daemon's in nix.nix (5ccd4fd).
       ignoreError = [ "core" "signal" ];
       requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/system/filesystem/local:default" "svc:/system/nix-daemon:default" ];
+      dependencies = [ config.smf.networkOnline ];   # the DHCP lease and resolv.conf (solnix-net), not only network/physical
       environment = env // {
         BUILDER_PATH = path;
         CURL_CA_BUNDLE = "${s.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";

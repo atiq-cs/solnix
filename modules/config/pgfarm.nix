@@ -466,6 +466,7 @@ in
       description = "PostgreSQL build-farm animal setup (dirs, owner, client checkout)";
       model = "transient";
       requires = [ "svc:/system/filesystem/local:default" "svc:/milestone/network:default" ];
+      dependencies = [ config.smf.networkOnline ];   # the DHCP lease and resolv.conf (solnix-net), not only network/physical
       start.exec = "${setupScript}";
       start.timeoutSeconds = 600;
       stop.exec = ":true";

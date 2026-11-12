@@ -45,6 +45,7 @@ in
         description = "solnix anonymous daily platform census (telemetry.solnix.io)";
         model = "contract";
         requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/site/solnix-census-setup:default" ];
+        dependencies = [ config.smf.networkOnline ];   # the DHCP lease and resolv.conf (solnix-net), not only network/physical
         environment = {
           CENSUS_PATH = "${pkgs.solnix.nixChain.curl}/bin:/usr/bin:/usr/sbin";
           CURL_CA_BUNDLE = ca;

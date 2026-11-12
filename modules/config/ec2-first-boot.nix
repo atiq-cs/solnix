@@ -70,8 +70,9 @@ in
       };
       stop.exec = ":true";
       # The network must be up (DHCP done) before 169.254.169.254 answers; the
-      # solnix networking bringup (solnix-net) runs the DHCP, so order after the
-      # network milestone + physical, exactly as the MTU service does.
+      # solnix networking bringup (solnix-net) runs the DHCP. milestone/network and
+      # physical return before the lease, so the network-online group orders us after solnix-net.
+      dependencies = [ config.smf.networkOnline ];
       requires = [
         "svc:/milestone/network:default"
         "svc:/network/physical:default"

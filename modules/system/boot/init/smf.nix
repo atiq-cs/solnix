@@ -280,6 +280,21 @@ in
     description = "SMF services managed by solnix.";
   };
 
+  # NixOS's network-online.target, as a dependency group: a service that needs the network when it starts lists
+  # `dependencies = [ config.smf.networkOnline ];`. svc:/milestone/network only waits for network/physical, which
+  # returns before the DHCP lease; solnix-net returns once it has the lease and the resolv.conf (or has given up).
+  # optional_all: satisfied when solnix-net is absent (solnix-netd hosts), done, or in maintenance, so it never blocks boot.
+  options.smf.networkOnline = mkOption {
+    type = depType;
+    default = {
+      name = "solnix-network-online";
+      grouping = "optional_all";
+      restartOn = "none";
+      fmris = [ "svc:/site/solnix-net:default" ];
+    };
+    description = "The dependency group for services that need the network up (an address, a route, DNS) at start.";
+  };
+
   config =
     let
       # The pure SMF renderers (design §2, lib/smf/xml.nix). pkgs-agnostic by

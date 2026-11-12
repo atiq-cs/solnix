@@ -34,6 +34,7 @@ in
       description = "solnix BitTorrent seeder of fetched and built cache paths (tracker.solnix.io)";
       model = "contract";
       requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/site/solnix-seed-setup:default" ];
+      dependencies = [ config.smf.networkOnline ];   # the DHCP lease and resolv.conf (solnix-net), not only network/physical
       user = "nobody";
       environment = {
         SEED_PATH = "${t}/bin:${s.nixChain.curl}/bin:${config.nix.package}/bin:/usr/bin:/usr/sbin";
@@ -61,6 +62,7 @@ in
       description = "solnix BitTorrent swarm health probe (gates the cache proxy's torrent path)";
       model = "contract";
       requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/site/solnix-seed-setup:default" ];
+      dependencies = [ config.smf.networkOnline ];   # the DHCP lease and resolv.conf (solnix-net), not only network/physical
       user = "nobody";
       environment = {
         SWARM_PATH = "${t}/bin:${s.nixChain.curl}/bin:/usr/bin";

@@ -159,6 +159,7 @@ in
       model = "transient";
       requires = [ "svc:/network/ipfilter:default" "svc:/system/zones:default" "svc:/milestone/network:default"
         "svc:/system/filesystem/local:default" ] ++ lib.optional config.solnix.ephemeralPool.enable "svc:/site/solnix-ephemeral-pool:default";
+      dependencies = [ config.smf.networkOnline ];   # the DHCP lease and resolv.conf (solnix-net), not only network/physical
       start = { exec = "/usr/bin/ksh93 ${./solnix-builder-zone.sh} ${svcEnv} start"; timeoutSeconds = 3600; };
       stop.exec = "/usr/bin/ksh93 ${./solnix-builder-zone.sh} ${svcEnv} stop";
     };

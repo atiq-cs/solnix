@@ -59,6 +59,8 @@ in
       stop.exec = ":true";
       # Only after the network milestone is up and (on EC2) after the
       # metadata-shim has had a chance to install a lease + net-ok sentinel.
+      # network/physical returns before the lease: the network-online group waits for solnix-net.
+      dependencies = [ config.smf.networkOnline ];
       requires = [
         "svc:/milestone/network:default"
         "svc:/network/physical:default"
