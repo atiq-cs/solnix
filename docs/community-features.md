@@ -233,6 +233,10 @@ SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d --extract '["build-queue-b
   once. There is no third-party IP echo. Measured from chef2 with a throwaway key: a wrong ip gives
   `400 {"error":"ip must be the address this request comes from","seen":"54.213.136.114"}` before the key check, and the
   right ip gives `403 unknown builder key or invalid signature`. The reply is logged and never fails the builder.
+  A try that does not register (no answer, or any code but 200) is tried again 30 s later, 10 times in all
+  (`BUILDER_EGRESS_WAIT`, `BUILDER_EGRESS_TRIES`), then waits the 6 h. At boot the first try runs the second
+  network/physical is done, before the DHCP lease gives a route and DNS: on dixi and melody (2026-11-12) it got
+  `000 curl: (6) Could not resolve host`, and with no retry the host stayed unregistered for 6 h.
   `solnix-builder egress` registers by hand.
 
 ## Host identity: the host's own ssh-ed25519 key, kept in sops

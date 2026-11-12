@@ -82,8 +82,9 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 # key) or both (until infra confirms sshsig per host); module solnix.cache.build.queueAuth. A transient failure (no answer,
 # 502-504) is tried BUILDER_RETRIES times in all, BUILDER_RETRY_WAIT s more each time. BUILDER_SSH_KEYGEN: the store's.
 : ${BUILDER_QUEUE_AUTH:=bearer} ${BUILDER_SSH_KEYGEN:=ssh-keygen} ${BUILDER_RETRIES:=3} ${BUILDER_RETRY_WAIT:=10}
-# egress registration (infra s3): 1 on an identified builder (the module); at start, then every BUILDER_EGRESS_SECS (6 h)
-: ${BUILDER_EGRESS:=0} ${BUILDER_EGRESS_SECS:=21600}
+# egress registration (infra s3): 1 on an identified builder (the module); at start, then every BUILDER_EGRESS_SECS (6 h).
+# One that is not registered (no answer, any code but 200) is tried BUILDER_EGRESS_TRIES times, BUILDER_EGRESS_WAIT s apart.
+: ${BUILDER_EGRESS:=0} ${BUILDER_EGRESS_SECS:=21600} ${BUILDER_EGRESS_TRIES:=10} ${BUILDER_EGRESS_WAIT:=30}
 # sshsig: the key is the queue credential and the bearer is never read. Claiming is gated on -s $BUILDER_BEARER_FILE, so
 # point that at the key's public half when the key is readable (a dry run when not): nothing secret, should anything read it.
 # shortcut: an alias, so ready()/pubok()/claim() stay as they are while fleet5 changes ready(); a real authok() test after.
@@ -220,8 +221,10 @@ egress() {	# egress: register this host's egress address for its enrolled key (i
 	# yet): POST <api>/builder/egress with exactly {version, kind, keyid, ip, ts, sig}, sig = the armored `ssh-keygen -Y sign
 	# -n solnix-builder` over "solnix-builder-egress-v1\n<keyid>\n<ip>\n<ts>\n". The ip must be the one the request comes from,
 	# which only the server sees: the last one registered ($BUILDER_STATE/egress), else 192.0.2.1 (TEST-NET-1), and after a 400
-	# the reply's `seen`, signed anew, once. No third-party IP echo. Logged; never fails the builder.
-	typeset egi egs egr egt egn=0 egf=$BUILDER_STATE/egress
+	# the reply's `seen`, signed anew, once. No third-party IP echo. Logged; never fails the builder. Not registered: tried again
+	# BUILDER_EGRESS_WAIT s later, BUILDER_EGRESS_TRIES in all. At boot the first try runs the second network/physical is done,
+	# before the DHCP lease, route and DNS: curl 000 "Could not resolve host" on dixi and melody (fleet12, 2026-11-12).
+	typeset egi egs egr egt egn=0 egk=0 egf=$BUILDER_STATE/egress
 	[[ $BUILDER_EGRESS == 1 ]] || return 0
 	egi=$(cut -d' ' -f2 "$egf" 2> /dev/null); [[ $egi == +([0-9a-fA-F.:]) ]] || egi=192.0.2.1
 	while :; do
@@ -229,14 +232,16 @@ egress() {	# egress: register this host's egress address for its enrolled key (i
 		egs=$(printf 'solnix-builder-egress-v1\n%s\n%s\n%s\n' "$BUILDER_PUBLISH_ID" "$egi" "$egt" |
 		    "$BUILDER_SSH_KEYGEN" -q -Y sign -n solnix-builder -f "$BUILDER_PUBLISH_KEY" 2> /dev/null) && [[ $egs == -----BEGIN* ]] ||
 		    { log "egress: cannot sign with $BUILDER_PUBLISH_KEY: not registered"; return 0; }
+		: > "$egf.resp"	# curl leaves the last reply in place when it gets none (a 000 logged the earlier "registered")
 		egr=$(jq -nc --arg k "$BUILDER_PUBLISH_ID" --arg ip "$egi" --argjson ts "$egt" --arg sig "$egs"$'\n' \
 		    '{version: 1, kind: "builder_egress", keyid: $k, ip: $ip, ts: $ts, sig: $sig}' |
 		    curl -sS -m 30 -o "$egf.resp" -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "${BUILDER_API%/build-queue}/builder/egress" 2> "$egf.err")
 		log "egress: $BUILDER_PUBLISH_ID $egi -> $egr $(tr -d '\n' < "$egf.resp" 2> /dev/null | cut -c1-300)$([[ $egr == 000 ]] && cut -c1-200 "$egf.err")"
 		[[ $egr == 200 ]] && { print -r -- "$egt $egi" > "$egf"; return 0; }
 		egs=$(jq -r '.seen // empty' "$egf.resp" 2> /dev/null)
-		[[ $egr == 400 && $egn == 0 && $egs == +([0-9a-fA-F.:]) && $egs != "$egi" ]] || return 0
-		egi=$egs egn=1	# the address the server saw
+		[[ $egr == 400 && $egn == 0 && $egs == +([0-9a-fA-F.:]) && $egs != "$egi" ]] && { egi=$egs egn=1; continue; }	# the address the server saw
+		(( (egk += 1) < BUILDER_EGRESS_TRIES )) || return 0
+		log "egress: not registered (try $egk of $BUILDER_EGRESS_TRIES): again in $BUILDER_EGRESS_WAIT s"; sleep "$BUILDER_EGRESS_WAIT"
 	done
 }
 size() {	# "<jobs> <cores> <busy>" for this tick. busy: CPUs busy over a 5 s sample. None of ours runs between ticks, so that

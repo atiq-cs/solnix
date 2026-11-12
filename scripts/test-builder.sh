@@ -26,7 +26,8 @@
 # 9. fleet5: a job listing several outputs of one drv (gcc's out and -lib, wave6's out and -debug): each unserved one first-
 #    published as its own submission, deps first; one claim once every listed out is served, completed with the primary.
 #    F5_BUILDER=<origin/main's solnix-builder.sh, before fleet5 (2c13182)>: it must loop on the gcc shape (else SKIPped).
-# 10. fleet6: queue requests signed with sshsig (infra R7), a retry signed anew (R8), the egress registration (s3).
+# 10. fleet6: queue requests signed with sshsig (infra R7), a retry signed anew (R8), the egress registration (s3), tried
+#    again when not registered (egress1: at boot the first try has no DNS yet).
 #    PRESIG_BUILDER=<a builder before fleet6>: in sshsig mode it must fail the signature check (else SKIPped, not passed).
 # 11. fleet8 (root): a fixed build dir (W=/var/tmp/srcpkg-<buildKey>) left 0700 by another build uid fails pre-submit's --check:
 #    the host's failure, never memo'd as the out's refusal (read from the check's nix log); the per-drv sweep right before the
@@ -159,9 +160,10 @@ case $u in
   if [ -n "$FKEMPTY" ]; then echo '{"jobs":[]}'; else echo '{"jobs":[{"id":'$i',"claim_token":"'$t'","pname":"'$p'","current_version":"1","target_version":"1"}]}'; fi > "$o"
   [ -z "$FKSLOW" ] || sleep "$FKSLOW";;
 */complete) echo '{"id":42,"attempt":1,"state":"done","publication_verified":false,"attestation_recorded":false}' > "$o";;
-# egress: 400 with "seen" unless ip is $FKSEEN (198.51.100.7); FKE500=1: a 500
+# egress: 400 with "seen" unless ip is $FKSEEN (198.51.100.7); FKE500=1: a 500; FKE000=<n>: the first n get no answer (no DNS)
 */builder/egress) i=$(jq -r .ip "$FKREQ/$n/body"); sn=${FKSEEN:-198.51.100.7}
-  if [ -n "$FKE500" ]; then echo '{"error":"x"}' > "$o"; c=500; elif [ "$i" != "$sn" ]; then echo '{"error":"ip must be the address this request comes from","seen":"'$sn'"}' > "$o"; c=400
+  if [ "${n:-0}" -le "${FKE000:-0}" ]; then echo "curl: (6) Could not resolve host: queue.invalid" >&2; c=000
+  elif [ -n "$FKE500" ]; then echo '{"error":"x"}' > "$o"; c=500; elif [ "$i" != "$sn" ]; then echo '{"error":"ip must be the address this request comes from","seen":"'$sn'"}' > "$o"; c=400
   else echo '{"status":"registered","keyid":"qbhost","ip":"'$sn'","addresses":1,"expires_in":86400}' > "$o"; fi;;
 # FKFAIL=<file>: while it exists, the next heartbeat answers 503 (and removes it)
 *) echo '{"claim_expires_at":"x"}' > "$o"; case $u in */heartbeat) [ -z "$FKFAIL" ] || [ ! -e "$FKFAIL" ] || { rm -f "$FKFAIL"; c=503; };; esac;;
@@ -893,13 +895,26 @@ egok() {	# egok <request> <ip>: six keys, the values, and the signature over the
   [[ $(jq -r '[.version, .kind, .keyid, .ip, (.ts|type)] | join(" ")' "$b") == "1 builder_egress qbhost $2 number" ]] || return 1
   ts=$(jq -r .ts "$b"); jq -j .sig "$b" > "$1/sig"; [[ $(head -1 "$1/sig") == '-----BEGIN SSH SIGNATURE-----' ]] || return 1
   printf 'solnix-builder-egress-v1\n%s\n%s\n%s\n' qbhost "$2" "$ts" | ssh-keygen -Y verify -f "$W/qsigners" -I qb -n solnix-builder -s "$1/sig" > /dev/null 2>&1; }
-e9() { typeset r; t9c=egress; t9 "$1" BUILDER_EGRESS=1 BUILDER_STATE=$W/st9e "${@:2}"; r=$?; t9c=once; return $r; }
+e9() { typeset r; t9c=egress; t9 "$1" BUILDER_EGRESS=1 BUILDER_STATE=$W/st9e BUILDER_EGRESS_WAIT=1 "${@:2}"; r=$?; t9c=once; return $r; }
 mkdir -p "$W/st9e"; e9 "$S"; r=$?; print -r -- "$out" | sed 's/^/   E /'
 (( r == 0 )) && [[ $(paths9) == '/builder/egress /builder/egress ' ]] && egok "$W/rq/1" 192.0.2.1 && egok "$W/rq/2" 198.51.100.7 &&
   [[ $(cut -d' ' -f2 "$W/st9e/egress") == 198.51.100.7 ]] && has 'egress: qbhost 198.51.100.7 -> 200 .*"registered"' &&
   ok "egress: six keys, signed over the four lines; 192.0.2.1 -> 400 seen 198.51.100.7 -> signed anew -> 200 registered, logged and kept" || no "egress: $(paths9) $out"
 e9 "$S"; [[ $(paths9) == '/builder/egress ' ]] && egok "$W/rq/1" 198.51.100.7 && ok "egress again: the kept address first, one request" || no "egress 2: $(paths9)"
-e9 "$S" FKE500=1; r=$?; (( r == 0 )) && has 'egress: qbhost 198.51.100.7 -> 500' && [[ $(paths9) == '/builder/egress ' ]] && ok "egress answered 500: logged, rc 0 (never fails the builder)" || no "egress 500: rc $r $out"
+# egress1: at boot the first try runs before the DHCP lease and DNS (fleet12: curl 000 "Could not resolve host", then 6 h with
+# none); not registered, it is tried again BUILDER_EGRESS_WAIT s later. curl writes no -o file on a 000: no earlier reply logged.
+e9 "$S" FKE000=2; r=$?; print -r -- "$out" | sed 's/^/   D /'
+(( r == 0 )) && [[ $(paths9) == '/builder/egress /builder/egress /builder/egress ' ]] && egok "$W/rq/3" 198.51.100.7 &&
+  [[ $(print -r -- "$out" | grep -c -- '-> 000 curl: (6) Could not resolve host') == 2 ]] && ! has '-> 000 .*registered' &&
+  has 'not registered \(try 2 of 10\): again in 1 s' && has 'egress: qbhost 198.51.100.7 -> 200 .*"registered"' &&
+  [[ $(cut -d' ' -f1 "$W/st9e/egress") == $(jq -r .ts "$W/rq/3/body") ]] &&
+  ok "egress with no DNS yet (fleet12's boot): 000 twice, tried again 1 s later, 200 registered and kept; a 000 logs no earlier reply" || no "egress 000: rc $r $(paths9) $out"
+mu8 "$S" "$W/mut9s.sh" ': > "$egf.resp"' ':'	# the last reply (above) is a 200 "registered"
+e9 "$W/mut9s.sh" FKE000=1; has '-> 000 .*registered' && ok "NEG mutant keeping the last reply: its 000 line logs the earlier \"registered\" (fleet12's log), so the check above can fail" || no "mutant resp: $out"
+mu8 "$S" "$W/mut9r.sh" '(( (egk += 1) < BUILDER_EGRESS_TRIES )) || return 0' 'return 0'
+e9 "$W/mut9r.sh" FKE000=2; [[ $(paths9) == '/builder/egress ' ]] && ! has '-> 200' && ok "NEG mutant without the retry: one 000, not registered (fleet12's boot), so the check above can fail" || no "mutant retry: $(paths9) $out"
+e9 "$S" FKE500=1 BUILDER_EGRESS_TRIES=3; r=$?; (( r == 0 )) && has 'egress: qbhost 198.51.100.7 -> 500' && [[ $(paths9) == '/builder/egress /builder/egress /builder/egress ' ]] &&
+  has 'not registered \(try 2 of 3\): again in 1 s' && ! has 'try 3 of' && ok "egress answered 500: tried BUILDER_EGRESS_TRIES (3) times in all, logged, rc 0 (never fails the builder)" || no "egress 500: rc $r $out"
 e9 "$S" BUILDER_EGRESS=0; [[ ! -e $W/rq/n ]] && ok "NEG BUILDER_EGRESS=0 (not an identified builder): nothing sent" || no "egress off sent $(paths9)"
 mu8 "$S" "$W/mut9e.sh" 'ts: $ts, sig: $sig}' 'ts: $ts, sig: $sig, agent: "x"}'
 e9 "$W/mut9e.sh"; ! egok "$W/rq/1" 198.51.100.7 && [[ $(jq 'keys | length' "$W/rq/1/body") == 7 ]] && ok "NEG mutant with a seventh key: the six-key check fails" || no "mutant egress passed"
