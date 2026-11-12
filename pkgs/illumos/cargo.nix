@@ -60,6 +60,7 @@ in rec {
       noDefault = if noDefault then "1" else "";
       tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh; splitDebug = ./split-debug-od.sh; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
       outputs = [ "out" "debug" ];
+      TZ = "UTC";   # as mk-src-pkg.nix (store-only): dates the same on every builder
       args = [ ./cargo-build.sh ];
     };
 }

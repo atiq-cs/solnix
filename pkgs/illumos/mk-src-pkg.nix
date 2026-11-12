@@ -159,6 +159,10 @@ let
     # the drv's own PATH attribute (the builder's starting environment) is the store-only one too, not the OI default below:
     # nothing before the builder's `export PATH` may resolve a host tool (gate2 A1: env PATH only /nix/store). Exempt: as before.
     PATH = if storeOnly then (if btPath == "" then ntPath else "${btPath}:${ntPath}") else a.PATH;
+    # TZ=UTC, next to SOURCE_DATE_EPOCH: with TZ unset illumos libc takes the zone from the build host's /etc/default/init, so
+    # localtime() dates differed by host (hdf5's "Configured on", fonttosfnt's fonts: lixi America/New_York vs woof UTC, recipes7/
+    # recipes10). NixOS gets UTC from its sandbox (no /etc/localtime). Store-only x86; the seed instance and aarch64 do not move.
+  } // (if storeOnly then { TZ = "UTC"; } else { }) // {
     args = map (x: (if storeOnly then cmakeX else (y: y)) (builtins.replaceStrings
     [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin"'' ''export CC="$W/cc$ABI" ABI LIBSUB'' ]
     [ (''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${if storeOnly then ./config-x86.site else ./config.site}''   # config.site: host-state probes pinned (x86 store-only: config-x86.site)
