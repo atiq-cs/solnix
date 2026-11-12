@@ -1,16 +1,39 @@
-Archive the libraries in GNU ar's deterministic mode (D: uid, gid and mtime 0, mode 644) (solnix). hadrian packs every
-static library with `ar q`, and binutils' ar records the build user: two builds of GHC 9.10.3 as nixbld10 and nixbld1 differed
-in 84 .a files, and in nothing but those header bytes (ghc2 --check, 2026-11-12). Cabal wipes the same metadata itself
-(Distribution.Simple.Program.Ar.wipeMetadata); hadrian has no such step.
+Archive the libraries in GNU ar's deterministic mode (D: uid, gid and mtime 0, mode 644) when the stage's ar is GNU
+(solnix). hadrian packs every static library with `ar q`, and binutils' ar records the build user: two builds of GHC 9.10.3
+as nixbld10 and nixbld1 differed in 84 .a files, and in nothing but those header bytes (ghc2 --check, 2026-11-12). Cabal
+wipes the same metadata itself (Distribution.Simple.Program.Ar.wipeMetadata); hadrian has no such step. Stage0 keeps plain q
+when its ar is not GNU (the boot compiler's ar here is illumos ar, which has no D; stage0 archives are not installed).
 
+--- hadrian/src/Oracles/Flag.hs.orig
++++ hadrian/src/Oracles/Flag.hs
+@@ -8,6 +8,7 @@
+     targetSupportsSMP,
+     useLibffiForAdjustors,
+     arSupportsDashL,
++    arIsGnu,
+     arSupportsAtFile
+     ) where
+ 
+@@ -81,6 +82,9 @@
+ arSupportsDashL :: Stage -> Action Bool
+ arSupportsDashL stage = Toolchain.arSupportsDashL . tgtAr <$> targetStage stage
+ 
++arIsGnu :: Stage -> Action Bool
++arIsGnu stage = Toolchain.arIsGnu . tgtAr <$> targetStage stage
++
+ arSupportsAtFile :: Stage -> Action Bool
+ arSupportsAtFile stage = Toolchain.arSupportsAtFile . tgtAr <$> targetStage stage
+ 
 --- hadrian/src/Settings/Builders/Ar.hs.orig
 +++ hadrian/src/Settings/Builders/Ar.hs
-@@ -16,7 +16,7 @@
+@@ -16,7 +16,9 @@
          -- not added as a single file. This requires that we are using llvm-ar
          --
          -- See Note [Object merging] in GHC.Driver.Pipeline.Execute for details.
 -        ifM (expr $ arSupportsDashL stage) (arg "qL") (arg "q")
-+        ifM (expr $ arSupportsDashL stage) (arg "qLD") (arg "qD")
++        -- D (GNU ar): uid, gid and mtime 0, so the archive does not record the build user (solnix)
++        ifM (expr $ arSupportsDashL stage) (ifM (expr $ arIsGnu stage) (arg "qLD") (arg "qL"))
++                                           (ifM (expr $ arIsGnu stage) (arg "qD") (arg "q"))
        , arg =<< getOutput
        ]
      , builder (Ar Unpack) ? mconcat
