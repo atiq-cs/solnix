@@ -155,7 +155,8 @@ rec {
     build = ''
       # support/shobj-conf picks gcc flags only when $CC's name says gcc ("solaris2*-*gcc*"), and
       # then runs `gcc -print-prog-name=ld`; mk-src-pkg's wrapper is cc64 -> SunPro's -K pic (measured).
-      mkdir -p "$SRC/.bin"; ln -s "$CC" "$SRC/.bin/gcc"; export PATH="$SRC/.bin:$PATH" CC="$SRC/.bin/gcc"
+      # by path: with CC=gcc by name (mk-src-pkg ccByName) a link to "$CC" would be gcc -> itself
+      mkdir -p "$SRC/.bin"; ln -s "$(command -v $CC)" "$SRC/.bin/gcc"; export PATH="$SRC/.bin:$PATH" CC="$SRC/.bin/gcc"
       ./configure --prefix="$out" --libdir="$out/lib/amd64" --with-curses --enable-shared --disable-static
       gmake -j24 SHLIB_LIBS=-lncursesw
       gmake install SHLIB_LIBS=-lncursesw

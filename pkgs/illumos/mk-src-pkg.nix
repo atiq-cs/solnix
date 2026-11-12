@@ -105,7 +105,7 @@ let
       # RUNPATH rewrite BEFORE the strip: GNU strip 2.43.1 zeroes .SUNW_ldynsym sh_link on
       # aarch64 and illumos elfedit then segfaults (measured on libstdc++.so.6.0.33);
       # elfedit-then-strip works. The build-time-path guards still run after the strip.
-      (rpLoop + stripLoop) ""
+      (rpLoop + (if a64h then stripLoopA else stripLoop)) ""
       "INSTALL=/usr/gnu/bin/install"  # braich ships GNU install only as /usr/gnu/bin/install
       ''-Dlddlflags="-shared"''         # perl (cli/c-big.nix): aarch64 gcc has no -m64
       # DT_CHECKSUM -> 0 without elfedit, which segfaults on a GNU-stripped aarch64 ELF (repro2 fix 4; dixa4).
@@ -115,6 +115,14 @@ let
   # splitDebugSelfRef (x86 store-only): ./split-debug-selfref.sh, which keeps a .debug uncompressed when its DWARF names this
   # build's own outputs, so an unsandboxed --check can rewrite the scratch hash (glib, glibdbg 2026-11-11).
   splitDebugSh = if storeOnly && splitDebugSelfRef then ./split-debug-selfref.sh else if storeOnly then ./split-debug-od.sh else ./split-debug.sh;
+  # aarch64 store-only (a64h): ./aarch64/split-debug-od.sh = x86's split-debug-od.sh as wave8 has it: od's e_type compared with -eq
+  # (illumos od zero-pads; GNU od is first on the a64 PATH today, so the same files split), and a .debug that names this build's own
+  # outputs stays uncompressed, so an unsandboxed --check can rewrite the scratch hash (glibdbg). The seed keeps ./split-debug.sh.
+  # Byte-identical to wave8's ./split-debug-od.sh (one store path once it lands; its "x86 store-only" comment line predates this).
+  stripLoopA = ''
+    # split DWARF into $debug by build-id, then strip (./aarch64/split-debug-od.sh; NixOS separateDebugInfo, for every package here)
+    /usr/bin/bash ${./aarch64/split-debug-od.sh} "$out" "$debug" "$buildKey" "$BU" "$W/fail"
+  '';
   stripLoop = ''
     # split DWARF into $debug by build-id, then strip (./split-debug.sh; NixOS separateDebugInfo, for every package here)
     /usr/bin/bash ${./split-debug.sh} "$out" "$debug" "$buildKey" "$BU" "$W/fail"
@@ -131,6 +139,17 @@ let
     done
   '';
   ntPath = builtins.concatStringsSep ":" (builtins.concatMap (d: map (s: "${d}/${s}") [ "bin" "sbin" "usr/bin" "usr/sbin" ]) nativeTools');
+  # the compiler by NAME, as NixOS's cc-wrapper is on PATH as gcc/g++: configure, libtool and every *-config then record
+  # "gcc", not the build-dir shim /var/tmp/srcpkg-<key>/cc64 (jq --build-configuration, bashbug, curl-config, openssl's
+  # compiler string: gate2 B8). The wrappers move to $W/bin$ABI (regular files, so a recipe can still edit "$(command -v $CC)");
+  # $W/cc$ABI stays as a link. PATH_GATE_ALLOW: a recipe's own path-gate call (gtk) accepts the build dir. x86 storeOnly and
+  # aarch64 a64h share these bytes (a64rows: aarch64 recorded $W/cc64, B8 on openssl's compiler string, tclConfig.sh, jq, gnumake).
+  ccByName = ''mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
+      if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=g++; fi
+      export PATH="$W/bin$ABI:$PATH" PATH_GATE_ALLOW="$W" CC=gcc CC_FOR_BUILD=gcc ABI LIBSUB
+      # fontconfig's compiled-in default config is the HOST's /etc/fonts/fonts.conf (recipes1 W5: gtk3's in-build check failed on a
+      # solnix host without it): an empty one in the build dir. NixOS: no /etc/fonts in the sandbox. HOME is Nix's /homeless-shelter.
+      printf '<?xml version="1.0"?><fontconfig><cachedir>%s</cachedir></fontconfig>\n' "$W/fcc" > "$W/fonts.conf"; export FONTCONFIG_FILE="$W/fonts.conf"'';
   # store-only PATH (nativeTools set): the old line is replaced in the builder text, so a recipe without nativeTools keeps its drv.
   # CC_FOR_BUILD: configure's build-machine compiler (flex's stage1 scanner, autosetup's bootstrap jimsh in neomutt/sqlite) is looked up as
   # bare gcc/cc, which only the OI host had on PATH: the same wrapper as CC (native build).
@@ -152,16 +171,7 @@ let
        # the tools configure looks for by name or at fixed host paths, set from the store PATH (jq 1.8.2: MAKE=/usr/gnu/bin/make on
        # SunOS when MAKE is unset; recipes1). /usr/bin/bash stays the shell (the builder interpreter, a documented exemption).
        + (if storeOnly then "\n    MAKE=$(command -v gmake) INSTALL=\"$(command -v install) -c\" CMAKE_TOOLCHAIN_FILE=${./solnix-toolchain.cmake}; export MAKE INSTALL CMAKE_TOOLCHAIN_FILE   # not M4: the world m4 is SVR4; a recipe needing GNU m4 lists gnum4" else ""))
-      # the compiler by NAME, as NixOS's cc-wrapper is on PATH as gcc/g++: configure, libtool and every *-config then record
-      # "gcc", not the build-dir shim /var/tmp/srcpkg-<key>/cc64 (jq --build-configuration, bashbug, curl-config, openssl's
-      # compiler string: gate2 B8). The wrappers move to $W/bin$ABI (regular files, so a recipe can still edit "$(command -v $CC)");
-      # $W/cc$ABI stays as a link. PATH_GATE_ALLOW: a recipe's own path-gate call (gtk) accepts the build dir.
-      (if !storeOnly then ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' else ''mkdir -p "$W/bin$ABI"; mv "$W/cc$ABI" "$W/bin$ABI/gcc"; ln -s gcc "$W/bin$ABI/cc"; ln -s "$W/bin$ABI/gcc" "$W/cc$ABI"
-      if [ -f "$W/c++$ABI" ]; then mv "$W/c++$ABI" "$W/bin$ABI/g++"; ln -s g++ "$W/bin$ABI/c++"; ln -s "$W/bin$ABI/g++" "$W/c++$ABI"; export CXX=g++; fi
-      export PATH="$W/bin$ABI:$PATH" PATH_GATE_ALLOW="$W" CC=gcc CC_FOR_BUILD=gcc ABI LIBSUB
-      # fontconfig's compiled-in default config is the HOST's /etc/fonts/fonts.conf (recipes1 W5: gtk3's in-build check failed on a
-      # solnix host without it): an empty one in the build dir. NixOS: no /etc/fonts in the sandbox. HOME is Nix's /homeless-shelter.
-      printf '<?xml version="1.0"?><fontconfig><cachedir>%s</cachedir></fontconfig>\n' "$W/fcc" > "$W/fonts.conf"; export FONTCONFIG_FILE="$W/fonts.conf"'') ]
+      (if !storeOnly then ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' else ccByName) ]
     # .la links too (libpng.la -> libpng16.la dangled once the files went: gate B6; recipes1 W5 WAVE6-NOTES 8)
     (if storeOnly then builtins.replaceStrings [ "find \"$out\" -name '*.la' -type f -delete" ] [ "find \"$out\" -name '*.la' \\( -type f -o -type l \\) -delete" ] x else x))) a.args; };
   # cmake builds (the recipe text runs cmake; NixOS: the cmake setup hook comes with cmake in nativeBuildInputs, so only those drvs move).
@@ -200,10 +210,13 @@ let
      ++ (if a64h then [ ''export PATH="''${btPath:+$btPath:}/usr/gnu/bin:/usr/bin:/usr/sbin:/opt/ooce/bin:/opt/nixboot/bin"'' "/usr/bin/bash"
                         ''sed "s@$_btd/@@g" "$f" > "$f.btfix" && mv "$f.btfix" "$f"'' ] else [ ]))
     ([ ''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site}''   # config.site: host-state probes pinned
-      ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'' ]
+      (if a64h then ccByName else ''export CC="$W/cc$ABI" CC_FOR_BUILD="$W/cc$ABI" ABI LIBSUB'') ]   # a64h: the compiler by name, as x86
      ++ (if a64h then [ ''export PATH="''${btPath:+$btPath:}$ntPath" CONFIG_SITE=${./config.site} CONFIG_SHELL=${shell} SHELL=${shell}; ${shell} ${./path-gate.sh}'' shell
                         ''sed "s@$_btd/@@g" "$f" > "$W/btfix" && cat "$W/btfix" > "$f"'' ] else [ ])) x) a.args;
-    builder = if a64h then shell else a.builder; };
+    builder = if a64h then shell else a.builder; }
+    # TZ=UTC, next to SOURCE_DATE_EPOCH: with TZ unset illumos libc takes the zone from the build host's /etc/default/init, so localtime()
+    # dates differed by host (hdf5's "Configured on", fonttosfnt's fonts: recipes7/recipes10). NixOS gets UTC from its sandbox. As x86 (wave8).
+    // (if a64h then { TZ = "UTC"; } else { });
   hermetic = if aarch64 then hermeticA else if seedOuts then seedText else hermeticX;
   # the seed's CC by name: the wrappers move to $W/bin$ABI/{gcc,g++} on PATH, as storeOnly does; PATH stays the OI host's
   # CONFIG_SITE: the same host-state answers as every store-only build (gate L4: the seed's gnulib locale/fcntl probes ran on the
@@ -296,7 +309,10 @@ let
         [ -d "$d/$LIBSUB" ] && DL="$DL -L$d/$LIBSUB"
         [ -d "$d/include" ] && DI="$DI -I$d/include"
       done
-      for g in $GL; do DL="$DL -L$g"; done
+      ${/* a64h: the gate's -L dirs go AFTER the recipe's args ($DLG), as nixpkgs cc-wrapper puts NIX_LDFLAGS in extraAfter: ld takes
+         the first -L dir that has lib<name>.so, so the gate's libmd shadowed a recipe's own -L$out -lmd (recipes5 R10; x86: wave8). The
+         deps' -L stay first. */
+        if a64h then ''DLG=""; for g in $GL; do DLG="$DLG -L$g"; done'' else ''for g in $GL; do DL="$DL -L$g"; done''}
       PCD=""; CPP_=""
       for d in $depsArg $linkDepsArg; do
         for s in "$LIBSUB/pkgconfig" lib/pkgconfig share/pkgconfig; do [ -d "$d/$s" ] && PCD="$PCD:$d/$s"; done
@@ -326,9 +342,10 @@ let
     #!/usr/bin/bash
     ${/* store-only: -Wl,-R only when some argument is not a flag (nixpkgs cc-wrapper: no non-flag argument, no link flags). Always
        on, `g++ -v` LINKS (ld: fatal), and libtool's LT_LANG(CXX) probe (CXX=g++ by name runs `g++ -v`) turns the CXX tag off: gmp6's
-       relink, hunspell's "unsupported hardcode properties", gdb's and libdb's "unable to infer tagged configuration" (recipes3). */
-      if storeOnly then ''L=; for a in "\$@"; do case "\$a" in -*) ;; *) L=-Wl,-R,$RP; break;; esac; done
-    exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL \$L "\$@"'' else ''exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL -Wl,-R,$RP "\$@"''}
+       relink, hunspell's "unsupported hardcode properties", gdb's and libdb's "unable to infer tagged configuration" (recipes3).
+       aarch64 a64h has CXX=g++ by name too (ccByName), so the same rule. */
+      if storeOnly || a64h then ''L=; for a in "\$@"; do case "\$a" in -*) ;; *) L=-Wl,-R,$RP; break;; esac; done
+    exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL \$L "\$@"'' + (if a64h then " $DLG" else "") else ''exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL -Wl,-R,$RP "\$@"''}
     EOF
           chmod +x "$W/''${t#*:}$ABI"
         done
@@ -336,7 +353,7 @@ let
       else
         cat > "$W/cc$ABI" <<EOF
     #!/usr/bin/bash
-    exec $stage0/bin/gcc -m$ABI -D_TS_ERRNO -nostdinc $DI -isystem $GI -isystem $gate/usr/include -B$(echo $GL | awk '{print $2}')/ $DL -static-libgcc "\$@"
+    exec $stage0/bin/gcc -m$ABI -D_TS_ERRNO -nostdinc $DI -isystem $GI -isystem $gate/usr/include -B$(echo $GL | awk '{print $2}')/ $DL${if a64h then " $DLG" else ""} -static-libgcc "\$@"
     EOF
         chmod +x "$W/cc$ABI"
       fi
