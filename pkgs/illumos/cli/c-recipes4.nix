@@ -1,7 +1,7 @@
 # cli/c-recipes4.nix -- tools and libraries the x86 build queue has jobs for and solnix lacked (recipes4, 2026-11-09), picked by how many
 # queued jobs each moves to buildable. A new file, so no served drv moves. Store-only builds (nativeTools), each with an in-build check
 # that runs it on real input. Versions are the queue's targets; sources pinned by sha256 (equal to nixpkgs' flat hash where it has one).
-{ base, mkSrcPkg, world, chk, scrub, check, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, libuv, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, utf8cpp, libdeflate, tzdata, gtkMeson ? null, graphics, ... }:
+{ base, mkSrcPkg, world, chk, scrub, check, hostTools, autoreconfTools, autoreconf, python3, gnupatch, gnum4, cmake, perl, tcl, vulkan-headers, libogg, libuv, fmt, bzip2-bin, libxau, libxdmcp, libpthread-stubs, utf8cpp, libdeflate, tzdata, libedit, popt, bison, gtkMeson ? null, graphics, ... }:
 let
   fetch = url: sha256: import <nix/fetchurl.nix> { inherit url sha256; };
   # a file of nixpkgs f4a03c0's pkgs/by-name (a package's own patch), by its sha256
@@ -4531,6 +4531,131 @@ printf("ok %lu %lu %d\n", (unsigned long)n, (unsigned long)s, r); return 0; }'' 
       printf 'solnix mtools\n' > "$W/f.txt"
       export MTOOLSRC=/dev/null MTOOLS_SKIP_CHECK=1
       ${chk ''"$out/bin/mformat" -C -f 1440 -v SOLNIX -i "$W/fat.img" :: && "$out/bin/mcopy" -i "$W/fat.img" "$W/f.txt" ::/F.TXT && "$out/bin/mcopy" -i "$W/fat.img" ::/F.TXT "$W/back.txt" && cmp "$W/f.txt" "$W/back.txt" && "$out/bin/mdir" -i "$W/fat.img" -b ::'' "^::/F\\.TXT$"}
+    '';
+  };
+
+
+  # ---- qnew4 batch 4: leaves the x86 queue has jobs for, no other lane's (sources nixpkgs f4a03c0's by hash, unless noted) ---------
+  # dash (BSD-3-Clause; mksignames.c GPL-2.0-or-later): the Debian Almquist shell, on the served libedit, autotools from the release
+  # tarball, as nixpkgs (--with-libedit). The check runs a POSIX script through it.
+  dash = mkSrcPkg {
+    pname = "dash"; version = "0.5.13.5";
+    src = { url = "http://gondor.apana.org.au/~herbert/dash/files/dash-0.5.13.5.tar.gz";
+            sha256 = "40090101a2a491f13e901d3d48e90414f26634628b9bfff35ff540363c227a7d"; };
+    deps = [ world libedit ]; nativeTools = hostTools;
+    build = ''
+      # illumos LP64 libc has no stat64/open64 symbols (the headers map them to stat/open by #pragma redefine_extname), so dash's link
+      # probes say no and it defines stat64 as stat, which redefines the headers' struct stat64 (its histedit.h probe then fails): the
+      # headers' own mapping is the answer
+      ./configure --prefix="$out" --with-libedit ac_cv_func_stat64=yes ac_cv_func_open64=yes
+      # glob expansion skips entries whose dirent d_type says "not a dir/link" when more path follows; illumos' dirent has no d_type,
+      # so every entry takes the DT_UNKNOWN path (the lstat/opendir after it decides), which the filter only short-cuts
+      grep -Ec '^[[:space:]]+if \(c && dp->d_type != DT_DIR && dp->d_type != DT_LNK &&$' src/expand.c | grep -qx 1 \
+        && grep -Ec '^[[:space:]]+dp->d_type != DT_UNKNOWN\)$' src/expand.c | grep -qx 1 || { echo "FATAL: dash d_type anchors" >&2; exit 1; }
+      sed -i -e '/^[[:space:]]*if (c && dp->d_type != DT_DIR && dp->d_type != DT_LNK &&$/{N;s/^\([[:space:]]*\)if (c && .*\n[[:space:]]*dp->d_type != DT_UNKNOWN)$/\1if (0)/;}' src/expand.c
+      ! grep -q d_type src/expand.c || { echo "FATAL: dash d_type left" >&2; exit 1; }
+      # fc resets getopt with BSD's optreset; illumos getopt keeps its place inside an argument in _sp (libc exports it: "the historical
+      # Bourne shell has actually latched on to" it, getopt.c), which is what optreset = 1 resets
+      [ "$(grep -c '^	optreset = 1; optind = 1; /\* initialize getopt \*/$' src/histedit.c)" = 1 ] || { echo "FATAL: dash optreset anchor" >&2; exit 1; }
+      sed -i 's|^	optreset = 1; optind = 1; /\* initialize getopt \*/$|	{ extern int _sp; _sp = 1; } optind = 1; /* initialize getopt */|' src/histedit.c
+      gmake -j8; gmake install
+      ${chk ''"$out/bin/dash" -c 'set -- a b c; n=0; for x in "$@"; do n=$((n + 1)); done; case $2 in b) echo "dash ok $n $#";; esac' '' "^dash ok 3 3$"}
+      # the glob path the d_type edit touches: */ matches the directories only
+      mkdir -p "$W/g/a" "$W/g/b"; : > "$W/g/f"
+      ${chk ''cd "$W/g" && "$out/bin/dash" -c 'echo */' '' "^a/ b/$"}
+    '';
+  };
+
+  # libpaper (GPL-2.0-only, GPL-3.0-or-later, MIT, public domain): paper size lookup (libpaper, paper, paperconf), autotools from the
+  # release tarball. As nixpkgs: sysconfdir is $out/etc (its configure bakes the unexpanded ${prefix}/etc otherwise) and $out/etc/papersize
+  # says letter. nixpkgs runs no tests (upstream's need --enable-relocatable). The check names a size and reads the default.
+  libpaper = mkSrcPkg {
+    pname = "libpaper"; version = "2.2.8";
+    src = { url = "https://github.com/rrthomas/libpaper/releases/download/v2.2.8/libpaper-2.2.8.tar.gz";
+            sha256 = "1e330571690191874eca415ec76889dd11bab9887a2302d6a3665cd081c4d77b"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --sysconfdir="$out/etc"
+      gmake -j8; gmake install
+      echo letter > "$out/etc/papersize"
+      ${chk ''PAPERSIZE=a4 "$out/bin/paper" --unit mm'' "^[Aa]4: 210x297 mm$"}
+      ${chk ''env -u PAPERSIZE HOME="$W" XDG_CONFIG_HOME="$W/none" "$out/bin/paper"'' "^[Ll]etter: 8\\.5x11 in$"}
+    '';
+  };
+
+  # html2text (GPL-2.0-or-later): HTML to plain text, the tag tree (nixpkgs' gitlab archive: same NAR hash, from the /-/archive/ URL,
+  # whose name is a valid store name), its committed configure (nixpkgs autoreconfs, which needs autopoint: the served gettext has
+  # none), bison for the parser. Its own test suite (`make check`, bash + GNU diff) runs.
+  html2text = mkSrcPkg {
+    pname = "html2text"; version = "2.4.0";
+    src = { url = "https://gitlab.com/grobian/html2text/-/archive/v2.4.0/html2text-v2.4.0.tar.gz";
+            sha256 = "8c8689b1bc33677168b5f530865b0935f73ab5ec2341cf81122c452047f1b464"; };
+    deps = [ world ]; nativeTools = [ bison base.diffutils ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out"
+      gmake -j8; gmake check; gmake install
+      printf '<html><body><h1>solnix</h1><p>one &amp; two</p><ul><li>three</li></ul></body></html>\n' > "$W/t.html"
+      ${chk ''"$out/bin/html2text" -nobs "$W/t.html" | tr -s ' \n' ' ' '' "solnix .*one & two .*three"}
+    '';
+  };
+
+  # librsync (LGPL-2.1-or-later): the rsync delta algorithm as a library, and rdiff, cmake, on the served popt (rdiff), as nixpkgs
+  # (compression is off upstream, so nixpkgs' zlib/bzip2 inputs link nothing and are left out). Its ctest suite runs (perl for mutate).
+  # The check signs, diffs and patches a file with rdiff.
+  librsync = mkSrcPkg {
+    pname = "librsync"; version = "2.3.4";
+    src = { url = "https://github.com/librsync/librsync/archive/v2.3.4.tar.gz";
+            sha256 = "a0dedf9fff66d8e29e7c25d23c1f42beda2089fb4eac1b36e6acd8a29edfbd1f"; };
+    deps = [ world popt ]; nativeTools = [ cmake base.pkgconf perl ] ++ hostTools;
+    build = ''
+      # check_function_exists(_fileno) only links: illumos libc exports _fileno, but <stdio.h> does not declare it (implicit declaration)
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DHAVE__FILENO=0"}
+      # its rdiff test scripts pass $debug (unset upstream) to rdiff; the builder's env names the -debug output that way
+      (cd _b && env -u debug ctest -j8 --output-on-failure) >&2
+      seq 1 20000 > "$W/a"; sed 's/^1234$/solnix/' "$W/a" > "$W/b"
+      ${chk ''cd "$W" && "$out/bin/rdiff" signature a a.sig && "$out/bin/rdiff" delta a.sig b b.dl && "$out/bin/rdiff" patch a b.dl c && cmp b c && echo same'' "^same$"}
+    '';
+  };
+
+  # soundtouch (LGPL-2.1-or-later): audio tempo/pitch/rate change (libSoundTouch, soundstretch), autotools from the tag (its bootstrap is
+  # autoreconf with automake --foreign), as nixpkgs. The check halves a second of a sine through the library.
+  soundtouch = mkSrcPkg {
+    pname = "soundtouch"; version = "2.4.1";
+    src = { url = "https://codeberg.org/soundtouch/soundtouch/archive/2.4.1.tar.gz";
+            sha256 = "35d404e6e8c2ebd12fb4000da6fadd75c99e37eed2126a04721828c11c0377ec"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      export AUTOMAKE="automake --foreign"; mkdir -p config/m4   # its bootstrap's automake flags; configure.ac's macro dir is not in git
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      cat > "$W/t.cc" <<'TPROG'
+#include <soundtouch/SoundTouch.h>
+#include <cmath>
+#include <cstdio>
+int main(){ soundtouch::SoundTouch s; s.setSampleRate(44100); s.setChannels(1); s.setTempo(2.0);
+float b[4410]; for (int k = 0; k < 10; k++) { for (int i = 0; i < 4410; i++) b[i] = std::sin((k * 4410 + i) * 0.0627f); s.putSamples(b, 4410); }
+s.flush(); unsigned n = 0, r; while ((r = s.receiveSamples(b, 4410)) > 0) n += r;
+std::printf("ok %s %u\n", soundtouch::SoundTouch::getVersionString(), n / 1000); }
+TPROG
+      "$CXX" -I"$out/include" "$W/t.cc" -L"$out/lib/amd64" -lSoundTouch -Wl,-R,"$out/lib/amd64" -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 2\\.4\\.1 2[1-3]$"}
+      ${chk ''"$out/bin/soundstretch" 2>&1 | head -5'' "SoundStretch v2\\.4\\.1"}
+    '';
+  };
+
+  # xinput (MIT, HPND-sell-variant): the X input device utility, on the served libXi/Xinerama/Xrandr chain. Source: the X.Org release
+  # tarball, as the other X.Org recipes here (nixpkgs autoreconfs its gitlab tag: the release's src/ and man/ are the same files).
+  xinput = mkSrcPkg {
+    pname = "xinput"; version = "1.6.4";
+    src = { url = "https://xorg.freedesktop.org/releases/individual/app/xinput-1.6.4.tar.xz";
+            sha256 = "ad04d00d656884d133110eeddc34e9c69e626ebebbbab04dc95791c2907057c8"; };
+    deps = [ world libx11 libxext libxi libxinerama libxrandr ]; linkDeps = [ base.xorgproto libxau libxdmcp libxcb libxfixes libxrender ];
+    nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" ${manSections}
+      gmake -j8; gmake install
+      ${chk ''DISPLAY=:solnix-none "$out/bin/xinput" --version'' "^xinput version 1\\.6\\.4$"}
     '';
   };
 }
