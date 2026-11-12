@@ -199,8 +199,8 @@ let
             # check these two only: in the shipped (stripped) out they are the only files naming $W (measured, nav3ra6x); before
             # mk-src-pkg's strip, which runs after this, other files under lib/python3.13 still do (the first v4 build FAILed here).
             + "\n" + ''      ! grep -lF "$W" "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile || { echo "FATAL: python3 sysconfig still names the build dir" >&2; exit 1; }'' + "\n" + a) ] args.build; in
-        if b == args.build then throw "a64r python3: anchor" else b
-          + "\n[ -z \"$(find $out -name '*.pyc' | head -1)\" ] || { echo 'FATAL: python3 ships pyc' >&2; exit 1; }\n"; };
+        # no "ships pyc" check here: the shared recipe compiles checked-hash pyc (deterministic under --check) and checks them itself
+        if b == args.build then throw "a64r python3: anchor" else b; };
       # meson's symbolextractor.py (shared-lib symbol lists, for relink avoidance) prepends the OI host's /usr/gnu/bin to PATH to find GNU
       # nm/readelf on SunOS (upstream text; gate2 B13). A solnix host has no /usr/gnu: drop the prefix, so it uses PATH as is (gnu_syms
       # falls back to dummy_syms when no GNU nm is found, which only costs relinks), as NixOS patches meson's host paths.
@@ -232,12 +232,8 @@ let
       # prints the same digest first, so the version constant is the same value.
       neomutt = { build = "export STRIP=true\n"
         + "grep -q 'prog=\"digest -a md5\"' hcache/hcachever.sh || { echo 'FATAL: neomutt md5prog anchor' >&2; exit 1; }\n"
-        + "sed -i 's|if openssl=$(command -v openssl); then|if false; then|; s|prog=\"digest -a md5\"|prog=md5sum|' hcache/hcachever.sh\n" + args.build
-        # libexec/neomutt/smime_keys (S/MIME key helper) ships #!/usr/bin/perl -w (gate2 B9): /usr/bin/env perl, as a64h's git hook sample
-        # (-w becomes `use warnings;` on line 2: env passes one argument at most)
-        + "\nf=$out/libexec/neomutt/smime_keys; head -1 $f | grep -qx '#! /usr/bin/perl -w' || { echo 'FATAL: smime_keys #! anchor' >&2; exit 1; }\n"
-        + "chmod u+w $f; sed -i '1s|^#! /usr/bin/perl -w$|#!/usr/bin/env perl\\nuse warnings;|' $f\n"
-        + "head -1 $f | grep -qx '#!/usr/bin/env perl' && sed -n 2p $f | grep -qx 'use warnings;' || { echo 'FATAL: smime_keys #!' >&2; exit 1; }\n"; };
+        + "sed -i 's|if openssl=$(command -v openssl); then|if false; then|; s|prog=\"digest -a md5\"|prog=md5sum|' hcache/hcachever.sh\n" + args.build; };
+        # smime_keys' #!/usr/bin/perl -w: cli/c-mail.nix rewrites it to /usr/bin/env perl + use warnings and checks that itself
       # lynx's `lynx -V` table (cfg_defs.h) is config.cache verbatim, so the absolute pkg-config and install paths configure cached (the
       # build-tools farm here) became runtime references of bin/lynx (measured: the farm in its closure). Bare names, as the recipe's
       # other ac_cv_path_* pins; the in-build check below fails a lynx that still names the farm.
