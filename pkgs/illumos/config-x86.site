@@ -38,3 +38,8 @@ gnupg_cv_c_endian=little
 # X.Org XORG_MANPAGE_SECTIONS: tests the BUILD HOST for /usr/share/man/man7/attributes.7 (lixi has it via illumos-world-man, woof does not), so
 # man sections followed the host (recipes4 R8: libX11/mkfontscale/bdftopcf differed woof vs lixi, man pages only). illumos uses traditional ones.
 ac_cv_file__usr_share_man_man7_attributes_7=yes
+# python3's AC_CACHE_CHECK([for broken nice()]): nice(1) then nice(2), "broken" when both return the same, which a build already at nice
+# >= 18 always gets (both hit 19): pyconfig.h/_sysconfigdata then said HAVE_BROKEN_NICE 1 and the NarHash followed the builder's nice level
+# (wave8-p1: nice 0/10/17 "ok", 18/19 "broken"; aarch64 a64rows2, main 871b296). illumos nice() returns the new priority: "no", as at nice 0
+# and as the served python3 (axizzwb4: #undef HAVE_BROKEN_NICE).
+ac_cv_broken_nice=no
