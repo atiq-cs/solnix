@@ -8,7 +8,8 @@
 #  (c) the address is there but DNSserv is empty for 2 polls: resolv.conf is written once the servers appear
 #      (and NEG: the pre-fix method writes none);
 #  (d) no lease ever: the lease wait stops at 60 s and falls back to ifconfig, the DNS wait stops at 30 s;
-#  (e) eval: services that need the network at start wait for solnix-net (smf.networkOnline), solnix-net itself does not.
+#  (e) eval: services that need the network at start wait for solnix-net and solnix-netd (smf.networkOnline), solnix-net
+#      itself does not.
 #
 #   sh scripts/test-net-bringup.sh [repo]   # floki: evaluates both methods (nix), then runs them
 #   NET_NEW=f NET_OLD=f sh scripts/test-net-bringup.sh   # run already generated methods (an illumos host, /sbin/sh)
@@ -112,17 +113,18 @@ if fallback && [ "$sleep_n" -eq 45 ] && grep -q 'ena0: after 60 s: ipadm dhcp:ok
 then ok "(d) no lease: 60 s lease wait, ifconfig fallback, 30 s DNS wait, resolv.conf untouched"; else no "(d) no lease (sleeps $sleep_n)"; fi
 
 # (e) smf.networkOnline, in the rendered manifests (NixOS's network-online.target): the services that need the network at
-# start carry <dependency name=solnix-network-online grouping=optional_all> on site/solnix-net (optional_all: met when
-# solnix-net is absent, as on a solnix-netd host; svccfg on dixi 2026-11-12: require_all on an absent service never starts).
+# start carry <dependency name=solnix-network-online grouping=optional_all> on site/solnix-net and site/solnix-netd
+# (optional_all: met by the one a host does not have; svccfg on dixi 2026-11-12: require_all on an absent service never
+# starts). solnix-netd's own side, its start method waiting for the network, is scripts/test-netd.sh.
 xml() { # xml <config> <service>: the manifest's text, from its writeText drv
   d=$(nix eval --raw "git+file://$F#solnixConfigurations.$1.config.system.build.smfManifests.drvPath" 2>/dev/null)
   [ -n "$d" ] || return 1
   x=$(nix-store -qR "$d" | grep -- "-$2\.xml\.drv$") || return 1
   nix derivation show "$x" 2>/dev/null | jq -r '.. | objects | select(has("env")) | .env.text'; }
-online() { tr -d '\n' | grep -q "<dependency name='solnix-network-online' grouping='optional_all' restart_on='none' type='service'> *<service_fmri value='svc:/site/solnix-net:default'/> *</dependency>"; }
+online() { tr -d '\n' | grep -q "<dependency name='solnix-network-online' grouping='optional_all' restart_on='none' type='service'> *<service_fmri value='svc:/site/solnix-net:default'/> *<service_fmri value='svc:/site/solnix-netd:default'/> *</dependency>"; }
 if [ -z "${NET_NEW:-}" ]; then
   for cs in cloud-ec2:solnix-ec2-first-boot arnold:solnix-mtu; do
-    if xml ${cs%%:*} ${cs#*:} | online; then ok "(e) ${cs#*:} (${cs%%:*}) waits for solnix-net (optional_all)"; else echo "FAIL: (e) ${cs#*:} (${cs%%:*}): no network-online group"; bad=1; fi
+    if xml ${cs%%:*} ${cs#*:} | online; then ok "(e) ${cs#*:} (${cs%%:*}) waits for solnix-net and solnix-netd (optional_all)"; else echo "FAIL: (e) ${cs#*:} (${cs%%:*}): no network-online group"; bad=1; fi
   done
   if xml cloud-ec2 solnix-net | grep -q solnix-network-online; then echo "FAIL: (e) NEG solnix-net depends on itself"; bad=1
   elif xml cloud-ec2 solnix-net | grep -q "name='site/solnix-net'"; then ok "(e) NEG solnix-net itself has no network-online group"

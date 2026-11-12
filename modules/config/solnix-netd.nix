@@ -59,9 +59,20 @@ in
         # named without dhcp: off, or static (solnix-net's)
         NETD_SKIP_LINKS = lib.concatStringsSep " " (named false);
         NETD_RESOLV = if net.nameservers == [ ] then "1" else "0";
+        NETD_ONLINE = "/var/run/solnix-netd.online";   # tmpfs: gone at boot
       } // lib.optionalAttrs (cfg.holdDir != null) { NETD_HOLD_DIR = cfg.holdDir; };
-      # the method returns; the daemon stays in the service's contract, its output in the SMF log
-      start.exec = "/usr/bin/ksh93 ${./solnix-netd.sh} &";
+      # The method returns once the daemon has the network (an address and the default route) or after 60 s; the daemon
+      # stays in the service's contract, its output in the SMF log. So the service goes online with the network, which
+      # is what smf.networkOnline waits for: NixOS's dhcpcd, wait = "any" (fork after an address, or on its timeout).
+      # 60 s, not dhcpcd's 30: netd associates wifi in the same window; lixi took 12, 17, 12 and 31 s (2026-11-10/11).
+      start.exec = ''
+        rm -f "$NETD_ONLINE"
+        /usr/bin/ksh93 ${./solnix-netd.sh} &
+        p=$! i=0
+        while [ ! -e "$NETD_ONLINE" ] && [ $i -lt 60 ] && kill -0 $p 2>/dev/null; do sleep 1; i=$((i + 1)); done
+        [ -e "$NETD_ONLINE" ] || echo "solnix-netd: not online after $i s; the service goes online without it"
+      '';
+      start.timeoutSeconds = 90;
       stop.exec = ":kill";
     };
 

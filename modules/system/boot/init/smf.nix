@@ -282,15 +282,16 @@ in
 
   # NixOS's network-online.target, as a dependency group: a service that needs the network when it starts lists
   # `dependencies = [ config.smf.networkOnline ];`. svc:/milestone/network only waits for network/physical, which
-  # returns before the DHCP lease; solnix-net returns once it has the lease and the resolv.conf (or has given up).
-  # optional_all: satisfied when solnix-net is absent (solnix-netd hosts), done, or in maintenance, so it never blocks boot.
+  # returns before the DHCP lease; solnix-net returns once it has the lease and the resolv.conf (or has given up), and
+  # solnix-netd's start method once a link has an address and the default route (or after 60 s).
+  # optional_all: satisfied by each one that is absent, disabled, online or in maintenance, so it never blocks boot.
   options.smf.networkOnline = mkOption {
     type = depType;
     default = {
       name = "solnix-network-online";
       grouping = "optional_all";
       restartOn = "none";
-      fmris = [ "svc:/site/solnix-net:default" ];
+      fmris = [ "svc:/site/solnix-net:default" "svc:/site/solnix-netd:default" ];
     };
     description = "The dependency group for services that need the network up (an address, a route, DNS) at start.";
   };

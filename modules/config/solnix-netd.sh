@@ -78,6 +78,15 @@ wifi_gw() {	# $1 link: its lease's router. dhcpinfo hides option 3 when the link
 # a bound lease: until dhcpagent binds, the addrobj is already "ok" with ADDR "?" (0.0.0.0, ipadm.c print_sa_cb), and a
 # route via the last lease's router (the saved .dhc) fails "Network is unreachable" (lixi's log, every boot 10-28..11-11)
 leased() { ipadm show-addr -p -o type,state,addr "$1/" 2>/dev/null | grep -q '^dhcp:ok:[0-9][0-9]*\.'; }
+online() {	# once: NETD_ONLINE when there is a default route and an IPv4 address off lo0. The start method waits for it,
+	# so svc:/site/solnix-netd goes online with the network, as dhcpcd's wait=any forks (smf.networkOnline names netd).
+	# Any default counts (netstat leaves Interface empty for one added without -ifp, as a static defaultGateway is).
+	[ -n "$NETD_ONLINE" ] && [ -z "$onl" ] || return 0
+	ogw=$(netstat -rn -f inet 2>/dev/null | awk '$1 == "default" { print $2; exit }')
+	oad=$(ipadm show-addr -p -o addrobj,state,addr 2>/dev/null | grep -v '^lo0/' | grep ':ok:[0-9][0-9]*\.' | sed -n 1p)
+	[ -n "$ogw" ] && [ -n "$oad" ] && : > "$NETD_ONLINE" || return 0
+	onl=1; log "online: default via $ogw, $oad"
+}
 rt() {	# NETD_DRY=1 logs the route change instead of making it (a test aid)
 	[ "${NETD_DRY:-0}" = 1 ] && { log "dry: route $*"; return; }
 	route -n "$@" 2>&1 | while read -r x; do log "route $*: $x"; done
@@ -159,8 +168,8 @@ apply() {
 			rt add default "$g" -ifp "$w"; fdef[$w]=$g
 		fi
 	done
-	[ "$NETD_RESOLV" = 1 ] || return
-	for l in $wired "${!fdef[@]}"; do resolv "$l"; break; done
+	[ "$NETD_RESOLV" = 1 ] && for l in $wired "${!fdef[@]}"; do resolv "$l"; break; done
+	online	# after resolv.conf
 }
 
 trap 'kill $mon 2>/dev/null; exit 0' TERM INT	# SMF stop (:kill) or a test run
