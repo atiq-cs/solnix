@@ -83,9 +83,9 @@ in rec {
 
   # hunspell (MPL-1.1/GPL/LGPL): library + CLI, nixpkgs' --with-ui --with-readline. Dictionaries: hunspell-dict-en-us.
   hunspell = mkSrcPkg {
-    pname = "hunspell"; version = "1.7.3";
-    src = { url = "https://github.com/hunspell/hunspell/releases/download/v1.7.3/hunspell-1.7.3.tar.gz";
-            sha256 = "433274dac0619cb00c2e18b43a3dd3a9d50da5b5613fa9b5c21781e35dd76bc1"; };
+    pname = "hunspell"; version = "1.7.6";
+    src = { url = "https://github.com/hunspell/hunspell/releases/download/v1.7.6/hunspell-1.7.6.tar.gz";
+            sha256 = "9c650ace31d4d8cc1da925a9507c3de1d50f1a54857af2f72429f517d5d53467"; };
     # GNU libiconv, as gdb (c-dev.nix): g++ predefines _XPG6, which makes the gate's <iconv.h> declare iconv(..., char **, ...), and
     # hunspell.cxx passes const char ** ("invalid conversion", measured); GNU iconv.h has one prototype for C and C++.
     deps = [ world ncurses readline libiconv perl ]; nativeTools = hostTools;
@@ -98,7 +98,7 @@ in rec {
       f="$out/bin/ispellaff2myspell"; head -1 "$f" | grep -qx '#!/usr/bin/perl -w' || { echo "FATAL: ispellaff2myspell shebang anchor" >&2; exit 1; }
       sed -i "1s|^#!/usr/bin/perl -w$|#!${perl}/bin/perl -w|" "$f"
       ${chk ''"$out/bin/ispellaff2myspell" --help'' "[Uu]sage|ispellaff2myspell"}
-      ${chk ''"$out/bin/hunspell" -v'' "Hunspell 1\\.7\\.3"}
+      ${chk ''"$out/bin/hunspell" -v'' "Hunspell 1\\.7\\.6"}
       # a real spell check against a two-word dictionary: the misspelling is reported, the known word is not
       printf '2\nhello\nworld\n' > "$W/t.dic"; printf 'SET UTF-8\nTRY esianrtolcdugmphbyfvkwz\n' > "$W/t.aff"
       ${chk ''echo "hello wrold" | "$out/bin/hunspell" -d "$W/t" -l'' "^wrold$"}

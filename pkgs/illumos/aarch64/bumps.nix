@@ -84,10 +84,4 @@ in {
   socat = { version = "1.8.1.3";
     src = src "http://www.dest-unreach.org/socat/download/socat-1.8.1.3.tar.gz" "06602ffd591e98c75b3dc1d66f0f19136cc666b0b2d95caad987d6ab2cb28097";
     build = rep "socat" "socat version 1.8.1.2" "socat version 1.8.1.3" args.build; };
-  # flex 2.6.5, automake 1.20, hunspell 1.7.6 (the queue's versions): cli/ recipes both arches share, bumped here for aarch64 only with
-  # wave8's exact strings (floki wave8/SHARED-BUMP-STRINGS.md). wave8's x86 commit bumps the shared recipe and deletes the entry, and the
-  # aarch64 drvs stay where they are. flex .sig Good (Flex Releases 15A2D3E3...), automake .sig Good (Kamila Szewczyk D5D527E7...).
-  hunspell = { version = "1.7.6";
-    src = src "https://github.com/hunspell/hunspell/releases/download/v1.7.6/hunspell-1.7.6.tar.gz" "9c650ace31d4d8cc1da925a9507c3de1d50f1a54857af2f72429f517d5d53467";
-    build = rep "hunspell" "Hunspell 1\\.7\\.3" "Hunspell 1\\.7\\.6" args.build; };
 }
