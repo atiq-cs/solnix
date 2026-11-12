@@ -1,0 +1,58 @@
+From 40a8ca5448c9713d6dccf7e3dc6c84eccf9c470c Mon Sep 17 00:00:00 2001
+From: sv9libc <sv9libc@solnix>
+Date: Wed, 11 Nov 2026 20:21:43 -0500
+Subject: [PATCH 6/6] OI numbering: the 5 backported symbols in ILLUMOS_0.40,
+ as OpenIndiana sparc libc 2025.0.0.21764 has them; vdprintf.o in
+ sparc/sparcv9 PORTPRINT
+
+---
+ usr/src/lib/libc/port/mapfile-vers    | 7 +++++++
+ usr/src/lib/libc/sparc/Makefile.com   | 1 +
+ usr/src/lib/libc/sparcv9/Makefile.com | 1 +
+ 3 files changed, 9 insertions(+)
+
+diff --git a/usr/src/lib/libc/port/mapfile-vers b/usr/src/lib/libc/port/mapfile-vers
+index 0e1cafc..c9e29a9 100644
+--- a/usr/src/lib/libc/port/mapfile-vers
++++ b/usr/src/lib/libc/port/mapfile-vers
+@@ -84,6 +84,13 @@ SYMBOL_VERSION ILLUMOS_0.40 {
+ 	verrc;
+ 	vwarnc;
+ 	warnc;
++	# OpenIndiana sparc 2025.0.0.21764 backports, in this node as OI's libc.so.1 has them
++	# (upstream: strerror*_np ILLUMOS_0.44 16452, fdclose ILLUMOS_0.54 16506, dprintf/vdprintf ILLUMOS_0.55 16151/16505)
++	dprintf;
++	fdclose;
++	strerrordesc_np;
++	strerrorname_np;
++	vdprintf;
+ } ILLUMOS_0.39;
+ 
+ SYMBOL_VERSION ILLUMOS_0.39 {
+diff --git a/usr/src/lib/libc/sparc/Makefile.com b/usr/src/lib/libc/sparc/Makefile.com
+index f8f402a..8bd9ca0 100644
+--- a/usr/src/lib/libc/sparc/Makefile.com
++++ b/usr/src/lib/libc/sparc/Makefile.com
+@@ -679,6 +679,7 @@ PORTPRINT_W=			\
+ PORTPRINT=			\
+ 	asprintf.o		\
+ 	doprnt.o		\
++	vdprintf.o		\
+ 	fprintf.o		\
+ 	printf.o		\
+ 	snprintf.o		\
+diff --git a/usr/src/lib/libc/sparcv9/Makefile.com b/usr/src/lib/libc/sparcv9/Makefile.com
+index ec8b35c..a1b21d9 100644
+--- a/usr/src/lib/libc/sparcv9/Makefile.com
++++ b/usr/src/lib/libc/sparcv9/Makefile.com
+@@ -637,6 +637,7 @@ PORTPRINT_W=			\
+ PORTPRINT=			\
+ 	asprintf.o		\
+ 	doprnt.o		\
++	vdprintf.o		\
+ 	fprintf.o		\
+ 	printf.o		\
+ 	snprintf.o		\
+-- 
+2.55.0
+
