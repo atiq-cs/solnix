@@ -63,6 +63,52 @@ printf("ok %x %x %d\n", WebPGetDecoderVersion(), WebPGetMuxVersion(), same); ret
     '';
   };
 
+  # libtiff (libtiff licence, BSD-like): the TIFF library and tools, cmake, shared, on libjpeg-turbo, zlib, zstd, libdeflate, xz, libwebp
+  # (above, as nixpkgs: the TIFF-less one) and lerc, nixpkgs' rename-version patch and VERSION move. Source: the 4.7.2 release tarball
+  # (the same code as nixpkgs' gitlab tag archive, which lacks only the dist files), whose doc/man-prebuilt is the sphinx man pages
+  # nixpkgs builds: installed from there (solnix has no sphinx). nixpkgs' dev_private headers (tif_config.h, tif_dir.h, tif_hash_set.h,
+  # tiffiop.h) go to include/private, one output as every solnix recipe.
+  libtiff = mkSrcPkg {
+    pname = "libtiff"; version = "4.7.2";
+    src = { url = "https://download.osgeo.org/libtiff/tiff-4.7.2.tar.xz"; sha256 = "4996f0c4f93094719b1ca5c6279b20e588773ba8a247533e486416fb662ddb88"; };
+    deps = [ world libjpeg-turbo zlib zstd libdeflate xz libwebp lerc ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${npFile "by-name/li/libtiff/rename-version.patch" "acac73cbdadc081aae7eaa47f0a18fbb2fd59f73955ad22212585f5adaf84ace"}
+      mv VERSION VERSION.txt
+      ${cmakeB "-DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON -Dtiff-docs=OFF -Dtiff-tests=OFF -Dtiff-contrib=OFF -Djbig=OFF"}
+      # each codec library resolves to its store dep (libjpeg-turbo is found in CONFIG mode, the others by Find modules: one check for all)
+      /usr/bin/ldd "$out/lib/amd64/libtiff.so.6" > "$W/ldd" || { echo "FATAL: libtiff ldd" >&2; exit 1; }
+      # (libz.so.1 is not in the list: the world precedes zlib in deps, so RUNPATH resolves the world's, as every recipe here with
+      # deps = [ world zlib ... ]; the headers and the link were zlib's)
+      for v in "libjpeg.so.62 ${libjpeg-turbo}" "libzstd.so.1 ${zstd}" "libdeflate.so.0 ${libdeflate}" "liblzma.so.5 ${xz}" \
+               "libwebp.so.7 ${libwebp}" "libLerc.so.4 ${lerc}"; do
+        set -- $v; grep -Eq "^[[:space:]]+$1 =>[[:space:]]+$2/" "$W/ldd" || { echo "FATAL: libtiff: $1 not from $2" >&2; cat "$W/ldd" >&2; exit 1; }
+      done
+      for o in jpeg zlib zstd libdeflate lzma webp lerc; do grep -q "^$o:BOOL=ON$" _b/CMakeCache.txt || { echo "FATAL: libtiff codec $o off" >&2; exit 1; }; done
+      # the man pages nixpkgs' sphinx build installs (21 in man1, 59 in man3), from the release's prebuilt copy
+      mkdir -p "$out/share/man/man1" "$out/share/man/man3"
+      cp doc/man-prebuilt/*.1 "$out/share/man/man1/"; cp doc/man-prebuilt/*.3tiff "$out/share/man/man3/"
+      [ "$(ls "$out/share/man/man1" | wc -l)" -eq 21 ] && [ "$(ls "$out/share/man/man3" | wc -l)" -eq 59 ] || { echo "FATAL: libtiff man pages" >&2; exit 1; }
+      mkdir -p "$out/include/private"; cp _b/libtiff/tif_config.h libtiff/tif_dir.h libtiff/tif_hash_set.h libtiff/tiffiop.h "$out/include/private/"
+      find "$out/share/doc" -delete 2>/dev/null || true
+      ${chk ''"$out/bin/tiffinfo" test/images/rgb-3c-8b.tiff'' "Image Width: 157 Image Length: 151"}
+      # every external codec, through tiffcp and back: each round trip must give the original pixels (tiffcmp exits 0)
+      # -r 16 everywhere (JPEG needs rows per strip a multiple of 8; tiffcmp compares RowsPerStrip): the reference is the same layout
+      "$out/bin/tiffcp" -r 16 -c none test/images/rgb-3c-8b.tiff "$W/ref.tif" || { echo "FATAL: libtiff tiffcp ref" >&2; exit 1; }
+      for c in zip zstd lzma webp:p100 lerc jpeg:r:100 lzw; do   # webp:p100 = lossless (tiffcp.c: preset 100)
+        "$out/bin/tiffcp" -r 16 -c "$c" "$W/ref.tif" "$W/c.tif" && "$out/bin/tiffcp" -r 16 -c none "$W/c.tif" "$W/d.tif" || { echo "FATAL: libtiff tiffcp -c $c" >&2; exit 1; }
+        case $c in jpeg*) ;; *) "$out/bin/tiffcmp" "$W/ref.tif" "$W/d.tif" >&2 || { echo "FATAL: libtiff $c round trip differs" >&2; exit 1; };; esac
+      done
+      ${tprog ''#include <tiffio.h>
+#include <stdio.h>
+int main(int c, char **v){ TIFF *t = TIFFOpen(v[1], "r"); uint32_t w = 0; if (!t) return 1; TIFFGetField(t, TIFFTAG_IMAGEWIDTH, &w);
+printf("ok %d %u %d %d\n", TIFFLIB_VERSION > 20250000, w, TIFFIsCODECConfigured(COMPRESSION_WEBP), TIFFIsCODECConfigured(COMPRESSION_LERC)); TIFFClose(t); return 0; }'' "-ltiff"}
+      ${chk ''"$W/t" test/images/rgb-3c-8b.tiff'' "^ok 1 157 1 1$"}
+      grep -qx "Version: 4.7.2" "$out/lib/amd64/pkgconfig/libtiff-4.pc" || { echo "FATAL: libtiff-4.pc version" >&2; exit 1; }
+      ${noBuildDir}
+    '';
+  };
+
   # zeromq (MPL-2.0): libzmq, the ZeroMQ messaging library, cmake, shared, with CURVE on libsodium, no drafts, nixpkgs' three patches
   # and its CMAKE_INSTALL_FULL_* postPatch. Source: the 4.3.5 release tarball (the same code as nixpkgs' tag archive, plus the generated
   # docs), whose doc/*.3 and *.7 are the asciidoc man pages nixpkgs builds: installed from there (solnix has no asciidoc). Poller: devpoll,
