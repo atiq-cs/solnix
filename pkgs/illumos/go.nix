@@ -15,6 +15,7 @@ let
     final = if final then "1" else "";
     storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh; pathGate = ./path-gate.sh; illumosBin = ./illumos-bin.sh;
     patchShebangs = ./patch-shebangs.sh;
+    TZ = "UTC";   # as mk-src-pkg.nix (store-only): dates the same on every builder
     args = [ ./go-build.sh ];
   };
 in rec {
@@ -54,6 +55,6 @@ in rec {
         SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
         outputHashMode = "recursive"; outputHashAlgo = "sha256"; outputHash = vendorHash; });
     in (a: derivation (a // { buildKey = builtins.substring 0 16 (builtins.hashString "sha256" (builtins.toJSON a)); })) (common // {
-      name = "${pname}-${version}"; vendorOnly = ""; outputs = [ "out" "debug" ]; splitDebug = ./split-debug-od.sh;
+      name = "${pname}-${version}"; vendorOnly = ""; outputs = [ "out" "debug" ]; splitDebug = ./split-debug-od.sh; TZ = "UTC";
       goVendor = if vendorHash == null then "" else vend; inherit subPkgs check ldflags prep man; });
 }
