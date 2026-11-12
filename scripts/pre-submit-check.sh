@@ -72,7 +72,7 @@ if [ -n "$eva" ]; then
   # the anchor: c on b (our own clone: nix's ?ref= is not checked against ?rev=), and the attr's out at c
   fl=${GATE_FLAKE:-git+https://git.solnix.io/solnix.git}; fl=${fl%%\?*}
   { git clone -q --bare --filter=blob:none "${fl#git+}" "$T/g.git" && git -C "$T/g.git" merge-base --is-ancestor "$ec" "refs/heads/$eb"; } > "$T/git" 2>&1 &&
-    eo=$(nix eval --raw "$fl?ref=$eb&rev=$ec#packages.$es.$ea.outPath" 2> "$T/eval") ||
+    eo=$(nix eval --raw "$fl?ref=$eb&rev=$ec#packages.$es.\"$ea\".outPath" 2> "$T/eval") ||	# one key, quoted (as evattr, infra)
     { echo "pre-submit: $ec is not on $eb, or packages.$es.$ea does not evaluate there: $(tail -1 "$T/git" "$T/eval" 2>/dev/null | grep -v '^==' | tail -1)"; exit 1; }
   echo "pre-submit: eval anchor $ea at $eb $ec = $eo"
 fi

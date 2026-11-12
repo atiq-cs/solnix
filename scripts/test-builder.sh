@@ -47,6 +47,9 @@
 #    on average, up to 30 in finalizing). The negative control: POLL_FIRST=1800 blocks the job until validation answers, as before.
 #    BUILDER_PUBLISH_SLOTS caps the submissions in flight (unanswered pub/<out> younger than BUILDER_PUBLISH_POLL), logged.
 #    SP_MAIN_BUILDER=<origin/main's solnix-builder.sh, before subpoll>: it blocks the same way (else SKIPped, not passed).
+# 15. llvmset: an attr is one key, quoted as infra's evaluator quotes it: a dotted name is a literal key of packages.<system>,
+#    never a walk into a nested set (evattr, eids, pre-submit-check --eval).
+#    Q14_BUILDER=<origin/main's solnix-builder.sh, before this change>: it walks into the nested set (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -1260,6 +1263,40 @@ mu8 "$S" "$W/mut13.sh" ' NIX_CONFIG="${NIX_CONFIG:+$NIX_CONFIG'$'\n''}cores = $C
 r7 pubcoresm > "$W/p13.json"; S0=$S S=$W/mut13.sh; tk13 BUILDER_STATE=$W/st13m; S=$S0
 ! cmp -s "$S" "$W/mut13.sh" && c13 pubcoresm "$W/st13m" && ok "NEG a mutant without the NIX_CONFIG export: the same check refusal (the export is what passes it)" ||
   no "mut13: memo $(m13 "$W/st13m" pubcoresm): $(print -r -- "$out" | grep ' pubcoresm')"
+# --- 14. llvmset: an attr is ONE key, quoted, as infra's evaluator has it (solnix-evaluator.py `packages.<system>."<attr>"`). A dotted
+# queue pname (a set member, llvmPackages_21.clang) names a literal key of packages.<system>; it is never walked as a path into a
+# nested set, which infra's evaluator cannot reach (it would reject the proposal). The fixture has both shapes: a literal key
+# "set.lit" and a nested set nest = { mem = ...; } (never a flake package in real life, but nix eval walks it unquoted).
+# Q14_BUILDER=<a builder before this change (unquoted evattr)>: it must walk into nest.mem (else that control is SKIPped).
+R14=$W/repo14; mkdir -p "$R14"; g14() { git -C "$R14" -c user.name=t -c user.email=t@t "$@" > /dev/null 2>&1; }
+print -r -- "{ outputs = { self }: let e = n: derivation { name = \"qb-\${n}-1\"; pname = n; version = \"1\"; system = \"x86_64-solaris\";
+    builder = \"/bin/sh\"; args = [ \"-c\" \"echo \${n} > \$out\" ]; }; in { packages.x86_64-solaris = {
+    plain = e \"plain\"; \"set.lit\" = e \"set.lit\"; nest = { mem = e \"nest.mem\"; }; }; }; }" > "$R14/flake.nix"
+g14 init -b main; g14 add -A; g14 commit -m q14; R14H=$(git -C "$R14" rev-parse HEAD)
+pq14() { nix eval --raw "git+file://$R14?rev=$R14H#packages.x86_64-solaris.$1.outPath" 2> /dev/null; }
+Q14P=$(pq14 plain) Q14L=$(pq14 '"set.lit"') Q14N=$(pq14 nest.mem)
+[[ $Q14P == *-qb-plain-1 && $Q14L == *-qb-set.lit-1 && $Q14N == *-qb-nest.mem-1 ]] || no "fixture 14: plain=$Q14P lit=$Q14L nest=$Q14N"
+ev14() { ( eval "$(sed -n '/^bounded() {/,/^}/p; /^evattr() {/,/^}/p' "${2:-$S}")"
+  BUILDER_SYSTEM=x86_64-solaris BUILDER_STATE=$W/st14${3:-} J=x; evattr "git+file://$R14?rev=$R14H" "$1" ); }
+r=$(ev14 plain) && [[ ${r%% *} == "$Q14P" ]] && ok "evattr: a plain attr FOUND ($Q14P)" || no "evattr plain: '$r'"
+r=$(ev14 set.lit) && [[ ${r%% *} == "$Q14L" ]] && ok "evattr: a dotted name is the literal key packages.<system>.\"set.lit\": FOUND" || no "evattr set.lit: '$r'"
+! ev14 nest.mem > /dev/null && ok "NEG evattr: nest.mem (a nested set's member) is never walked into: MISS, as infra's quoted eval misses it" ||
+  no "evattr walked into nest.mem: infra's evaluator cannot, so a proposal would be rejected"
+# eids indexes the literal keys only (mapAttrs over packages.<system>): "set.lit" with its pname, the nested set with none
+x=$( (eval "$(sed -n '/^bounded() {/,/^}/p; /^eids() {/,/^}/p' "$S")"; BUILDER_SYSTEM=x86_64-solaris BUILDER_STATE=$W/st14e
+  BUILDER_FLAKE="git+file://$R14?ref=main" J=x; eids main "$R14H") ) && grep -qx "set.lit${T}set.lit${T}1" "$x" && grep -qx "nest${T}${T}" "$x" &&
+  ! grep -q '^nest\.mem' "$x" && ok "eids: the literal key set.lit is indexed with its pname; the nested set nest has no pname and no member row" ||
+  no "eids 14: $(cat "$x" 2>&1)"
+# pre-submit-check --eval evaluates the same one key: its anchor line names the literal key's out (the gate stops later: no cache)
+r=$(GATE_PYTHON=$GP GATE_FLAKE="git+file://$R14" GATE_RECIPES=$W/r.tsv GATE_STAMP_DIR=$W/st14s bash "$W/gates/scripts/pre-submit-check.sh" --eval set.lit x86_64-solaris "$R14H" main "$Q14L" 2>&1)
+print -r -- "$r" | grep -qF "pre-submit: eval anchor set.lit at main $R14H = $Q14L" && ok "pre-submit --eval set.lit: anchored to the literal key's out" ||
+  no "pre-submit 14 lit: $(print -r -- "$r" | head -3)"
+r=$(GATE_PYTHON=$GP GATE_FLAKE="git+file://$R14" GATE_RECIPES=$W/r.tsv GATE_STAMP_DIR=$W/st14s bash "$W/gates/scripts/pre-submit-check.sh" --eval nest.mem x86_64-solaris "$R14H" main "$Q14N" 2>&1); rc=$?
+(( rc == 1 )) && print -r -- "$r" | grep -q "packages.x86_64-solaris.nest.mem does not evaluate there" && ok "NEG pre-submit --eval nest.mem: does not evaluate (rc 1), never walked into the set" ||
+  no "pre-submit 14 nest: rc=$rc $(print -r -- "$r" | head -3)"
+if [[ -n ${Q14_BUILDER:-} ]]; then r=$(ev14 nest.mem "$Q14_BUILDER" o) && [[ ${r%% *} == "$Q14N" ]] &&
+  ok "NEG the builder before this change ($Q14_BUILDER) walks into nest.mem: the disagreement with infra this fixes" || no "Q14_BUILDER did not walk nest.mem: the control cannot fail ('$r')"
+else print "SKIP quoted-evattr negative control: Q14_BUILDER unset (not counted as a pass)"; fi
 rm -f "$W/bearer"
 # --- 14. subpoll: a submission polls BUILDER_PUBLISH_POLL_FIRST s, then the tick goes on; a later tick asks its status once
 # (--poll 0) and claims on promoted. The fake site (sp* outs) answers `finalizing` until FKVAL s after /begin (FKVAL is read at

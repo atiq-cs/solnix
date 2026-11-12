@@ -308,7 +308,10 @@ evattr() {	# evattr <flake URL> <attr>, in $(...): one "<out> <drv>^<output>" li
 	typeset k= r d e=$BUILDER_STATE/eval
 	[[ $1 == *[?\&]rev=+([0-9a-f])* ]] && { k=${1##*[?&]rev=}; k=$e/${k%%&*}.$BUILDER_SYSTEM.$2.outs; }
 	if [[ -n $k && -s $k ]]; then r=$(<"$k"); d=${r%%$'\n'*}; d=${d#* }; [[ -e ${d%^*} ]] && { print -r -- "$r"; return 0; }; elif [[ -n $k && -e $k.miss ]]; then return 1; fi
-	r=$(bounded 900 nix eval --raw "$1#packages.$BUILDER_SYSTEM.$2" --apply 'd: builtins.concatStringsSep "\n" (map (o: d.${o}.outPath + " " + d.drvPath + "^" + o) (d.outputs or ["out"]))' 2>/dev/null) ||
+	# the attr is ONE key, quoted as infra's evaluator quotes it (solnix-evaluator.py `packages.<system>."<attr>"`): a dotted
+	# name (a queue job for a set member, llvmPackages_21.clang) is never walked as a path into a nested set, which infra could
+	# never evaluate and so never accept
+	r=$(bounded 900 nix eval --raw "$1#packages.$BUILDER_SYSTEM.\"$2\"" --apply 'd: builtins.concatStringsSep "\n" (map (o: d.${o}.outPath + " " + d.drvPath + "^" + o) (d.outputs or ["out"]))' 2>/dev/null) ||
 	    { [[ -n $k ]] && { mkdir -p "$e"; : > "$k.miss"; }; return 1; }
 	[[ -n $k ]] && { mkdir -p "$e"; print -r -- "$r" > "$k.${J##*/}" && mv "$k.${J##*/}" "$k"; }	# per job: jobs run in parallel
 	print -r -- "$r"
