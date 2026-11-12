@@ -311,10 +311,10 @@ let
         [ -d "$d/$LIBSUB" ] && DL="$DL -L$d/$LIBSUB"
         [ -d "$d/include" ] && DI="$DI -I$d/include"
       done
-      ${/* a64h: the gate's -L dirs go AFTER the recipe's args ($DLG), as nixpkgs cc-wrapper puts NIX_LDFLAGS in extraAfter: ld takes
-         the first -L dir that has lib<name>.so, so the gate's libmd shadowed a recipe's own -L$out -lmd (recipes5 R10; x86: wave8). The
-         deps' -L stay first. */
-        if a64h then ''DLG=""; for g in $GL; do DLG="$DLG -L$g"; done'' else ''for g in $GL; do DL="$DL -L$g"; done''}
+      ${/* store-only (x86) and a64h: the gate's -L dirs go AFTER the recipe's args ($DLG), as nixpkgs cc-wrapper puts NIX_LDFLAGS in
+         extraAfter: ld takes the first -L dir that has lib<name>.so, so the gate's libmd shadowed a recipe's own -L$out -lmd (recipes5
+         R10). The deps' -L stay first. */
+        if storeOnly || a64h then ''DLG=""; for g in $GL; do DLG="$DLG -L$g"; done'' else ''for g in $GL; do DL="$DL -L$g"; done''}
       PCD=""; CPP_=""
       for d in $depsArg $linkDepsArg; do
         for s in "$LIBSUB/pkgconfig" lib/pkgconfig share/pkgconfig; do [ -d "$d/$s" ] && PCD="$PCD:$d/$s"; done
@@ -347,7 +347,7 @@ let
        relink, hunspell's "unsupported hardcode properties", gdb's and libdb's "unable to infer tagged configuration" (recipes3).
        aarch64 a64h has CXX=g++ by name too (ccByName), so the same rule. */
       if storeOnly || a64h then ''L=; for a in "\$@"; do case "\$a" in -*) ;; *) L=-Wl,-R,$RP; break;; esac; done
-    exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL \$L "\$@"'' + (if a64h then " $DLG" else "") else ''exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL -Wl,-R,$RP "\$@"''}
+    exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL \$L "\$@" $DLG'' else ''exec $gcc/bin/''${t%%:*} -m$ABI $s -g $DBGMAP -D_TS_ERRNO $DI $DL -Wl,-R,$RP "\$@"''}
     EOF
           chmod +x "$W/''${t#*:}$ABI"
         done
@@ -355,7 +355,7 @@ let
       else
         cat > "$W/cc$ABI" <<EOF
     #!/usr/bin/bash
-    exec $stage0/bin/gcc -m$ABI -D_TS_ERRNO -nostdinc $DI -isystem $GI -isystem $gate/usr/include -B$(echo $GL | awk '{print $2}')/ $DL${if a64h then " $DLG" else ""} -static-libgcc "\$@"
+    exec $stage0/bin/gcc -m$ABI -D_TS_ERRNO -nostdinc $DI -isystem $GI -isystem $gate/usr/include -B$(echo $GL | awk '{print $2}')/ $DL${if storeOnly || a64h then " $DLG" else ""} -static-libgcc "\$@"
     EOF
         chmod +x "$W/cc$ABI"
       fi
