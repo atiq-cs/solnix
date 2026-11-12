@@ -1,6 +1,9 @@
-# llvm/parts.nix -- the four LLVM 23.1.4 parts (./default.nix has the shared settings and says why).
-{ mkSrcPkg, version, src, nativeTools, deps, pre, common, runpath, ninjaInstall, noBuildDir, world, gate, gcc, ld, libc, hostTools }:
-rec {
+# llvm/parts.nix -- one LLVM release's parts (./default.nix has the shared settings, the per-version patches and says why).
+# clangLldPatch: the clang driver + lld patch; clangFix: shell run on the clang tree after it; lldbPatch: the lldb port, or
+# null (no lldb for that version: the attr is left out).
+{ mkSrcPkg, version, src, nativeTools, deps, pre, common, runpath, ninjaInstall, noBuildDir, world, gate, gcc, ld, libc, hostTools,
+  clangLldPatch, clangFix, lldbPatch }:
+let parts = rec {
   # llvm: libLLVM.so, the tools, headers, static component libs and lib/cmake/llvm (what clang/lld/lldb build against).
   llvm = mkSrcPkg {
     pname = "llvm"; inherit version src nativeTools deps;
@@ -27,18 +30,8 @@ rec {
     deps = deps ++ [ llvm ];
     build = ''
       ${pre}
-      patch -p1 < ${./patches/clang-lld-23-illumos.patch}
-      # -fuse-ld=bfd|gld (and CLANG_DEFAULT_LINKER=bfd|gld): upstream names the OI path /usr/gnu/bin/ld, a build-host path in
-      # libclang-cpp.so (gate B13). GNU ld is the store binutils' gld, found as clang finds every tool (-B dirs, its own dir,
-      # PATH), as the lld case above does: the -fuse-ld case looks it up, and the default-linker case (Solaris::getDefaultLinker,
-      # which getLinkerPath returns as is) names "gld", which getLinkerPath then looks up the same way.
-      f=clang/lib/Driver/ToolChains/Solaris.cpp
-      [ "$(grep -c 'return "/usr/gnu/bin/ld";' $f)" = 1 ] && [ "$(grep -c '.Cases({"bfd", "gld"}, "/usr/gnu/bin/ld")' $f)" = 1 ] \
-        && [ "$(grep -c '^  return ToolChain.getDefaultLinker();$' $f)" = 1 ] || { echo "FATAL: clang gld anchors" >&2; exit 1; }
-      sed -i -e 's|return "/usr/gnu/bin/ld";|return ToolChain.GetProgramPath("gld");|' \
-        -e 's|.Cases({"bfd", "gld"}, "/usr/gnu/bin/ld")|.Cases({"bfd", "gld"}, "gld")|' \
-        -e 's|^  return ToolChain.getDefaultLinker();$|  const char *DL = ToolChain.getDefaultLinker();\n  return llvm::sys::path::is_absolute(DL) ? std::string(DL) : ToolChain.GetProgramPath(DL);|' $f
-      ! grep -n /usr/gnu/ $f || { echo "FATAL: clang still names /usr/gnu/" >&2; exit 1; }
+      patch -p1 < ${clangLldPatch}
+      ${clangFix}
       cmake -S clang -B _b ${runpath [ llvm ]} -DLLVM_DIR=${llvm}/lib/cmake/llvm -DLLVM_TABLEGEN_EXE=${llvm}/bin/llvm-tblgen \
         -DCLANG_LINK_CLANG_DYLIB=ON -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF -DCLANG_ENABLE_ARCMT=OFF \
         -DCLANG_DEFAULT_RTLIB=libgcc -DCLANG_DEFAULT_CXX_STDLIB=libstdc++
@@ -63,7 +56,7 @@ rec {
     deps = deps ++ [ llvm ];
     build = ''
       ${pre}
-      patch -p1 < ${./patches/clang-lld-23-illumos.patch}
+      patch -p1 < ${clangLldPatch}
       cmake -S lld -B _b ${runpath [ llvm ]} -DLLVM_DIR=${llvm}/lib/cmake/llvm -DLLVM_TABLEGEN_EXE=${llvm}/bin/llvm-tblgen \
         -DLLD_BUILD_TOOLS=ON
       ${ninjaInstall}
@@ -80,7 +73,7 @@ rec {
     deps = deps ++ [ llvm clang ];
     build = ''
       ${pre}
-      patch -p1 < ${./patches/lldb-23-illumos.patch}
+      patch -p1 < ${lldbPatch}
       # standalone: clang's resource dir is found through Clang_DIR (LLDBStandalone.cmake) and symlinked beside liblldb
       cmake -S lldb -B _b ${runpath [ llvm clang ]} -DLLVM_DIR=${llvm}/lib/cmake/llvm -DClang_DIR=${clang}/lib/cmake/clang \
         -DLLVM_TABLEGEN_EXE=${llvm}/bin/llvm-tblgen -DLLDB_INCLUDE_TESTS=OFF -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LUA=OFF \
@@ -127,4 +120,4 @@ rec {
       echo "=== clang-wrapper: C and C++ hello run, Solaris ld and ld.lld ===" >&2
     '' ];
   };
-}
+}; in if lldbPatch == null then removeAttrs parts [ "lldb" ] else parts

@@ -1,0 +1,84 @@
+--- a/clang/lib/Driver/ToolChains/Solaris.cpp
++++ b/clang/lib/Driver/ToolChains/Solaris.cpp
+@@ -40,7 +40,10 @@
+   // Only used if targetting Solaris.
+   const Arg *A = Args.getLastArg(options::OPT_fuse_ld_EQ);
+   StringRef UseLinker = A ? A->getValue() : CLANG_DEFAULT_LINKER;
+-  return UseLinker == "bfd" || UseLinker == "gld";
++  // ld.lld takes the GNU command line (and links illumos objects as GNU ld
++  // does), so it gets the GNU flavour of the link job.
++  return UseLinker == "bfd" || UseLinker == "gld" || UseLinker == "lld" ||
++         llvm::sys::path::filename(UseLinker) == "ld.lld";
+ }
+ 
+ static bool getPIE(const ArgList &Args, const ToolChain &TC) {
+@@ -65,7 +68,14 @@
+       // Accept 'bfd' and 'gld' as aliases for the GNU linker.
+       if (UseLinker == "bfd" || UseLinker == "gld")
+         // FIXME: Could also use /usr/bin/gld here.
+-        return "/usr/gnu/bin/ld";
++        return ToolChain.GetProgramPath("gld");
++
++      // lld: the ld.lld installed beside this clang.
++      if (UseLinker == "lld") {
++        std::string LLD = ToolChain.GetProgramPath("ld.lld");
++        if (llvm::sys::path::is_absolute(LLD))
++          return LLD;
++      }
+ 
+       // Accept 'ld' as alias for the default linker
+       if (UseLinker != "ld")
+@@ -74,8 +84,9 @@
+     }
+   }
+ 
+-  // getDefaultLinker() always returns an absolute path.
+-  return ToolChain.getDefaultLinker();
++  // getDefaultLinker() names "gld" for a GNU default: look it up as -fuse-ld=gld does.
++  const char *DL = ToolChain.getDefaultLinker();
++  return llvm::sys::path::is_absolute(DL) ? std::string(DL) : ToolChain.GetProgramPath(DL);
+ }
+ 
+ void solaris::Linker::ConstructJob(Compilation &C, const JobAction &JA,
+@@ -149,6 +160,18 @@
+       CmdArgs.push_back("-export-dynamic");
+ 
+     CmdArgs.push_back("--eh-frame-hdr");
++
++    // GNU ld's sol2 emulations build in ld.so.1 as the interpreter; ld.lld
++    // has no default, so name it (harmless for GNU ld).
++    if (!Args.hasArg(options::OPT_static, options::OPT_shared,
++                     options::OPT_r)) {
++      CmdArgs.push_back("-dynamic-linker");
++      CmdArgs.push_back(Arch == llvm::Triple::x86_64
++                            ? "/usr/lib/amd64/ld.so.1"
++                            : Arch == llvm::Triple::sparcv9
++                                  ? "/usr/lib/sparcv9/ld.so.1"
++                                  : "/usr/lib/ld.so.1");
++    }
+   } else {
+     // -rdynamic is a no-op with Solaris ld.  Claim argument to avoid warning.
+     Args.ClaimAllArgs(options::OPT_rdynamic);
+@@ -346,7 +369,7 @@
+ const char *Solaris::getDefaultLinker() const {
+   // FIXME: Only handle Solaris ld and GNU ld here.
+   return llvm::StringSwitch<const char *>(CLANG_DEFAULT_LINKER)
+-      .Cases("bfd", "gld", "/usr/gnu/bin/ld")
++      .Cases("bfd", "gld", "gld")
+       .Default("/usr/bin/ld");
+ }
+ 
+--- a/lld/ELF/Driver.cpp
++++ b/lld/ELF/Driver.cpp
+@@ -152,6 +152,11 @@
+   if (s.ends_with("_fbsd")) {
+     s = s.drop_back(5);
+     osabi = ELFOSABI_FREEBSD;
++  } else if (s.ends_with("_sol2")) {
++    // GNU ld's Solaris emulations (elf_x86_64_sol2), which clang's Solaris
++    // driver passes to a GNU-flavour linker.
++    s = s.drop_back(5);
++    osabi = ELFOSABI_SOLARIS;
+   }
+ 
+   std::pair<ELFKind, uint16_t> ret =

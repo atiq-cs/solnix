@@ -1,15 +1,13 @@
-# llvm/ -- LLVM 23.1.4 (the latest release, 2026-10-20) from source, split as nixpkgs' llvmPackages is: llvm (libLLVM +
-# tools + the cmake package), clang, lld and lldb, each a standalone cmake build against the llvm output (nixpkgs
-# common/{llvm,clang,lld,lldb}/default.nix). Single-output mk-src-pkg recipes, so llvm keeps its headers, static
+# llvm/ -- LLVM from source, split as nixpkgs' llvmPackages is: llvm (libLLVM + tools + the cmake package), clang, lld and
+# lldb, each a standalone cmake build against the llvm output (nixpkgs common/{llvm,clang,lld,lldb}/default.nix), one set
+# per release from mkLlvmPackages (nixpkgs' llvmPackages_NN): 23.1.4 (the latest release, 2026-10-20) and 21.1.8 (nixpkgs'
+# default llvmPackages). Single-output mk-src-pkg recipes, so llvm keeps its headers, static
 # component libraries and cmake files in $out (nixpkgs' "dev" output). C++ runtime: gcc's libstdc++ and libgcc, as OI,
 # OmniOS and nixpkgs on Linux; no libcxx/compiler-rt yet (illumos is not a compiler-rt target for x86_64 sanitizers).
 # Store tools only on PATH (mk-src-pkg nativeTools): cmake, ninja, python3, GNU patch, coreutils/findutils, the world.
-# desktop/gtk/llvm.nix (21.1.8, Firefox's bindgen) is a separate, older recipe and is not touched by this one.
+# desktop/gtk/llvm.nix (21.1.8, Firefox's bindgen) is a separate recipe and is not touched by this one.
 { mkSrcPkg, hostTools, cmake, ninja, python3, gnupatch, world, gate, gcc, ld, libc }:
 let
-  version = "23.1.4";
-  src = { url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-${version}/llvm-project-${version}.src.tar.xz";
-          sha256 = "819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2"; };
   nativeTools = [ cmake ninja python3 gnupatch ] ++ hostTools;
   # world: libkstat.so.1 (LLVM's host CPU probe links -lkstat), as desktop/gtk/llvm.nix does.
   deps = [ world ];
@@ -42,6 +40,36 @@ let
   noBuildDir = ''
     if grep -rl "$W" "$out" > "$W/bd"; then echo "FATAL: build dir $W named in:" >&2; head "$W/bd" >&2; exit 1; fi
   '';
-  parts = import ./parts.nix { inherit mkSrcPkg version src nativeTools deps pre common runpath ninjaInstall noBuildDir
-    world gate gcc ld libc hostTools; };
-in parts
+  # mkLlvmPackages: one release's parts (./parts.nix). clangLldPatch: the illumos clang driver + lld patch for that release;
+  # clangFix: shell run on the clang tree after it; lldbPatch: the lldb port, or null (no lldb in the set).
+  mkLlvmPackages = { version, sha256, clangLldPatch, clangFix ? "", lldbPatch ? null }: import ./parts.nix {
+    inherit mkSrcPkg version nativeTools deps pre common runpath ninjaInstall noBuildDir world gate gcc ld libc hostTools
+      clangLldPatch clangFix lldbPatch;
+    src = { url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-${version}/llvm-project-${version}.src.tar.xz";
+            inherit sha256; };
+  };
+in {
+  inherit mkLlvmPackages;
+  llvmPackages_23 = mkLlvmPackages {
+    version = "23.1.4"; sha256 = "819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2";
+    clangLldPatch = ./patches/clang-lld-23-illumos.patch; lldbPatch = ./patches/lldb-23-illumos.patch;
+    clangFix = ''
+      # -fuse-ld=bfd|gld (and CLANG_DEFAULT_LINKER=bfd|gld): upstream names the OI path /usr/gnu/bin/ld, a build-host path in
+      # libclang-cpp.so (gate B13). GNU ld is the store binutils' gld, found as clang finds every tool (-B dirs, its own dir,
+      # PATH), as the lld case above does: the -fuse-ld case looks it up, and the default-linker case (Solaris::getDefaultLinker,
+      # which getLinkerPath returns as is) names "gld", which getLinkerPath then looks up the same way.
+      f=clang/lib/Driver/ToolChains/Solaris.cpp
+      [ "$(grep -c 'return "/usr/gnu/bin/ld";' $f)" = 1 ] && [ "$(grep -c '.Cases({"bfd", "gld"}, "/usr/gnu/bin/ld")' $f)" = 1 ] \
+        && [ "$(grep -c '^  return ToolChain.getDefaultLinker();$' $f)" = 1 ] || { echo "FATAL: clang gld anchors" >&2; exit 1; }
+      sed -i -e 's|return "/usr/gnu/bin/ld";|return ToolChain.GetProgramPath("gld");|' \
+        -e 's|.Cases({"bfd", "gld"}, "/usr/gnu/bin/ld")|.Cases({"bfd", "gld"}, "gld")|' \
+        -e 's|^  return ToolChain.getDefaultLinker();$|  const char *DL = ToolChain.getDefaultLinker();\n  return llvm::sys::path::is_absolute(DL) ? std::string(DL) : ToolChain.GetProgramPath(DL);|' $f
+      ! grep -n /usr/gnu/ $f || { echo "FATAL: clang still names /usr/gnu/" >&2; exit 1; }'';
+  };
+  # 21.1.8: patches/21 has the 23 driver + lld patch ported (isLinkerGnuLd reads CLANG_DEFAULT_LINKER there) with the gld fix
+  # folded in (21's .Cases form). No lldb: the 23 port does not apply (18 of its 57 files reject on 21.1.8).
+  llvmPackages_21 = mkLlvmPackages {
+    version = "21.1.8"; sha256 = "4633a23617fa31a3ea51242586ea7fb1da7140e426bd62fc164261fe036aa142";
+    clangLldPatch = ./patches/21/clang-lld-21-illumos.patch;
+  };
+}

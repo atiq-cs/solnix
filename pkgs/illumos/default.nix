@@ -487,9 +487,11 @@ let
     inherit (srcPkgs) mkSrcPkg bash coreutils gnugrep gnused hostname jq hostTools; inherit hostfixTools world; inherit (cliBase) python3; };
   # The GTK 3 / Wayland stack for Firefox (./desktop/gtk): its own dir, so neither COSMIC nor desktop/ outs move.
   gtk = import ./desktop/gtk { base = srcPkgs; inherit graphics cli; inherit (cosmicData) noto-sans; inherit (cargo) cargoPkg; rust = rust199; inherit world; };
-  # LLVM 23.1.4 from source, split as nixpkgs' llvmPackages: llvm, clang, lld, lldb, clang-wrapper (./llvm).
-  llvmPackages = import ./llvm { inherit (srcPkgs) mkSrcPkg hostTools; inherit (cli) cmake python3 gnupatch; inherit (gtk) ninja;
+  # LLVM from source, split as nixpkgs' llvmPackages_NN: llvm, clang, lld, lldb, clang-wrapper (./llvm), 23.1.4 and 21.1.8.
+  llvmSets = import ./llvm { inherit (srcPkgs) mkSrcPkg hostTools; inherit (cli) cmake python3 gnupatch; inherit (gtk) ninja;
     inherit world gcc ld libc; gate = gate'; };
+  inherit (llvmSets) llvmPackages_23 llvmPackages_21;
+  llvmPackages = llvmPackages_23;
   # COSMIC's fonts and icon themes on store tools only (./desktop/cosmic-data.nix). The host-PATH graphics/cosmic-data.nix is
   # deleted (wave6 rebuilds COSMIC: its fixups = ./. input moves anyway); gtk took its noto-sans 5d35mbxi from there.
   cosmicData = import ./desktop/cosmic-data.nix { fetchurl = import <nix/fetchurl.nix>; tools = hostfixTools; inherit world;
@@ -1509,10 +1511,12 @@ in
   inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
     noto-fonts-color-emoji xdg-utils xdg-user-dirs solnix-help solnix-nm solnix-power solnix-accounts;
-  inherit llvmPackages;
+  inherit llvmPackages llvmPackages_23 llvmPackages_21;
   inherit (llvmPackages) llvm lld lldb;
   clang-unwrapped = llvmPackages.clang;   # nixpkgs' names: clang is the wrapped compiler
   clang_23 = llvmPackages.clang-wrapper;
+  # nixpkgs' versioned top-level names for 21.1.8 (llvm_21 = llvmPackages_21.llvm, clang_21 = its wrapped clang); no lldb_21
+  llvm_21 = llvmPackages_21.llvm; lld_21 = llvmPackages_21.lld; clang_21 = llvmPackages_21.clang-wrapper;
   inherit (gtk) pcre2 glib libpng libjpeg-turbo freetype fontconfig fribidi harfbuzz cairo pango gdk-pixbuf libepoxy
     at-spi2-core gtk3 grim gperf nasm ninja meson_1_10 nodejs cbindgen llvm-clang firefox-esr;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
