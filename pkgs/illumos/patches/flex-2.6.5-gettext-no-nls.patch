@@ -1,0 +1,42 @@
+# upstream westes/flex commit fae57c41b4bbba5d7c20594cc3f3c8d4f1600353 (2026-11-11, fixes #844), as https://github.com/westes/flex/commit/fae57c41b4.patch
+# serves it (sha256 f0970f0e124d89a4f765c96fc62807e2db62d39d5aadf8d1773099d8c0b7182d), unchanged below this header. In flex > 2.6.5.
+From fae57c41b4bbba5d7c20594cc3f3c8d4f1600353 Mon Sep 17 00:00:00 2001
+From: Will Estes <westes@reground.org>
+Date: Wed, 11 Nov 2026 10:25:42 -0500
+Subject: [PATCH] fix(build): include gettext.h when NLS is disabled
+
+flexdef.h included gettext.h only when ENABLE_NLS was set. But that
+header is what defines the no-op gettext family for builds without
+NLS, and main.c calls ngettext directly. With --disable-nls the call
+was an implicit declaration, which is an error in current compilers.
+
+Include gettext.h unconditionally. locale.h and the gettext-based
+definition of _() stay conditional.
+
+fixes #844
+---
+ src/flexdef.h | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/flexdef.h b/src/flexdef.h
+index 2f2f93cc1..b2ec41d61 100644
+--- a/src/flexdef.h
++++ b/src/flexdef.h
+@@ -91,12 +91,16 @@
+ 
+ /* We use gettext. So, when we write strings which should be translated, we
+  * mark them with _()
++ *
++ * gettext.h is always included: with NLS disabled it supplies no-op versions
++ * of gettext, ngettext and friends, which code such as ngettext() in main.c
++ * calls directly.
+  */
++#include "gettext.h"
+ #if defined(ENABLE_NLS) && ENABLE_NLS
+ #ifdef HAVE_LOCALE_H
+ #include <locale.h>
+ #endif /* HAVE_LOCALE_H */
+-#include "gettext.h"
+ #define _(String) gettext (String)
+ #else
+ #define _(STRING) STRING
