@@ -76,6 +76,9 @@ let
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
     // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; }
     // import ./go-recipes3.nix { inherit (goChain) goPkg; inherit chk; };   # recipes3 (a new file: no served drv moves)
-  data = import ./data.nix h // c11;   # c11: on this line, so the `in` line other lanes edit stays main's
+  # qnew5: idle1's ranked leaves (a new file, so no served drv moves); x86 only, as c11
+  c12 = if gtkMeson == null then { } else import ./c-qnew5.nix (h // { inherit (c5) cmake python3 gnupatch; inherit (c4) perl; inherit (ti) texinfo;
+    inherit (c10) lzip; inherit (c7) groff; inherit gtkMeson; });
+  data = import ./data.nix h // c11 // c12;   # c11, c12: on this line, so the `in` line other lanes edit stays main's
   ti = import ./texinfo.nix (h // { inherit (c1) gnum4; inherit (c4) perl; }) // cqa;   # cqa: on this line, so the `in` line other lanes edit stays main's
 in c1 // c2 // c3 // c4 // c5 // c6 // c7 // c8 // c9 // c10 // data // ti // (if cargoPkg == null then { } else rust) // (if goChain == null then { } else gotools)
