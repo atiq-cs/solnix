@@ -42,6 +42,11 @@
 # 13. fleet9b (nix.conf cores = 0, NixOS's default and dixi's): pre-submit's --check builds with the job's cores, as the first
 #    build did, so a recipe's `-j${NIX_BUILD_CORES:-8}` is never -j0: a fixture that fails at cores 0 passes, SAME, with no .pub memo.
 #    F9B_BUILDER=<origin/main's solnix-builder.sh, before fleet9b (cae0e55)>: it memos the --check refusal (else SKIPped, not passed).
+# 14. subpoll: a submission polls BUILDER_PUBLISH_POLL_FIRST s, then the tick goes on to its next job; a later tick asks the
+#    status once (--poll 0) and claims on promoted. The fake site answers `finalizing` until FKVAL s after /begin (melody: 17 min
+#    on average, up to 30 in finalizing). The negative control: POLL_FIRST=1800 blocks the job until validation answers, as before.
+#    BUILDER_PUBLISH_SLOTS caps the submissions in flight (unanswered pub/<out> younger than BUILDER_PUBLISH_POLL), logged.
+#    SP_MAIN_BUILDER=<origin/main's solnix-builder.sh, before subpoll>: it blocks the same way (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -478,6 +483,22 @@ def promote(stage, p, key):
     shutil.copy(f"{stage}/{url}", f"{W}/hc/{url}"); open(f"{W}/hc/{h}.narinfo", "w").write(ni)
     env = dict(os.environ, XDG_CACHE_HOME=tempfile.mkdtemp(dir=W + "/fkst"))
     subprocess.run(["nix", "store", "sign", "--store", "file://" + W + "/hc", "--key-file", key, p], env=env, check=True, capture_output=True)
+import time
+pl = [a[i + 1] for i, x in enumerate(a[:-1]) if x == "--poll"]; poll = float(pl[-1]) if pl else 600  # the last --poll wins (argparse)
+def spw(f, p, t0, unknown):  # subpoll: poll_status's loop (a 1 s step for its 15 s): finalizing until FKVAL s after /begin, then promoted
+    c0 = time.time(); dl = c0 + poll
+    while True:
+        r = "promoted" if time.time() - t0 >= float(os.environ.get("FKVAL") or 0) else None
+        if r and not os.path.exists(f + ".done"):
+            promote(f + ".stage", p, W + "/sk"); open(f + ".done", "w").close()
+        print(f"  status: {r or 'finalizing'}")
+        if r or time.time() >= dl:
+            r = r or unknown + "-timeout"
+            log.write(f"SPEND {os.path.basename(f)} {r} {time.time() - c0:.1f}\n"); log.flush(); return r
+        time.sleep(1)
+if sid and open(f"{W}/fkst/{sid}").read().startswith("sp "):
+    f = f"{W}/fkst/{sid}"; _, p, t0 = open(f).read().split(); log.write(f"SPSTATUS {sid} poll={poll:g}\n"); log.flush()
+    r = spw(f, p, float(t0), "unknown"); print(f"STATUS {sid}\n  result: {r}"); sys.exit(0)
 if sid:
     f = f"{W}/fkst/{sid}"; st, p = open(f).read().split()
     if st == "proposed" and os.path.exists(W + "/fk/approve"):
@@ -495,6 +516,9 @@ if n == "pub429":
 print(f"  submission {sid} staging http://staging.invalid")
 for l in r.stdout.splitlines():
     if l.startswith("  begin body "): log.write("BODY " + l[13:] + "\n"); log.flush()
+if n.startswith("sp"):
+    t0 = time.time(); shutil.copytree(stage, f"{W}/fkst/{sid}.stage"); open(f"{W}/fkst/{sid}", "w").write(f"sp {p} {t0}\n")
+    log.write(f"SPBEGIN {sid} poll={poll:g}\n"); log.flush(); print(f"  result: {spw(f'{W}/fkst/{sid}', p, t0, 'finalized')}"); sys.exit(0)
 if "--eval" in a:
     shutil.copytree(stage, f"{W}/fkst/{sid}.stage"); open(f"{W}/fkst/{sid}", "w").write(f"proposed {p}\n")
     print("  status: proposed\n  result: proposed"); sys.exit(0)
@@ -1236,6 +1260,81 @@ mu8 "$S" "$W/mut13.sh" ' NIX_CONFIG="${NIX_CONFIG:+$NIX_CONFIG'$'\n''}cores = $C
 r7 pubcoresm > "$W/p13.json"; S0=$S S=$W/mut13.sh; tk13 BUILDER_STATE=$W/st13m; S=$S0
 ! cmp -s "$S" "$W/mut13.sh" && c13 pubcoresm "$W/st13m" && ok "NEG a mutant without the NIX_CONFIG export: the same check refusal (the export is what passes it)" ||
   no "mut13: memo $(m13 "$W/st13m" pubcoresm): $(print -r -- "$out" | grep ' pubcoresm')"
+rm -f "$W/bearer"
+# --- 14. subpoll: a submission polls BUILDER_PUBLISH_POLL_FIRST s, then the tick goes on; a later tick asks its status once
+# (--poll 0) and claims on promoted. The fake site (sp* outs) answers `finalizing` until FKVAL s after /begin (FKVAL is read at
+# each call: 600 = still validating, 0 = promoted now). Serial ticks (BUILDER_JOBS 1, melody's). SPBEGIN/SPSTATUS/SPEND: sublog.
+print x > "$W/bearer"; mkdir -p "$W/spflake"
+sed "s|@TAG@|${W##*/}|g" > "$W/spflake/flake.nix" <<'SP'
+{ outputs = { self }: let
+    mk = n: derivation { name = "qb-${n}-@TAG@"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; args = [ "-c" "echo building ${n}; echo ${n}-@TAG@ > $out" ]; };
+  in { packages.x86_64-solaris = builtins.listToAttrs (map (n: { name = n; value = mk n; })
+    [ "spa" "spb" "spn1" "spn2" "spo1" "spo2" "spc1" "spc2" "spc3" "sph" "spm" ]); }; }
+SP
+nix eval --json "path:$W/spflake#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath)' > "$W/spouts.json" 2> "$W/speval.err" || no "fixture 14: $(tail -3 "$W/speval.err")"
+po14() { jq -r --arg a "$1" '.[$a]' "$W/spouts.json"; }
+for a in spa spb spn1 spn2 spo1 spo2 spc1 spc2 spc3 sph spm; do rec $a 1 y "$(po14 $a)"; done >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"
+r14() { r7 "$@" > "$W/p14.json"; }
+tk14() { typeset -F t0=$SECONDS; tk7 FKROWS=$W/p14.json BUILDER_FLAKE=path:$W/spflake BUILDER_PUBLISH_POLL=1800 "$@"; t14=$(printf %.0f $(( SECONDS - t0 ))); }
+spd() { print -r -- "$sl" | nawk -v s="sid-$1" '$1 == "SPEND" && $2 == s {print int($4 + 0.5); exit}'; }	# that call's seconds
+spl() { print -r -- "$sl" | grep -n "^$1 sid-$2 " | head -1 | cut -d: -f1; }	# the line of SPBEGIN|SPEND|SPSTATUS sid-<n>
+pf14() { cut -f"$3" "$W/$1/pub/$(basename "$(po14 $2)")" 2> /dev/null; }	# pf14 <state> <attr> <field>: its pub/<out> field
+# (a) a new submission polls 3 s, is still finalizing, and the job ends: the next job (spb) is built and submitted in the same tick
+r14 spa spb; tk14 BUILDER_STATE=$W/st14 BUILDER_PUBLISH_POLL_FIRST=3 FKVAL=600; print -r -- "$out" | grep -E ' sp[ab]:' | sed 's/^/   14a /'
+[[ $(begun spa) == 1 && $(begun spb) == 1 && $(cl7 spa) == 0 && $(cl7 spb) == 0 ]] && (( $(spd spa) <= 6 && $(spl SPEND spa) < $(spl SPBEGIN spb) )) &&
+  [[ $(pf14 st14 spa 4) == finalizing && $(pf14 st14 spa 5) == +([0-9]) && $(pf14 st14 spb 4) == finalizing ]] &&
+  has "spa: .*qb-spa-.* is finalizing \(sid-spa\): the site validates it" &&
+  ok "a new submission polls BUILDER_PUBLISH_POLL_FIRST (3 s: its call took $(spd spa) s), is recorded finalizing in pub/<out>, and the next job (spb) is submitted in the same tick (${t14} s)" ||
+  no "14a: spd=$(spd spa) $(print -r -- "$out" | grep -E ' sp[ab]:') $sl"
+# (b) a later tick, the site still validating: ONE status request each (--poll 0), no claim, no second /begin. spa's entry is cut
+# back to main's 3 fields first: the status poll writes its state and an epoch (a host upgraded with submissions pending).
+x=$W/st14/pub/$(basename "$(po14 spa)"); cut -f1-3 "$x" > "$x.3" && mv "$x.3" "$x"
+tk14 BUILDER_STATE=$W/st14 BUILDER_PUBLISH_POLL_FIRST=3 FKVAL=600; print -r -- "$out" | grep -E ' sp[ab]:' | sed 's/^/   14b /'
+[[ -z $(print -r -- "$sl" | grep '^BEGIN') && $(claims) == 0 ]] && print -r -- "$sl" | grep -qx 'SPSTATUS sid-spa poll=0' && print -r -- "$sl" | grep -qx 'SPSTATUS sid-spb poll=0' &&
+  (( $(spd spa) <= 2 && $(spd spb) <= 2 )) && [[ $(pf14 st14 spa 4) == finalizing && $(pf14 st14 spa 5) == +([0-9]) ]] &&
+  ok "a later tick while the site validates: one status request each (--poll 0, $(spd spa) s), no claim, no second /begin; main's 3-field entry gets its state and epoch" ||
+  no "14b: $(print -r -- "$out" | grep -E ' sp[ab]:') $sl $(cat "$x")"
+# (b) the site promoted both: the next tick sees it in its one request, verifies (8UNr client check), claims and completes done
+tk14 BUILDER_STATE=$W/st14 BUILDER_PUBLISH_POLL_FIRST=3 FKVAL=0; print -r -- "$out" | grep -E ' sp[ab]:' | sed 's/^/   14c /'
+for a in spa spb; do
+  [[ -z $(print -r -- "$sl" | grep '^BEGIN') && $(cl7 $a) == 1 && ! -e $W/st14/pub/$(basename "$(po14 $a)") ]] && print -r -- "$sl" | grep -qx "SPSTATUS sid-$a poll=0" &&
+    has "$a: published .*qb-$a-.* \(promoted sid-$a\).*an 8UNr-only client verified it" &&
+    print -r -- "$c" | grep '/complete' | grep -q "\"status\":\"done\",\"version\":\"1\",\"nar_hash\":\"$(sv7 "$(po14 $a)")\",\"store_path\":\"$(po14 $a)\"" &&
+    ok "$a: promoted while no tick polled; the next tick's one request sees it, verifies, claims and completes done (pub/<out> gone)" || no "14c $a: $(print -r -- "$out" | grep " $a")"
+done
+# (c) NEG control: POLL_FIRST=1800 (today's BUILDER_PUBLISH_POLL) with validation taking FKVAL=12 s: each job blocks until it answers
+r14 spn1 spn2; tk14 BUILDER_STATE=$W/st14n BUILDER_PUBLISH_POLL_FIRST=1800 FKVAL=12; print -r -- "$out" | grep -E ' spn[12]:' | sed 's/^/   14n /'
+(( $(spd spn1) >= 11 && $(spd spn2) >= 11 && $(spl SPEND spn1) < $(spl SPBEGIN spn2) && t14 >= 22 )) && [[ $(cl7 spn1) == 1 && $(cl7 spn2) == 1 ]] &&
+  ok "NEG POLL_FIRST=1800: each submitter call blocks until validation answers ($(spd spn1) s, $(spd spn2) s), the next job waits for it; the tick took ${t14} s (today's idle CPU)" ||
+  no "14n: spd=$(spd spn1),$(spd spn2) t=$t14 $(print -r -- "$out" | grep -E ' spn[12]:')"
+if [[ -n ${SP_MAIN_BUILDER:-} ]]; then r14 spo1 spo2; S0=$S S=$SP_MAIN_BUILDER; tk14 BUILDER_STATE=$W/st14o FKVAL=12; S=$S0
+  print -r -- "$out" | grep -E ' spo[12]:' | sed 's/^/   14o /'
+  (( $(spd spo1) >= 11 && $(spl SPEND spo1) < $(spl SPBEGIN spo2) )) && [[ $(cl7 spo1) == 1 ]] &&
+    ok "NEG origin/main's builder ($SP_MAIN_BUILDER, --poll \$BUILDER_PUBLISH_POLL = 1800): its call blocks $(spd spo1) s, until validation answers" ||
+    no "14o: spd=$(spd spo1) $(print -r -- "$out" | grep -E ' spo[12]:')"
+else print "SKIP origin/main blocking negative control: SP_MAIN_BUILDER unset (not counted as a pass)"; fi
+# (3) the cap: BUILDER_PUBLISH_SLOTS=2, three submissions the site keeps validating: the third waits (logged), a later tick sends it
+r14 spc1 spc2 spc3; tk14 BUILDER_STATE=$W/st14c BUILDER_PUBLISH_SLOTS=2 BUILDER_PUBLISH_POLL_FIRST=2 FKVAL=600; print -r -- "$out" | grep -E ' spc[123]:' | sed 's/^/   14s /'
+[[ $(begun spc1) == 1 && $(begun spc2) == 1 && $(begun spc3) == 0 && $(claims) == 0 ]] &&
+  has "spc3: 2 submissions in flight, the cap \(BUILDER_PUBLISH_SLOTS=2\): .*qb-spc3-.* is submitted on a later tick" &&
+  ok "BUILDER_PUBLISH_SLOTS=2: two finalizing submissions in flight, the third is not submitted (logged: the cap)" || no "14s: $(print -r -- "$out" | grep -E ' spc[123]:') $sl"
+tk14 BUILDER_STATE=$W/st14c BUILDER_PUBLISH_SLOTS=2 BUILDER_PUBLISH_POLL_FIRST=2 FKVAL=0
+[[ $(begun spc1) == 0 && $(begun spc2) == 0 && $(begun spc3) == 1 && $(cl7 spc1) == 1 && $(cl7 spc2) == 1 && $(cl7 spc3) == 1 ]] &&
+  ok "the next tick: spc1, spc2 promoted (one request each), which frees the slots: spc3 is submitted, promoted, all three claimed" || no "14s2: $(print -r -- "$out" | grep -E ' spc[123]:') $sl"
+# what counts in flight: two finalizing entries younger than BUILDER_PUBLISH_POLL (1800 s) do, a tier-1 proposed one does not;
+# older than the ceiling they do not (a submission the site lost frees its slot). Hand-written entries, nothing polls them.
+pe14() { typeset i; mkdir -p "$W/$1/pub"; for i in 1 2 3; do printf 'sid-x%s\t2026-11-12T00:00:00Z\tsha256:x\t%s\t%s\n' $i "$([[ $i == 3 ]] && print proposed || print finalizing)" "$2" \
+  > "$W/$1/pub/0000000000000000000000000000000$i-qb-x$i"; done; }
+pe14 st14h "$(printf '%(%s)T' now)"; r14 sph; tk14 BUILDER_STATE=$W/st14h BUILDER_PUBLISH_SLOTS=2 FKVAL=0
+[[ $(begun sph) == 0 && $(claims) == 0 ]] && has "sph: 2 submissions in flight, the cap \(BUILDER_PUBLISH_SLOTS=2\)" &&
+  ok "in flight: two finalizing entries count, a proposed one does not (2, the cap): sph waits" || no "14h: $(print -r -- "$out" | grep ' sph')"
+pe14 st14h $(( $(printf '%(%s)T' now) - 1801 )); tk14 BUILDER_STATE=$W/st14h BUILDER_PUBLISH_SLOTS=2 FKVAL=0
+[[ $(begun sph) == 1 && $(cl7 sph) == 1 ]] && ok "the same entries older than BUILDER_PUBLISH_POLL (1800 s): no longer in flight, sph is submitted and claimed" ||
+  no "14h2: $(print -r -- "$out" | grep ' sph')"
+mu8 "$S" "$W/mut14.sh" '$0 == "slot" || (NF >= 5' '$0 == "slot" || (0'
+pe14 st14m "$(printf '%(%s)T' now)"; r14 spm; S0=$S S=$W/mut14.sh; tk14 BUILDER_STATE=$W/st14m BUILDER_PUBLISH_SLOTS=2 FKVAL=0; S=$S0
+! cmp -s "$S" "$W/mut14.sh" && [[ $(begun spm) == 1 ]] && ok "NEG a mutant whose in-flight count ignores pending submissions: spm is submitted past the cap (so the cap check above can fail)" ||
+  no "mut14: $(print -r -- "$out" | grep ' spm')"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

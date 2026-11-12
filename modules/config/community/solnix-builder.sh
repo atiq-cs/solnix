@@ -21,9 +21,11 @@
 # nix build of every output (the first build); every reference served, else it waits (deps first, never memo'd);
 # nix-store --verify-path; pre-submit-check.sh --leaf (--check: the second build, SAME; drv-gate --leaf; publish-gate;
 # store; closure; build log; the stamp); a one-path file:// stage; cache-submit.py --submit (one leaf, at most
-# BUILDER_PUBLISH_SLOTS in flight). Promoted: the served NarHash is this host's, an 8UNr-only client fetches and verifies
-# the NAR (a key that signs nothing must not), then the job is claimed and completed done like a rebuilt one. Tier 1
-# (after 2026-11-13): proposed/approved wait in $BUILDER_STATE/pub/<out> and are polled on later ticks, a 429 backs off
+# BUILDER_PUBLISH_SLOTS in flight: not yet answered by validation). Promoted: the served NarHash is this host's, an 8UNr-only
+# client fetches and verifies the NAR (a key that signs nothing must not), then the job is claimed and completed done like a
+# rebuilt one. A submission polls BUILDER_PUBLISH_POLL_FIRST s (30), then waits in $BUILDER_STATE/pub/<out>: still
+# `finalizing` (the site's validation queue: 17 min on average on melody, 2026-11-11), or tier 1's proposed/approved; each later
+# tick asks its status once (subpoll: the job no longer blocks the tick while the site validates). A 429 backs off
 # Retry-After seconds; neither is a failure. A failed gate, a differing --check or a rejection is memo'd (tried/<drv>.pub); a host
 # failure (a full disk, a path GC'd mid-check, another nixbld uid's fixed build dir in the way) is not: a later tick retries.
 # Multi-output (fleet5, infra 2026-11-04): a job lists every served out of its drv (gcc: out and -lib; wave6: out and -debug).
@@ -69,7 +71,10 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 # first publish: off unless set (the module turns it on for dedicated hosts); the key is the host's enrolled ssh-ed25519 key
 : ${BUILDER_PUBLISH:=0} ${BUILDER_PUBLISH_KEY:=/etc/ssh/ssh_host_ed25519_key} ${BUILDER_PUBLISH_ID:=$BUILDER_AGENT}
 # BUILDER_GATES: the dir with scripts/cache-submit.py, pre-submit-check.sh and the gates; BUILDER_SUBMIT: a test hook (the submitter)
+# BUILDER_PUBLISH_POLL_FIRST: s a new submission polls its status before the tick goes on (later ticks: one request each);
+# BUILDER_PUBLISH_POLL: the ceiling: a submission validation has not answered counts in flight for at most this long
 : ${BUILDER_GATES:=} ${BUILDER_PYTHON:=${GATE_PYTHON:-python3}} ${BUILDER_PUBLISH_POLL:=1800} ${BUILDER_PUBLISH_SLOTS:=4}
+: ${BUILDER_PUBLISH_POLL_FIRST:=30}
 : ${BUILDER_CACHE_KEY:=cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=}
 # eval-anchored jobs: off unless set (module solnix.cache.build.evalAnchored); the branches whose heads are evaluated, in order
 : ${BUILDER_EVAL:=0} ${BUILDER_EVAL_BRANCHES:=main 26.11}
@@ -409,6 +414,9 @@ fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate
 			log "decline $1: pre-submit-check.sh ${fa%% *} $2 rc=$f (${w:-setup}; $fm.presubmit)"; return 1
 		fi
 	fi
+	# the cap (subpoll): built and gated (the stamp stands), staged and submitted once fewer are in flight (first1's slot is the check)
+	x=$(inflight); (( x < BUILDER_PUBLISH_SLOTS )) ||
+	    { log "$1: $x submissions in flight, the cap (BUILDER_PUBLISH_SLOTS=$BUILDER_PUBLISH_SLOTS): $2 is submitted on a later tick"; return 1; }
 	# the stage: a file:// cache holding the out's NAR and narinfo, with its references' served narinfos (nix copy needs them valid there)
 	fst=$(mktemp -d "$BUILDER_STATE/pub/stage.XXXXXX") || return 1
 	for f in $(nix-store -q --references "$2"); do [[ $f == "$2" ]] && continue; x=${f#/nix/store/}
@@ -416,11 +424,24 @@ fbuild() {	# fbuild <pname> <out> <drv>^<output>: the first build and every gate
 	print -r -- "$2" > "$fst.paths"; nix path-info --json "$2" > "$fst.pathinfo" 2> /dev/null &&
 	    bounded 1800 nix copy --no-recursive --to "file://$fst?compression=xz" "$2" > "$fst.log" 2>&1 || { log "decline $1: cannot stage $2 ($fst.log)"; return 1; }
 }
+inflight() {	# submissions in flight: this tick's submitter calls (pub/slot.*) and earlier submissions validation has not answered yet
+	# (pub/<out>: last state not proposed|approved|promoted|rejected), each for at most BUILDER_PUBLISH_POLL s (one the site lost frees it)
+	{ ls -d "$BUILDER_STATE"/pub/slot.* 2> /dev/null | sed 's/.*/slot/'; cat "$BUILDER_STATE"/pub/????????????????????????????????-* 2> /dev/null; } |
+	    nawk -F'\t' -v t="$(printf '%(%s)T' now)" -v c="$BUILDER_PUBLISH_POLL" '$0 == "slot" || (NF >= 5 && $4 !~ /^(proposed|approved|promoted|rejected)$/ && t - $5 < c) {n++} END {print n + 0}'
+}
+slot() {	# slot: take a publish slot ($BUILDER_STATE/pub/slot.<n>: $fn) while fewer than BUILDER_PUBLISH_SLOTS are in flight ($fq), counted
+	# and taken under pub/lock.slots so the parallel jobs of a tick never overshoot (the tick-start sweep removes a killed tick's lock.*)
+	typeset fsw=0
+	until mkdir "$BUILDER_STATE/pub/lock.slots" 2> /dev/null; do (( (fsw += 1) < 120 )) || { fq='?'; return 1; }; sleep 1; done
+	fq=$(inflight) fn=0
+	(( fq < BUILDER_PUBLISH_SLOTS )) && while (( (fn += 1) <= BUILDER_PUBLISH_SLOTS )); do mkdir "$BUILDER_STATE/pub/slot.$fn" 2> /dev/null && break; done
+	rmdir "$BUILDER_STATE/pub/lock.slots"; (( fn >= 1 && fn <= BUILDER_PUBLISH_SLOTS ))
+}
 fsubmit() {	# fsubmit <out> <log> <cache-submit.py args>: the submitter (BUILDER_SUBMIT: a test hook); sets fres (its result) and fsid
 	typeset o=$1 l=$2; shift 2	# a --poll in the args overrides the default (the last one wins)
-	set -- --key "$BUILDER_PUBLISH_KEY" --builder "$BUILDER_PUBLISH_ID" --poll "$BUILDER_PUBLISH_POLL" "$@"
+	set -- --key "$BUILDER_PUBLISH_KEY" --builder "$BUILDER_PUBLISH_ID" --poll "$BUILDER_PUBLISH_POLL_FIRST" "$@"
 	if [[ -n ${BUILDER_SUBMIT:-} ]]; then set -- $BUILDER_SUBMIT "$@"; else set -- "$BUILDER_PYTHON" "$BUILDER_GATES/scripts/cache-submit.py" "$@"; fi
-	bounded $(( BUILDER_PUBLISH_POLL + 900 )) "$@" > "$l" 2>&1
+	bounded $(( BUILDER_PUBLISH_POLL + 900 )) "$@" > "$l" 2>&1	# the ceiling: the upload of a large NAR runs inside it too
 	fsid=$(sed -n 's/^  submission \([^ ]*\) .*/\1/p; s/^STATUS \([^ ]*\)$/\1/p' "$l" | tail -1)
 	fres=$(sed -n 's/^  result: //p' "$l" | tail -1)
 	[[ -n $fres ]] || fres="plan $(nawk -v p="$o" '$2 == p && $1 ~ /^[A-Z][A-Z-]+$/ && $1 !~ /^(SUBMIT|DRY-RUN|STATUS)$/ {print $1}' "$l")"	# its plan line
@@ -449,25 +470,31 @@ first() {	# first <pname> <out> <drv>^<output>: first1, holding $BUILDER_STATE/p
 }
 first1() {	# first1 <pname> <out> <drv>^<output>: publish this host's first build of a served row's unserved out. rc 0 when it is
 	# served with our NarHash and the client check passed ($nar: the served NarHash; the caller claims), else 1 (logged).
-	typeset fm=$BUILDER_STATE/tried/${3##*/} fp=$BUILDER_STATE/pub/${2##*/} fb=$BUILDER_STATE/pub/backoff fl fst= fsid= fres= fz fn
+	typeset fm=$BUILDER_STATE/tried/${3##*/} fp=$BUILDER_STATE/pub/${2##*/} fb=$BUILDER_STATE/pub/backoff fl fst= fsid= fres= fz fn fq fss
 	mkdir -p "$BUILDER_STATE/pub" "$BUILDER_STATE/stamps" "${fm%/*}"; fl=$fm.submit
 	if [[ -n ${EA:-} ]]; then rowed "$2" && { log "decline $1: a served row names $2: it is published the row way, never --eval"; return 1; }
 	else rowed "$2" || { log "decline $1: $2 is not an out of the served recipes.tsv: never published from here"; return 1; }; fi
-	if [[ -s $fp ]]; then fsubmit "$2" "$fl" --status "$(cut -f1 "$fp")" --poll 120	# a 429 is /begin's: polling goes on
+	if [[ -s $fp ]]; then fsubmit "$2" "$fl" --status "$(cut -f1 "$fp")" --poll 0	# one request: the next tick asks again (a 429 is /begin's)
+		# pub/<out>: <id> <submitted, UTC> <NarHash> <last state> <submitted, epoch> (an entry from before subpoll gets its epoch now)
+		fss=$(sed -n 's/^  status: \([^ ]*\).*/\1/p' "$fl" | tail -1); [[ $fss == +([a-z_]) ]] || fss=	# a state, not "HTTP 503"
+		[[ -n $fss ]] && fz=$(nawk -F'\t' -v s="$fss" -v t="$(printf '%(%s)T' now)" 'BEGIN {OFS = "\t"} NR == 1 {$4 = s; if ($5 == "") $5 = t; print}' "$fp") && print -r -- "$fz" > "$fp"
 	else
 		fz=$(printf '%(%s)T' now); [[ -s $fb ]] && (( $(<"$fb") > fz )) && { log "$1: new submissions back off for $(( $(<"$fb") - fz )) s more (429)"; return 1; }
 		fbuild "$1" "$2" "$3" || { [[ -n $fst ]] && { find "$fst" -depth -delete; rm -f "$fst".*; }; return 1; }
-		fn=0; while (( (fn += 1) <= BUILDER_PUBLISH_SLOTS )); do mkdir "$BUILDER_STATE/pub/slot.$fn" 2> /dev/null && break; done
-		(( fn <= BUILDER_PUBLISH_SLOTS )) || { find "$fst" -depth -delete; rm -f "$fst".*; log "$1: $BUILDER_PUBLISH_SLOTS submissions in flight; a later tick"; return 1; }
+		slot || { find "$fst" -depth -delete; rm -f "$fst".*
+			log "$1: $fq submissions in flight, the cap (BUILDER_PUBLISH_SLOTS=$BUILDER_PUBLISH_SLOTS): $2 is submitted on a later tick"; return 1; }
 		set -- "$1" "$2" "$3" --cache-dir "$fst" --paths "$fst.paths" --pathinfo "$fst.pathinfo" --stamps "$BUILDER_STATE/stamps" --with-refs
 		[[ -n ${EA:-} ]] && set -- "$@" --eval "$EA" "$BUILDER_SYSTEM" "$EC" "$EB" ${EN:+--flake-nar-hash "$EN"}
 		[[ $BUILDER_PUBLISH == 1 ]] && set -- "$@" --submit
 		log "$1: submitting $2 as $BUILDER_PUBLISH_ID$([[ $BUILDER_PUBLISH == dry ]] && print ' (BUILDER_PUBLISH=dry: no /begin)')"
-		fsubmit "$2" "$fl" "${@:4}"; rmdir "$BUILDER_STATE/pub/slot.$fn"; find "$fst" -depth -delete; rm -f "$fst".*
-		# finalized but not resolved yet: later ticks poll its status (never a second submission of the same out)
+		fsubmit "$2" "$fl" "${@:4}"; fss=$(sed -n 's/^  status: \([^ ]*\).*/\1/p' "$fl" | tail -1); [[ $fss == +([a-z_]) ]] || fss=
+		# not resolved in BUILDER_PUBLISH_POLL_FIRST s (finalizing: the site validates; or tier 1's proposed): later ticks ask its
+		# status (never a second submission of the same out). Written before the slot is let go, so inflight never misses it.
 		# shortcut: a submission that never resolves stays pending; rm $BUILDER_STATE/pub/<out> to submit again
-		[[ -n $fsid && $fres == @(proposed|approved|finalized*) ]] && printf '%s\t%s\t%s\n' "$fsid" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(nix-store -q --hash "$2")" > "$fp" &&
+		[[ -n $fsid && $fres == @(proposed|approved|finalized*) ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$fsid" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(nix-store -q --hash "$2")" \
+		    "${fss:-${fres%-timeout}}" "$(printf '%(%s)T' now)" > "$fp" &&
 		    [[ -n ${EA:-} ]] && printf '%s\t%s\t%s\n' "$EA" "$EB" "$EC" > "$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_}"	# later ticks: this commit
+		rmdir "$BUILDER_STATE/pub/slot.$fn"; find "$fst" -depth -delete; rm -f "$fst".*
 	fi
 	case $fres in
 	promoted|'plan PUBLISHED')
@@ -475,6 +502,8 @@ first1() {	# first1 <pname> <out> <drv>^<output>: publish this host's first buil
 		rm -f "$fp" "$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_}"; print ok > "$fm"; nar=$(served "$2"); : > "$J/worked"	# tried/<drv> ok: the rebuild path never builds it again
 		log "$1: published $2 ($fres${fsid:+ $fsid}), NarHash $nar: an 8UNr-only client verified it"; return 0 ;;
 	proposed|approved) log "$1: $2 is $fres (${fsid:-?}): waiting for review (tier 1); polled on later ticks"; return 1 ;;
+	finalized*|unknown-timeout) [[ -s $fp ]] && { log "$1: $2 is ${fss:-not answered} (${fsid:-?}): the site validates it; its status is asked on a later tick"; return 1; }
+		log "$1: submission of $2 ${fsid:+$fsid }ended '$fres' ($fl); submitted again on a later tick"; return 1 ;;
 	rejected) print -r -- "rejected (${fsid:-?}): $(grep '^  status:' "$fl" | tail -1 | cut -c11-400)" > "$fm.pub"; rm -f "$fp" "$BUILDER_STATE/pub/eval.${1//[!A-Za-z0-9._+-]/_}"; log "decline $1: $(<"$fm.pub")"; return 1 ;;
 	backoff\ +([0-9])) print $(( $(printf '%(%s)T' now) + ${fres#backoff } )) > "$fb"; log "$1: /begin answered 429: backing off ${fres#backoff } s"; return 1 ;;
 	'plan READY') log "dry run: would submit $2 as $BUILDER_PUBLISH_ID ($fl)"; return 1 ;;
