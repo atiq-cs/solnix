@@ -20,7 +20,7 @@ TPROG
     cmake -S . -B _b -DCMAKE_INSTALL_PREFIX="$out" -DCMAKE_INSTALL_LIBDIR=lib/amd64 -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_SKIP_RPATH=ON -DCMAKE_IGNORE_PREFIX_PATH="/usr;/usr/local;/opt" \
       -DCMAKE_IGNORE_PATH="/usr/lib/64;/usr/lib/amd64;/lib/64" ${extra} >&2
-    cmake --build _b -j16 >&2; cmake --install _b >&2
+    cmake --build _b -j''${NIX_BUILD_CORES:-4} >&2; cmake --install _b >&2   # the build's --cores, not 16 (libhwy at -j16: 19 GB swap)
   '';
   # meson recipes: desktop/gtk's served store meson 1.10.2, samurai, nasm and its build-tool env (GNU binutils by name, sh -> bash);
   # null on aarch64 (no desktop/gtk set there), which then has none of them
@@ -1088,7 +1088,6 @@ printf("ok %s %ux%u %d %d\n", th_version_string(), di.pic_width, di.pic_height, 
   # protobuf (BSD-3-Clause): Protocol Buffers (libprotobuf, libprotobuf-lite, libprotoc, libupb, protoc) on abseil-cpp and zlib, shared, as
   # nixpkgs (its tests off: no queued job runs them). Its version-script probe fails on illumos ld, so the libraries export everything
   # (as upstream's macOS build). upb's linker arrays need __start_/__stop_<section>, which illumos ld defines (protected), measured.
-  # Built at the build's core count, not cmakeB's -j16: protobuf's translation units are large.
   # -z now on its libraries: lazily bound, a gcc 15 consumer deadlocked at start. During libprotobuf's .init (AddDescriptors holds
   # DescriptorPool's mutex), libstdc++'s first call to std::string::_M_create binds to the consumer's own WEAK copy of it, so
   # ld.so.1 runs the consumer's .init early; its static descriptors re-enter the same mutex. Measured (wave7b, this recipe's own
@@ -1099,7 +1098,7 @@ printf("ok %s %ux%u %d %d\n", th_version_string(), di.pic_width, di.pic_height, 
             sha256 = "7e7eaf580ec77f1a392ff1ab1013c13d3b04a6716f002f697f67f3c1113f0530"; };
     deps = [ world zlib abseil-cpp ]; nativeTools = [ cmake base.pkgconf ] ++ hostTools;
     build = ''
-      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,now -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=ON -Dprotobuf_ABSL_PROVIDER=package -Dabsl_DIR=${abseil-cpp}/lib/amd64/cmake/absl -DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include")}
+      ${cmakeB "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,now -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=ON -Dprotobuf_ABSL_PROVIDER=package -Dabsl_DIR=${abseil-cpp}/lib/amd64/cmake/absl -DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include"}
       ${chk ''"$out/bin/protoc" --version'' "^libprotoc 36\\.2$"}
       # protoc generates C++ for a message; that code, on the installed libprotobuf, serialises it and parses it back
       mkdir "$W/pb"; printf 'syntax = "proto3";\npackage t;\nmessage M { string s = 1; int32 n = 2; repeated int32 r = 3; }\n' > "$W/pb/t.proto"
@@ -1668,11 +1667,11 @@ YACC
       # woof (UTC) 1980-01-01, in libhdf5.so and libhdf5.settings (cross-host compare, --check SAME on each). In UTC, as NixOS's sandbox is.
       grep -qx 'string (TIMESTAMP CONFIG_DATE "%Y-%m-%d")' CMakeLists.txt || { echo "FATAL: hdf5 CONFIG_DATE anchor" >&2; exit 1; }
       sed -i 's/^string (TIMESTAMP CONFIG_DATE "%Y-%m-%d")$/string (TIMESTAMP CONFIG_DATE "%Y-%m-%d" UTC)/' CMakeLists.txt
-      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB ("-DHDF5_INSTALL_LIB_DIR=lib/amd64 -DHDF5_INSTALL_CMAKE_DIR=lib/amd64/cmake "
+      ${cmakeB ("-DHDF5_INSTALL_LIB_DIR=lib/amd64 -DHDF5_INSTALL_CMAKE_DIR=lib/amd64/cmake "
         + "-DBUILD_STATIC_LIBS=OFF -DBUILD_SHARED_LIBS=ON -DHDF5_BUILD_CPP_LIB=ON -DHDF5_BUILD_FORTRAN=OFF -DHDF5_ENABLE_SZIP_SUPPORT=ON "
         + "-DHDF5_ENABLE_PARALLEL=OFF -DHDF5_BUILD_JAVA=OFF -DHDF5_ENABLE_THREADSAFE=OFF -DHDF5_BUILD_HL_LIB=ON -DHDF5_ENABLE_NONSTANDARD_FEATURE_FLOAT16=ON "
         + "-DBUILD_TESTING=OFF -DHDF5_BUILD_EXAMPLES=OFF -Dlibaec_DIR=${libaec}/lib/amd64/cmake/libaec "
-        + "-DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include"))}
+        + "-DZLIB_ROOT=${zlib} -DZLIB_LIBRARY=${zlib}/lib/amd64/libz.so -DZLIB_INCLUDE_DIR=${zlib}/include")}
       for f in "$out"/bin/*-shared; do [ -e "$f" ] || continue; mv "$f" "''${f%-shared}"; done
       ${scrub}
       ${chk ''"$out/bin/h5dump" --version'' "h5dump: Version 1\\.14\\.6"}
@@ -3153,8 +3152,8 @@ int main(void){ printf("ok %08x\n", crc32_gzip_refl(0, (const unsigned char *)"1
       # linker lacks it ("safe to skip (we use DLLEXPORT annotations)": the libraries are built -fvisibility=hidden). SunOS too.
       [ "$(grep -c '^if(UNIX AND NOT APPLE)$' CMakeLists.txt)" = 3 ] || { echo "FATAL: libhwy version-script anchor" >&2; exit 1; }
       sed -i 's/^if(UNIX AND NOT APPLE)$/if(UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "SunOS")/' CMakeLists.txt
-      # at the build's core count, not cmakeB's -j16: vqsort's units are ~1 GB each (woof, 16 GB, swapped 19 GB at -j16)
-      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-DBUILD_SHARED_LIBS=ON -DHWY_ENABLE_TESTS=ON -DHWY_ENABLE_EXAMPLES=OFF -DBUILD_TESTING=OFF")}
+      # cmakeB builds at the core count: vqsort's units are ~1 GB each (woof, 16 GB, swapped 19 GB at -j16)
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DHWY_ENABLE_TESTS=ON -DHWY_ENABLE_EXAMPLES=OFF -DBUILD_TESTING=OFF"}
       [ -e "$out/lib/amd64/libhwy_test.so" ] || { echo "FATAL: libhwy: no libhwy_test" >&2; exit 1; }
       cat > "$W/t.cc" <<'TPROG'
 #include <hwy/contrib/sort/vqsort.h>
@@ -3247,7 +3246,7 @@ TPROG
       sed -i 's|^#include <setjmp.h>    // for fibers$|&\n#if defined(__sun) \&\& defined(__cplusplus)\nusing std::_setjmp;\nusing std::_longjmp;\n#endif|' c++/src/kj/async.c++
       grep -qx '    target_link_libraries(kj-async PUBLIC ws2_32)' c++/src/kj/CMakeLists.txt || { echo "FATAL: capnproto ws2_32 anchor" >&2; exit 1; }
       sed -i 's|^    target_link_libraries(kj-async PUBLIC ws2_32)$|&\n  endif()\n  if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")\n    target_link_libraries(kj-async PUBLIC socket nsl)|' c++/src/kj/CMakeLists.txt
-      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-DBUILD_SHARED_LIBS=ON -DWITH_FIBERS=ON -DBUILD_TESTING=OFF -DCMAKE_CXX_FLAGS=-std=c++20")}
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DWITH_FIBERS=ON -DBUILD_TESTING=OFF -DCMAKE_CXX_FLAGS=-std=c++20"}
       grep -q "^OPENSSL_CRYPTO_LIBRARY:FILEPATH=${base.openssl}/" _b/CMakeCache.txt && grep -Eq "^ZLIB_LIBRARY(_RELEASE)?:FILEPATH=${zlib}/" _b/CMakeCache.txt \
         || { echo "FATAL: capnproto: openssl/zlib not from the store" >&2; grep -E '^(OPENSSL|ZLIB)_' _b/CMakeCache.txt >&2; exit 1; }
       mkdir "$W/cp"; printf '@0xbf5147cbbecf40c1;\nstruct P { name @0 :Text; n @1 :UInt32; }\n' > "$W/cp/t.capnp"
@@ -3615,7 +3614,7 @@ printf("ok %s", divsufsort_version()); for (int i = 0; i < 6; i++) printf(" %d",
     deps = [ world zlib isa-l ]; nativeTools = [ cmake gnupatch base.pkgconf python3 ] ++ hostTools;
     build = ''
       patch -p1 < ${npPatch "st/strobealign/include-cstdint.patch" "1d913047f5f9d9c71c193b76ea9542aa330ac3490976218a94af073e48520a15"}
-      ${builtins.replaceStrings [ "cmake --build _b -j16" ] [ "cmake --build _b -j\${NIX_BUILD_CORES:-4}" ] (cmakeB "-DISAL=system")}
+      ${cmakeB "-DISAL=system"}
       grep -q "^ISAL_LIBDIR:INTERNAL=${isa-l}/" _b/CMakeCache.txt || { echo "FATAL: strobealign: isa-l not from the store" >&2; grep '^ISAL_' _b/CMakeCache.txt >&2; exit 1; }
       python3 -c 'import random; random.seed(7); s = "".join(random.choice("ACGT") for _ in range(5000)); open("'"$W"'/ref.fa", "w").write(">chr1\n" + s + "\n"); open("'"$W"'/r.fq", "w").write("@r1\n" + s[1000:1150] + "\n+\n" + "I" * 150 + "\n")'
       ${chk ''"$out/bin/strobealign" -t 1 "$W/ref.fa" "$W/r.fq" 2>/dev/null | grep -v "^@" | cut -f1-4'' "^r1	0	chr1	1001$"}
