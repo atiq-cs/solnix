@@ -38,12 +38,10 @@ TPROG
   # hosts in their man pages only (--check SAME on each). illumos uses traditional sections: pin that answer. xcb-proto/xtrans/libxcb/
   # libxext/libfontenc/font-util run the same probe but install no page whose section it changes (NarHash equal on both hosts).
   manSections = "ac_cv_file__usr_share_man_man7_attributes_7=yes";
-  # A cmake find_package on main misses every dep: mk-src-pkg's env CMAKE_PREFIX_PATH is ';'-joined (cmake splits it on ':' on Unix:
-  # one bogus dir), and 64-bit libs are in <dep>/lib/amd64, a suffix cmake never tries. What found OpenSSL for aws-c-cal on lixi
-  # was the build host's /bin/pkg-config, through cmake's system prefix "/" (cmakeB ignores /usr;/usr/local;/opt only): woof has
-  # none, so the same drv failed there (floki /scratch/solnix/recipes8/AWS-C-CAL-DIAGNOSIS.md). wave6 3d0006e's solnix-cmake.cmake
-  # fixes all three for every cmake build; until it reaches main, a recipe that looks a package up passes the same answer.
-  storePrefix = ''-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" -DCMAKE_LIBRARY_ARCHITECTURE=amd64 -DCMAKE_IGNORE_PREFIX_PATH="/;/usr;/usr/local;/opt"'';
+  # cmake find_package: mk-src-pkg's cmakeX gives every store-only cmake build ../solnix-cmake.cmake (':'-joined CMAKE_PREFIX_PATH,
+  # lib/amd64, the host prefixes and "/" ignored). Before it reached main, aws-c-cal found OpenSSL on lixi through the build host's
+  # /bin/pkg-config and failed on woof (floki /scratch/solnix/recipes8/AWS-C-CAL-DIAGNOSIS.md); four recipes passed the same answer
+  # as flags (storePrefix), removed in wave8. Each asserts in its CMakeCache where cmake found its packages.
   # nasm names each object's STT_FILE symbol after its input path as given (no prefix map), and cmake hands it absolute sources, so
   # a library's .SUNW_ldynsym named the build dir (gate B8): desktop/gtk/base.nix libjpeg-turbo's wrapper, which passes nasm the
   # path relative to its cwd. A recipe runs ${nasmRel} and names "$W/nasm" as its assembler.
@@ -1769,7 +1767,7 @@ struct aws_byte_buf b = aws_byte_buf_from_c_str("[profile solnix]\nregion = us-w
 struct aws_profile_collection *c = aws_profile_collection_new_from_buffer(a, &b, AWS_PST_CONFIG); if (!c) return 1;
 printf("ok %d\n", (int)aws_profile_collection_get_profile_count(c)); aws_profile_collection_release(c); aws_sdkutils_library_clean_up(); return 0; }'' "$out/lib/amd64/libaws-c-sdkutils.so";
   # aws-c-cal: hashes, HMAC and keys on OpenSSL's libcrypto (its unix backend, as nixpkgs: openssl); SHA-256 of "abc" is the FIPS vector
-  aws-c-cal = awsC "aws-c-cal" "9c6d424d206dd7822aa44fa39ce31575dcbaa83133620abdac8e56e4cea9667c" [ base.openssl ] "-DUSE_OPENSSL=ON ${storePrefix}" ''#include <aws/cal/cal.h>
+  aws-c-cal = awsC "aws-c-cal" "9c6d424d206dd7822aa44fa39ce31575dcbaa83133620abdac8e56e4cea9667c" [ base.openssl ] "-DUSE_OPENSSL=ON" ''#include <aws/cal/cal.h>
 #include <aws/cal/hash.h>
 #include <stdio.h>
 int main(void){ struct aws_allocator *a = aws_default_allocator(); aws_cal_library_init(a); uint8_t d[32]; struct aws_byte_buf o = aws_byte_buf_from_empty_array(d, 32);
@@ -1862,7 +1860,7 @@ msgpack_object o = u.data; printf("ok %s %d %lld %.*s\n", msgpack_version(), (in
             sha256 = "f634fb7052da4478096f2a02dfb6d91174e5836b317afb006375249ccb086aa8"; };
     deps = [ world base.nixChain.boost ]; nativeTools = [ cmake ] ++ hostTools;
     build = ''
-      ${cmakeB "-DMSGPACK_BUILD_DOCS=OFF -DMSGPACK_CXX20=ON -DMSGPACK_BUILD_TESTS=OFF ${storePrefix}"}
+      ${cmakeB "-DMSGPACK_BUILD_DOCS=OFF -DMSGPACK_CXX20=ON -DMSGPACK_BUILD_TESTS=OFF"}
       grep -q "^Boost_DIR:PATH=${base.nixChain.boost}/lib/amd64/cmake/Boost-" _b/CMakeCache.txt || { echo "FATAL: msgpack-cxx: not the store boost" >&2; exit 1; }
       cat > "$W/t.cc" <<'TPROG'
 #include <msgpack.hpp>
@@ -2398,7 +2396,7 @@ TPROG
   };
 
   # uvwasi (MIT): the WASI syscall layer on libuv (Node.js's wasi module), on c-recipes3's libuv, with nixpkgs' two upstream patches
-  # (a shared-library switch and a pkg-config file that names libuv). Its FindLIBUV takes the store libuv (storePrefix; asserted), not
+  # (a shared-library switch and a pkg-config file that names libuv). Its FindLIBUV takes the store libuv (asserted), not
   # its FetchContent fallback.
   uvwasi = mkSrcPkg {
     pname = "uvwasi"; version = "0.0.23";
@@ -2408,7 +2406,7 @@ TPROG
     build = ''
       patch -p1 < ${fetch "https://github.com/nodejs/uvwasi/commit/0820128569533c855d60c0f6382acbb14aa62ad2.patch?full_index=1" "f2c75bc05e2fd450a51c51757c62dff25536acac7aecec89b261e74138da5505"}
       patch -p1 < ${fetch "https://github.com/nodejs/uvwasi/commit/fe602a6911207efd8dcfc070a752bcf76813c978.patch?full_index=1" "617d09903f04bc0d7f0fd31dfaaecefc822952ce950b088b3ffc79b773d48633"}
-      ${cmakeB "-DUVWASI_BUILD_SHARED=ON -DBUILD_TESTING=OFF ${storePrefix}"}
+      ${cmakeB "-DUVWASI_BUILD_SHARED=ON -DBUILD_TESTING=OFF"}
       grep -q "^LIBUV_LIBRARIES:FILEPATH=${libuv}/lib/amd64/" _b/CMakeCache.txt || { echo "FATAL: uvwasi: not the store libuv" >&2; grep LIBUV _b/CMakeCache.txt >&2; exit 1; }
       ${tprog ''#include <uvwasi.h>
 #include <stdio.h>
@@ -2585,7 +2583,7 @@ xshmfence_reset(f); printf("ok %d %d %d\n", a, b, xshmfence_query(f)); xshmfence
 
   # cfitsio (CFITSIO, a permissive NASA license): the FITS file library and its fpack/funpack/fitscopy/fitsverify/imcopy tools, nixpkgs'
   # patch and flags (pthreads, bzip2, curl for remote files) on the nix chain's bzip2 and curl and the base zlib; as nixpkgs, the cookbook,
-  # smem and speed programs are not shipped. The finds are pinned to the store (storePrefix, store pkg-config) and asserted.
+  # smem and speed programs are not shipped. The finds are pinned to the store (solnix-cmake.cmake, store pkg-config) and asserted.
   cfitsio = mkSrcPkg {
     pname = "cfitsio"; version = "4.7.0";
     src = { url = "https://codeload.github.com/HEASARC/cfitsio/tar.gz/refs/tags/cfitsio-4.7.0";
@@ -2593,7 +2591,7 @@ xshmfence_reset(f); printf("ok %d %d %d\n", a, b, xshmfence_query(f)); xshmfence
     deps = [ world zlib base.nixChain.bzip2 base.nixChain.curl ]; nativeTools = [ cmake gnupatch base.pkgconf ] ++ hostTools;
     build = ''
       patch -p1 < ${fetch "https://github.com/heasarc/cfitsio/commit/113781d8aa442cf8d3c27295d9084674b8b039f2.patch" "82e22f654309e7b752d39ead7a05e1fc59a2ac188b5c710a6d61c548be11892a"}
-      ${cmakeB "-DUSE_PTHREADS=ON -DTESTS=ON -DUTILS=ON -DUSE_BZIP2=ON ${storePrefix}"}
+      ${cmakeB "-DUSE_PTHREADS=ON -DTESTS=ON -DUTILS=ON -DUSE_BZIP2=ON"}
       for p in ZLIB:${zlib} BZIP2:${base.nixChain.bzip2} CURL:${base.nixChain.curl}; do
         grep -q "^''${p%%:*}_[A-Z_]*:[A-Z]*=''${p#*:}/" _b/CMakeCache.txt || { echo "FATAL: cfitsio: ''${p%%:*} not from the store" >&2; grep -E '^(ZLIB|BZIP2|CURL)_' _b/CMakeCache.txt >&2; exit 1; }
       done
@@ -2778,7 +2776,7 @@ printf("ok %s %d %s\n", cpuid_lib_version(), d.num_logical_cpus > 0, d.flags[CPU
 
   # ---- recipes10 batch 19: libraries the x86 queue has jobs for, on wave7's store-only stdenv (main e7df981) ---------------------
   # The cmake recipes here take their packages through the merged solnix-cmake.cmake (store prefixes, lib/amd64, no host prefix) and
-  # assert the CMakeCache entry instead of passing storePrefix.
+  # assert the CMakeCache entry.
   # libssh (LGPL-2.1+): the SSH protocol library (client and server, SFTP), on OpenSSL and zlib, as nixpkgs (no GSSAPI, no examples).
   # nixpkgs' NaCl -> sodium sed is moot: FindNaCl looks for nacl/*.h, which libsodium never installs, so its libssh names only
   # openssl (cache.nixos.org narinfo); WITH_NACL=OFF says so. Its cmake version-script probe is gnulib's two-node shape, which
