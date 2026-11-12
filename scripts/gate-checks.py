@@ -625,28 +625,29 @@ DOC_RE = re.compile(r"(^|/)share/(man|info|doc|gtk-doc|help|licenses)/|(^|/)(man
 def is_elf(b): return b[:4] == b"\x7fELF"
 
 def elf_live_strings(data):
-    """For a 64/32-bit little-endian ELF: the .dynstr byte range and a predicate 'offset is the start of, or inside, a
+    """For a 64/32-bit ELF of either byte order: the .dynstr byte range and a predicate 'offset is the start of, or inside, a
     string some DT_NEEDED/SONAME/RPATH/RUNPATH entry points at'. None if it cannot be parsed. Used only to tell a stale
     string (the gate's original RUNPATH left behind when elfedit wrote the store one: measured on rtld libld.so.4, the
-    /usr/gcc/10/lib/amd64 at .dynstr+0x4ca5 with DT_RUNPATH at +0x4cbb) from a live one."""
+    /usr/gcc/10/lib/amd64 at .dynstr+0x4ca5 with DT_RUNPATH at +0x4cbb) from a live one. Big-endian (sparcv9) as elf_dynamic: it
+    returned None there, so every stale string was a FAIL (sv9gcc: gcc 14's libcc1 kept gcc-13's -R in .dynstr, RUNPATH the store's)."""
     import struct
     try:
-        if data[4] not in (1, 2) or data[5] != 1: return None
-        is64 = data[4] == 2
-        if is64: shoff, shentsize, shnum = struct.unpack_from("<Q", data, 0x28)[0], *struct.unpack_from("<HH", data, 0x3A)
-        else: shoff, shentsize, shnum = struct.unpack_from("<I", data, 0x20)[0], *struct.unpack_from("<HH", data, 0x2E)
+        if data[4] not in (1, 2) or data[5] not in (1, 2): return None
+        is64, end = data[4] == 2, "<" if data[5] == 1 else ">"
+        if is64: shoff, shentsize, shnum = struct.unpack_from(end + "Q", data, 0x28)[0], *struct.unpack_from(end + "HH", data, 0x3A)
+        else: shoff, shentsize, shnum = struct.unpack_from(end + "I", data, 0x20)[0], *struct.unpack_from(end + "HH", data, 0x2E)
         secs = []
         for i in range(shnum):
             o = shoff + i * shentsize
-            if is64: _, typ, _, _, off, size, link = struct.unpack_from("<IIQQQQI", data, o)
-            else: _, typ, _, _, off, size, link = struct.unpack_from("<IIIIIII", data, o)
+            if is64: _, typ, _, _, off, size, link = struct.unpack_from(end + "IIQQQQI", data, o)
+            else: _, typ, _, _, off, size, link = struct.unpack_from(end + "IIIIIII", data, o)
             secs.append((typ, off, size, link))
         dyn = next((s for s in secs if s[0] == 6), None)   # SHT_DYNAMIC
         if not dyn: return None
         _, doff, dsize, link = dyn; _, soff, ssize, _ = secs[link]
         ent = 16 if is64 else 8; used = []
         for k in range(dsize // ent):
-            tag, val = struct.unpack_from("<qQ" if is64 else "<iI", data, doff + k * ent)
+            tag, val = struct.unpack_from(end + ("qQ" if is64 else "iI"), data, doff + k * ent)
             if tag in (1, 14, 15, 29): used.append(soff + val)   # NEEDED SONAME RPATH RUNPATH
         ends = {u: data.index(b"\0", u) for u in used}
         return {"dynstr": range(soff, soff + ssize), "used": lambda x: any(u <= x < e for u, e in ends.items())}
@@ -1444,16 +1445,18 @@ def selftest():
     return bad
 
 
-def mkelf(stale, live):
-    """A minimal 64-bit LE ELF: a .dynstr holding <stale><live> and a .dynamic whose DT_RUNPATH points at <live>."""
+def mkelf(stale, live, be=False):
+    """A minimal 64-bit ELF (LE x86-64, or BE sparcv9 with be=True): a .dynstr holding <stale><live> and a .dynamic whose DT_RUNPATH
+    points at <live>."""
     import struct
+    e = ">" if be else "<"
     dynstr = b"\0" + stale + live
-    dynamic = struct.pack("<qQ", 29, 1 + len(stale)) + struct.pack("<qQ", 0, 0)
+    dynamic = struct.pack(e + "qQ", 29, 1 + len(stale)) + struct.pack(e + "qQ", 0, 0)
     body = dynstr + b"\0" * ((8 - len(dynstr) % 8) % 8)
     stroff, dynoff = 64, 64 + len(body)
     shoff = dynoff + len(dynamic)
-    hdr = b"\x7fELF" + bytes([2, 1, 1]) + b"\0" * 9 + struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, 0, 0, shoff, 0, 64, 0, 0, 64, 3, 0)
-    sh = lambda typ, off, size, link: struct.pack("<IIQQQQIIQQ", 0, typ, 0, 0, off, size, link, 0, 1, 0)
+    hdr = b"\x7fELF" + bytes([2, 2 if be else 1, 1]) + b"\0" * 9 + struct.pack(e + "HHIQQQIHHHHHH", 3, 43 if be else 62, 1, 0, 0, shoff, 0, 64, 0, 0, 64, 3, 0)
+    sh = lambda typ, off, size, link: struct.pack(e + "IIQQQQIIQQ", 0, typ, 0, 0, off, size, link, 0, 1, 0)
     return hdr + body + dynamic + sh(0, 0, 0, 0) + sh(3, stroff, len(dynstr), 0) + sh(6, dynoff, len(dynamic), 1)
 
 def mkelf_interp(interp):
@@ -1654,6 +1657,8 @@ def selftest_out():
         ("B8 /build/ outside lib/debug: counted INFO, not failed (NixOS ships it)", mut("lib/libz.la", R(b"libdir='/build/src/.libs'")), True, "INFO B8-builddir"),
         ("B13 stale .dynstr string in an ELF: INFO", mut("lib/libs.so", R(mkelf(b"/usr/gcc/10/lib/amd64\0", b"/nix/store/x/lib\0"))), True, "INFO B13-hostpath"),
         ("B13 live RUNPATH /usr/gcc/10 in an ELF: FAIL", mut("lib/libt.so", R(mkelf(b"", b"/usr/gcc/10/lib/amd64\0"))), False, "FAIL B13-hostpath"),
+        ("B13 stale .dynstr string in a big-endian (sparcv9) ELF: INFO", mut("lib/libsb.so", R(mkelf(b"/usr/gcc/13/lib/sparcv9\0", b"/nix/store/x/lib\0", be=True))), True, "INFO B13-hostpath"),
+        ("B13 live RUNPATH /usr/gcc/13 in a big-endian (sparcv9) ELF: FAIL", mut("lib/libtb.so", R(mkelf(b"", b"/usr/gcc/13/lib/sparcv9\0", be=True))), False, "FAIL B13-hostpath"),
         ("B8 /var/tmp/cargo- (not 16 hex) in an ELF", mut("bin/r", R(b"\x7fELF\0/var/tmp/cargo-1234/target", True)), False, "B8-builddir"),
         ("B9 #!/usr/bin/perl", mut("bin/p", R(b"#!/usr/bin/perl -w\n", True)), False, "B9-shebang"),
         ("B9 not hit: a non-executable .pm with #!/bin/false", mut("share/x/M.pm", R(b"#!/bin/false\n")), True, None),
