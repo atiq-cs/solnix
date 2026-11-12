@@ -137,4 +137,36 @@ TPROG
       ${noBuildDir}
     '';
   };
+
+  # libxslt (MIT): XSLT 1.0 (libxslt, libexslt, xsltproc), autotools (autoreconf, as nixpkgs), on libxml2, without python and crypto,
+  # nixpkgs' list-of-cached-RVTs fix (upstream issue 77). One output (nixpkgs splits bin/dev/doc/devdoc). Its version scripts go through
+  # version-script-mapfile.sh (illumos ld takes mapfiles); --with-debugger stays on (the default), which the .syms file needs (phase3
+  # H31). nixpkgs' postFixup points libxslt-config.cmake at $out/lib: here, at $out/lib/amd64.
+  libxslt = mkSrcPkg {
+    pname = "libxslt"; version = "1.1.45";
+    src = { url = "https://download.gnome.org/sources/libxslt/1.1/libxslt-1.1.45.tar.xz"; sha256 = "9acfe68419c4d06a45c550321b3212762d92f41465062ca4ea19e632ee5d216e"; };
+    # zlib: libxml-2.0.pc's Requires.private, which pkg-config resolves even for --cflags (configure: "Could not find libxml2", measured)
+    deps = [ world libxml2 zlib ]; nativeTools = autoreconfTools ++ [ gnupatch pkgconf ] ++ hostTools;
+    build = ''
+      patch -p1 < ${npFile "by-name/li/libxslt/77-Use-a-dedicated-node-type-to-maintain-the-list-of-cached-rv-ts.patch" "fe14924cbde2cb5e3a61326d6967f2aca24255bc775fc47251f1800128a33ec9"}
+      ${autoreconf}
+      "$BASH" ${../version-script-mapfile.sh} wrap
+      # configure greps `$LD --help` for version-script: illumos ld has none, so the probe says -M (a v1 mapfile it cannot read);
+      # the GNU spelling instead, which the shim translates
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --without-python --without-crypto lt_cv_prog_gnu_ld=no
+      sed -i 's|^VERSION_SCRIPT_FLAGS = .*|VERSION_SCRIPT_FLAGS = -Wl,--version-script=|' libxslt/Makefile libexslt/Makefile
+      grep -q '^VERSION_SCRIPT_FLAGS = -Wl,--version-script=$' libxslt/Makefile || { echo "FATAL: libxslt version script flags" >&2; exit 1; }
+      gmake -j''${NIX_BUILD_CORES} >&2; gmake install >&2
+      /usr/bin/pvs -dos "$out/lib/amd64/libxslt.so.1" | grep -q "LIBXML2_1.0.11: xsltApplyStylesheet;" || { echo "FATAL: libxslt version nodes" >&2; /usr/bin/pvs -do "$out/lib/amd64/libxslt.so.1" | head >&2; exit 1; }
+      f="$out/lib/amd64/cmake/libxslt/libxslt-config.cmake"
+      grep -qF '"''${PACKAGE_PREFIX_DIR}/lib"' "$f" || { echo "FATAL: libxslt cmake anchor" >&2; exit 1; }
+      sed -i "s|\"\''${PACKAGE_PREFIX_DIR}/lib\"|\"$out/lib/amd64\"|g" "$f"
+      find "$out/share/doc" "$out/share/gtk-doc" -delete 2>/dev/null || true
+      ${chk ''"$out/bin/xsltproc" --version'' "libxslt 10145"}
+      printf '<r><i>so</i><i>lnix</i></r>\n' > "$W/a.xml"
+      printf '<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:str="http://exslt.org/strings" extension-element-prefixes="str"><xsl:output method="text"/><xsl:template match="/">ok <xsl:value-of select="str:concat(//i)"/> <xsl:value-of select="count(//i)"/></xsl:template></xsl:stylesheet>\n' > "$W/a.xsl"
+      ${chk ''"$out/bin/xsltproc" "$W/a.xsl" "$W/a.xml"'' "^ok solnix2$"}
+      ${noBuildDir}
+    '';
+  };
 }
