@@ -124,7 +124,8 @@ client has it open, and on again at the next open. It is NVIDIA's coarse runtime
 (`NVreg_DynamicPowerManagement=1`). RM decides when, and src/drm-port/nvidia-oss/patches/0002 is the illumos
 executor RM's hooks were stubbed without.
 
-- Off: 10 s after the last close, PCI D3hot, then the root port's `_PR3` power resource `_OFF`. On the X1E that is
+- Off: right after the last close has shut RM down (nvidia-oss patches/0004; it was 10 s, and in those 10 s the GPU was
+  powered with RM down and heated 1-1.6 C/s), PCI D3hot, then the root port's `_PR3` power resource `_OFF`. On the X1E that is
   SSDT14 `PEG1.PXP._OFF` -> `POFF`: link to L2/L3, reset asserted, power GPIO off, the same thing tzmon does at boot.
   The GPU's HDMI audio function (01:00.1) is offlined at attach, before audiohd takes it, and stays offline.
 - On: the next open of /dev/nvidia0 runs `_ON` and waits for the link (Data Link Layer Link Active) and for config
@@ -135,7 +136,8 @@ executor RM's hooks were stubbed without.
   it allows 10 unreadable samples (30 s). Anything else unreadable still reboots.
 - site/solnix-nvidia opens the GPU once (RM + GSP up, temperature read) and releases it. It then logs the rtd3
   kstat, GPUT and psta every 60 s.
-- Gate (per-boot test, nothing persistent): off within ~15 s of the last close (psta 0, `rtd3: idle 10 s: off`).
+- Gate (per-boot test, nothing persistent): off within ~1 s of the last close (psta 0, `rtd3: idle: off N ms after RM shut
+  down`), and no temperature rise from one close to the next open.
   `nvidia-probe` reopens it (`rtd3: on`, RM init, temperature). Negative control: `nvidia-probe -w 60` holds it on
   for the 60 s. 8 open/close cycles, with kernel heap per cycle.
 - The boot (src/drm-port/nvidia-oss/patches/0003): with `rtd3` tzmon KEEPS its boot-time power-off (no

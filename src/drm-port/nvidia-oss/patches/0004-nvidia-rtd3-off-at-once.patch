@@ -1,0 +1,154 @@
+nvidia: RTD3 cuts the power as soon as RM has shut the GPU down, with no hold-off (as Linux does)
+
+0002 waited RTD3_HOLDOFF_S (10 s) of idle before the power cut. In COARSE mode RM signals idle only after the last
+close has shut the adapter down (nv_stop_device -> nv_shutdown_adapter -> rm_shutdown_adapter, then
+rm_unref_dynamic_power -> nv_indicate_idle). So for those 10 s the GPU sat in D0 with RM and the GSP down: powered and
+unmanaged. Measured on the ThinkPad X1 Extreme Gen 5 (BE 49, 2026-11-12): +1.0 to +1.6 C/s during each hold-off
+(52 -> 68 C in one), while the same GPU held open by RM idles and cools (59 -> 52 C in 20 s). Eight open/close cycles
+took it from 51 to 81 C and the thermal guard rebooted the machine.
+
+Linux does not wait: nv_indicate_idle drops the runtime-PM usage count, the GPU endpoint has no autosuspend delay (the
+500 ms in nv.c is the Tegra iGPU path only), so it goes to D3hot at once, and the root port's 100 ms autosuspend
+(drivers/pci/pcie/portdrv.c) then runs its _PR3 _OFF. The hold-off bought nothing for a reopen: a reopen pays RM init
+(3-4 s, GSP boot) in COARSE mode whether or not the rail was cut, and the power-on adds ~0.1 s (link up after 0 ms,
+config after +100 ms).
+
+The off task now runs the off as soon as it gets ldata_lock. The last close still holds ldata_lock while RM signals
+idle, so the task retries every 10 ms (was 100 ms) and cuts the power ~10 ms after the close returns. The state machine,
+the gen/usage_count/INITIALIZED re-checks under ldata_lock and the lock order are unchanged. The off line in the system
+log reports the ms since RM signalled idle.
+
+One illumos difference: RM signals the attach-time idle inside attach(9E) (rm_enable_dynamic_power_management), and after
+attach returns the parent's DDI_POST ctlop (npe: pf_init, pcie_postattach_child -> pcie_enable_ce) still writes the GPU's
+config space. The 10 s hold-off hid that. Linux's PCI core holds a runtime-PM reference across probe; here the task waits
+(10 ms retries) until i_ddi_devi_attached(), which the framework sets after the DDI_POST ctlop.
+
+--- a/kernel-illumos/nvidia/nvidia_cold.c
++++ b/kernel-illumos/nvidia/nvidia_cold.c
+@@ -55,7 +55,7 @@
+  *     and bus master itself); ndi_devi_online -> pcie_initchild ->
+  *     nv_attach_gpu. The other functions (HDMI audio) stay offline, as
+  *     nvidia_rtd3.c keeps them.
+- * With NVreg_DynamicPowerManagement=1 RTD3 then powers the GPU off 10 s after
++ * With NVreg_DynamicPowerManagement=1 RTD3 then powers the GPU off right after
+  * the attach, until the first open of /dev/nvidia0.
+  *
+  * nv_cold_restore_bars() is also nvidia_rtd3.c's resume step: after _OFF/_ON
+--- a/kernel-illumos/nvidia/nvidia_rtd3.c
++++ b/kernel-illumos/nvidia/nvidia_rtd3.c
+@@ -35,8 +35,13 @@
+  * (pm_runtime_put/get): PCI D3hot, then the root port's ACPI _PR3 power
+  * resource off. This file is that executor for illumos.
+  *
+- * OFF (a taskq, after RTD3_HOLDOFF_S, so open/close storms do not cycle the
+- * rail): every other function of the GPU (its HDMI audio) is offlined, so no
++ * OFF (a taskq, as soon as it gets ldata_lock, which the closer still holds
++ * while RM signals idle; as Linux: the endpoint has no autosuspend delay and
++ * the root port's is 100 ms, drivers/pci/pcie/portdrv.c): there is no hold-off,
++ * because RM has already shut the adapter down when it signals idle, and a
++ * powered GPU with RM shut down is unmanaged (it heated 1-1.6 C/s on the X1
++ * Extreme Gen 5 during the 10 s hold-off this file used to have, 2026-11-12).
++ * Every other function of the GPU (its HDMI audio) is offlined, so no
+  * driver touches it while it is off; the GPU's config space is saved; every
+  * function goes to D3hot; the _PR3 resource's _OFF runs. On the X1 Extreme
+  * Gen 5 that is SSDT14 PEG1.PXP._OFF -> POFF: link to L2/L3, CLKREQ off,
+@@ -71,7 +76,7 @@
+ /* nvidia_registry.c */
+ extern NvU32 nv_rtd3_regkey(void);
+ 
+-#define RTD3_HOLDOFF_S      10      /* idle this long before the rail goes off */
++#define RTD3_RETRY_MS       10      /* ldata_lock busy: try again this soon */
+ #define RTD3_MAXFN          8
+ #define RTD3_LINK_WAIT_MS   5000    /* after _ON, until the GPU answers config */
+ #define RTD3_VENDOR_NVIDIA  0x10de
+@@ -84,6 +89,7 @@
+     kmutex_t            lock;
+     kcondvar_t          cv;
+     volatile rtd3_state_t state;
++    hrtime_t            idle_at;        /* when RM signalled idle, for the log */
+     NvBool              busy;           /* OFF or ON running; only with ldata_lock held */
+     NvBool              queued;         /* the off task is queued or running */
+     uint64_t            gen;            /* bumped by every not-idle */
+@@ -226,15 +232,17 @@
+     /* nothing touches the GPU from here until _ON */
+     (void) AcpiEvaluateObject(r->pr, "_OFF", NULL, NULL);
+     sta1 = rtd3_sta(r);
+-    dev_err(nvis->dip, CE_NOTE, "!rtd3: idle %d s: off (PM state %d, _PR3 _STA "
+-        "%d -> %d)", RTD3_HOLDOFF_S, d3, sta0, sta1);
++    dev_err(nvis->dip, CE_NOTE, "!rtd3: idle: off %lld ms after RM shut down "
++        "(PM state %d, _PR3 _STA %d -> %d)",
++        (long long)((gethrtime() - r->idle_at) / 1000000), d3, sta0, sta1);
+     return (NV_TRUE);
+ }
+ 
+ /*
+- * One task at a time: waits RTD3_HOLDOFF_S of uninterrupted idle, then takes
+- * ldata_lock without sleeping on it (an open or a detach holds it and turns
+- * the state back to ON) and powers off. It never blocks on anything a detach
++ * One task at a time: takes ldata_lock without sleeping on it (an open or a
++ * detach holds it and turns the state back to ON; the last close holds it
++ * until RM's idle call returns, so the first try usually waits one retry) and
++ * powers off. It never blocks on anything a detach
+  * holds, so detach's taskq_destroy() returns.
+  */
+ static void
+@@ -243,25 +251,25 @@
+     nv_rtd3_t *r = arg;
+     nv_illumos_state_t *nvis = r->nvis;
+     uint64_t gen;
+-    clock_t deadline;
+     NvBool off;
+ 
+     mutex_enter(&r->lock);
+     while (r->state == RTD3_OFF_PENDING)
+     {
+         gen = r->gen;
+-        deadline = ddi_get_lbolt() + drv_usectohz((clock_t)RTD3_HOLDOFF_S * 1000000);
+-        while (r->state == RTD3_OFF_PENDING && r->gen == gen &&
+-            cv_timedwait(&r->cv, &r->lock, deadline) != -1)
+-            ;
+-        if (r->state != RTD3_OFF_PENDING || r->gen != gen)
+-            continue;
+         mutex_exit(&r->lock);
+-        if (sema_tryp(&nvis->ldata_lock) == 0)
++        /*
++         * RM signals the attach-time idle inside attach(9E); the parent's
++         * DDI_POST ctlop (npe: pf_init, pcie_postattach_child) then writes the
++         * GPU's config space. Linux's PCI core holds a runtime-PM reference
++         * across probe for the same reason. No off until the node is attached.
++         */
++        if (!i_ddi_devi_attached(nvis->dip) ||
++            sema_tryp(&nvis->ldata_lock) == 0)
+         {
+-            delay(drv_usectohz(100000));
++            delay(drv_usectohz(RTD3_RETRY_MS * 1000));
+             mutex_enter(&r->lock);
+-            continue;           /* busy: wait out another hold-off */
++            continue;   /* attaching, or busy: an open, a detach, the closer */
+         }
+         mutex_enter(&r->lock);
+         if (r->state != RTD3_OFF_PENDING || r->gen != gen ||
+@@ -530,9 +538,9 @@
+     nv_rtd3_list[i] = r;
+     mutex_exit(&nv_rtd3_list_lock);
+ 
+-    dev_err(nvis->dip, CE_CONT, "?rtd3: coarse: off after %d s with no "
+-        "client (_PR3 power resource, _STA %d; %d other function(s) "
+-        "offline)\n", RTD3_HOLDOFF_S, rtd3_sta(r), r->nsib);
++    dev_err(nvis->dip, CE_CONT, "?rtd3: coarse: off once RM shuts down "
++        "with no client (_PR3 power resource, _STA %d; %d other function(s) "
++        "offline)\n", rtd3_sta(r), r->nsib);
+     return (NV_TRUE);
+ }
+ 
+@@ -622,8 +630,9 @@
+     if (r->state == RTD3_ON)
+     {
+         r->state = RTD3_OFF_PENDING;
++        r->idle_at = gethrtime();
+         if (r->queued)
+-            cv_broadcast(&r->cv);   /* the running task starts a new hold-off */
++            cv_broadcast(&r->cv);   /* the running task re-checks the state */
+         else if (taskq_dispatch(r->tq, rtd3_off_task, r, TQ_NOSLEEP) !=
+             TASKQID_INVALID)
+             r->queued = NV_TRUE;
