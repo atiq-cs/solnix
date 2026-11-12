@@ -4169,4 +4169,195 @@ void *q = mi_malloc(64); if (!q) return 2; mi_free(q); printf("ok %d %d\n", mi_v
       ${chk ''timeout 60 "$W/t"'' "^ok 30503 1$"}
     '';
   };
+
+
+  # ---- qnew2 batch 1: leaves the x86 queue has jobs for, no other lane's (every source = nixpkgs f4a03c0's, by hash) -------------
+  # docbook-xsl-nons (MIT): the DocBook XSL 1.79.2 stylesheets (no namespace), data only, as nixpkgs: its three patches (Fedora's
+  # non-recursive string-subst, upstream's generate.consistent.ids in indexes, the catalog's legacy sourceforge URIs) and its layout
+  # (share/xml/docbook-xsl-nons, links xml/xsl/docbook and share/xml/docbook-xsl), without the files nixpkgs drops. fo/pdf2index loses
+  # its exec bit: NixOS leaves its #!/usr/bin/perl unpatched (no perl in that build), and a store-only out may not name a host
+  # interpreter on an executable (out-host-refs.sh). The check resolves stylesheet URIs through the shipped catalog (xmlcatalog).
+  docbook-xsl-nons = let
+    legacy = fetch "https://raw.githubusercontent.com/NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6/pkgs/data/sgml%2Bxml/stylesheets/xslt/docbook-xsl/catalog-legacy-uris.patch" "49891093bf2b8744e157735725c0b87841d0a9588a58b3fc1152c9db10856c70";
+  in mkSrcPkg {
+    pname = "docbook-xsl-nons"; version = "1.79.2";
+    src = { url = "https://github.com/docbook/xslt10-stylesheets/releases/download/release%2F1.79.2/docbook-xsl-nons-1.79.2.tar.bz2";
+            sha256 = "ee8b9eca0b7a8f89075832a2da7534bce8c5478fc8fc2676f512d5d87d832102"; };
+    deps = [ world ]; nativeTools = [ bzip2-bin gnupatch base.libxml2 ] ++ hostTools;
+    build = ''
+      patch -p2 < ${fetch "https://src.fedoraproject.org/rpms/docbook-style-xsl/raw/e3ae7a97ed1d185594dd35954e1a02196afb205a/f/docbook-style-xsl-non-recursive-string-subst.patch" "da83537cb7d28c7e9269a8b44188fcafe33620c705d6ec9b4ee0c1ea84510a24"}
+      patch -p2 < ${fetch "https://github.com/docbook/xslt10-stylesheets/commit/07631601e6602bc49b8eac3aab9d2b35968d3e7a.patch?full_index=1" "7367ed047a16e53f650cdcf808c29a4f83a71c0a3a7d9e99de38f92dc82eb7f3"}
+      sed -e 's/@legacySuffix@//g' -e 's/@suffix@/-nons/g' -e 's/@version@/1.79.2/g' ${legacy} | patch -p1
+      [ "$(head -1 fo/pdf2index)" = '#!/usr/bin/perl -- # -*- Perl -*-' ] || { echo "FATAL: docbook-xsl-nons pdf2index anchor" >&2; exit 1; }
+      chmod a-x fo/pdf2index
+      dst="$out/share/xml/docbook-xsl-nons"; mkdir -p "$dst"
+      for f in *; do case "$f" in RELEASE*|README*|INSTALL|TODO|NEWS*|BUGS|install.sh|tools|Makefile|tests|extensions|webhelp) ;; *) mv "$f" "$dst/";; esac; done
+      mkdir -p "$out/xml/xsl"; ln -s "$dst" "$out/xml/xsl/docbook"; ln -s "$dst" "$out/share/xml/docbook-xsl"
+      [ -f "$dst/html/docbook.xsl" ] && [ -f "$dst/manpages/docbook.xsl" ] && [ -f "$dst/VERSION.xsl" ] || { echo "FATAL: docbook-xsl-nons: stylesheets missing" >&2; exit 1; }
+      ${chk ''xmlcatalog "$dst/catalog.xml" http://cdn.docbook.org/release/xsl-nons/current/html/docbook.xsl http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl | tr '\n' ' ' '' "docbook-xsl-nons/(\\./)?html/docbook\\.xsl .*docbook-xsl-nons/(\\./)?manpages/docbook\\.xsl"}
+    '';
+  };
+
+  # libunwind (MIT): the portable call-chain API (libunwind, libunwind-generic), autotools from the tag, as nixpkgs: --disable-tests,
+  # LATEX2MAN=true (the prebuilt man pages install), xz for its minidebuginfo. Upstream supports Solaris x86-64 (os-solaris.c); its
+  # 1.8.3 os-solaris.c has a syntax error, fixed upstream in 9992e48 (applied). Its zlib debuginfo is off, as in nixpkgs (no zlib in
+  # that build), so the answer does not follow whether the gate ships a libz. libunwind-coredump is off: src/Makefile.am's Solaris
+  # branch adds none of its per-OS sources (_UCD_access_reg & co.), so the library would ship with those symbols unresolved. And
+  # libunwind-setjmp is off: its x86_64/siglongjmp.S has no Solaris branch (`#error Port me`, also on upstream master).
+  # The check unwinds its own stack through two frames to main.
+  libunwind = mkSrcPkg {
+    pname = "libunwind"; version = "1.8.3";
+    src = { url = "https://github.com/libunwind/libunwind/archive/refs/tags/v1.8.3.tar.gz";
+            sha256 = "21b26bc75cd37b548d7952f2794cde711efa6c6151c4147cc3c52cfedbf11df4"; };
+    deps = [ world base.nixChain.xz ]; nativeTools = autoreconfTools ++ [ gnupatch base.pkgconf ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/libunwind/libunwind/commit/9992e487cf4cbbfb9eed59c7f1d66d6f719c9251.patch?full_index=1" "d3c81e7e4b86ebb46d882f235052e9397419da75109a83362b0349918de900f2"}
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-tests --disable-coredump --disable-setjmp --disable-zlibdebuginfo --enable-minidebuginfo LATEX2MAN=true
+      gmake -j8; gmake install
+      # by procedure start (unw_get_proc_info: the eh_frame found through dl_iterate_phdr); names need /proc/<pid>/maps, which
+      # illumos does not have (os-solaris.c reads the Linux layout), so unw_get_proc_name is not what this checks
+      ${tprog ''#define UNW_LOCAL_ONLY
+#include <libunwind.h>
+#include <stdio.h>
+int f2(void); int main(void);
+int __attribute__((noinline)) walk(void){ unw_context_t c; unw_cursor_t k; unw_proc_info_t pi; int d = 0, n = 0;
+unw_getcontext(&c); unw_init_local(&k, &c);
+do { n++; if (unw_get_proc_info(&k, &pi) == 0) { if (pi.start_ip == (unw_word_t)walk) d |= 1; if (pi.start_ip == (unw_word_t)f2) d |= 2;
+  if (pi.start_ip == (unw_word_t)main) d |= 4; } } while (unw_step(&k) > 0);
+printf("ok %d %d\n", d, n >= 3); return 0; }
+int __attribute__((noinline)) f2(void){ int r = walk(); __asm__ volatile("" ::: "memory"); return r; }
+int main(void){ return f2(); }'' "-lunwind"}
+      ${chk ''"$W/t"'' "^ok 7 1$"}
+      ${chk ''PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --modversion libunwind libunwind-generic | tr '\n' ' ' '' "^(1\\.8\\.3 ){2}$"}
+    '';
+  };
+
+  # libstemmer (BSD-3-Clause): Snowball's stemming algorithms in C (libstemmer.a, libstemmer.h) and its snowball compiler and stemwords,
+  # from the tag, as nixpkgs (a static library; perl runs its generator scripts).
+  libstemmer = mkSrcPkg {
+    pname = "libstemmer"; version = "3.1.1";
+    src = { url = "https://github.com/snowballstem/snowball/archive/refs/tags/v3.1.1.tar.gz";
+            sha256 = "d8714aa91ed4333654708472a7a98b529c867a8f99b05c5e66febf4ca72c44c7"; };
+    deps = [ world ]; nativeTools = [ perl ] ++ hostTools;
+    build = ''
+      gmake -j8 snowball libstemmer.a stemwords
+      mkdir -p "$out/lib" "$out/include" "$out/bin"
+      cp libstemmer.a "$out/lib/"; cp include/libstemmer.h "$out/include/"; cp snowball stemwords "$out/bin/"
+      ${chk ''printf 'running\nconnections\n' | "$out/bin/stemwords" -l english | tr '\n' ' ' '' "^run connect $"}
+      ${tprog ''#include <libstemmer.h>
+#include <stdio.h>
+int main(void){ struct sb_stemmer *s = sb_stemmer_new("english", NULL); if (!s) return 1;
+const sb_symbol *r = sb_stemmer_stem(s, (const sb_symbol *)"running", 7); printf("ok %.*s\n", sb_stemmer_length(s), (const char *)r);
+sb_stemmer_delete(s); return 0; }'' "$out/lib/libstemmer.a"}
+      ${chk ''"$W/t"'' "^ok run$"}
+    '';
+  };
+
+  # libparserutils (MIT): NetSurf's parser-building library (charset codecs, input streams), a static library on the served
+  # netsurf-buildsystem, as nixpkgs (perl builds its alias table).
+  libparserutils = mkSrcPkg {
+    pname = "libparserutils"; version = "0.2.5";
+    src = { url = "https://download.netsurf-browser.org/libs/releases/libparserutils-0.2.5-src.tar.gz";
+            sha256 = "317ed5c718f17927b5721974bae5de32c3fd6d055db131ad31b4312a032ed139"; };
+    deps = [ world ]; nativeTools = [ perl ] ++ hostTools;
+    build = ''
+      gmake install PREFIX="$out" NSSHARED="${netsurf-buildsystem}/share/netsurf-buildsystem" CC="$CC" BUILD_CC="$CC" Q=
+      ${tprog ''#include <parserutils/parserutils.h>
+#include <parserutils/charset/mibenum.h>
+#include <parserutils/input/inputstream.h>
+#include <stdio.h>
+int main(void){ uint16_t m = parserutils_charset_mibenum_from_name("utf8", 4); parserutils_inputstream *s; const uint8_t *p; size_t n;
+if (parserutils_inputstream_create("UTF-8", 0, NULL, &s) != PARSERUTILS_OK) return 1;
+parserutils_inputstream_append(s, (const uint8_t *)"abc", 3); parserutils_inputstream_append(s, NULL, 0);
+parserutils_error e = parserutils_inputstream_peek(s, 0, &p, &n);
+printf("ok %u %s %d %c %zu\n", m, parserutils_charset_mibenum_to_name(m), e, e == PARSERUTILS_OK ? p[0] : '?', n);
+parserutils_inputstream_destroy(s); return 0; }'' "$out/lib/libparserutils.a"}
+      ${chk ''"$W/t"'' "^ok 106 UTF-8 0 a 1$"}
+    '';
+  };
+
+  # geoip (LGPL-2.1): MaxMind's legacy GeoIP C API and geoiplookup/geoiplookup6, autotools from the tag, as nixpkgs: its databases are
+  # looked up in /var/lib/geoip-databases (nixpkgs' default dataDir, a NixOS state dir), written into every Makefile.in's pkgdatadir as
+  # nixpkgs' postConfigure does (here before configure, so the Makefiles carry it without a regeneration). `make check` runs its tests on
+  # the bundled data/GeoIP.dat, which is not installed (nixpkgs neither).
+  geoip = mkSrcPkg {
+    pname = "geoip"; version = "1.6.12";
+    src = { url = "https://github.com/maxmind/geoip-api-c/archive/v1.6.12.tar.gz";
+            sha256 = "99b119f8e21e94f1dfd6d49fbeed29a70df1544896e76cd456f25e397b07d476"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      find . -name Makefile.in -exec sed -i -r 's#^pkgdatadir\s*=.+$#pkgdatadir = /var/lib/geoip-databases#' {} \;
+      [ "$(grep -l '^pkgdatadir = /var/lib/geoip-databases$' libGeoIP/Makefile.in apps/Makefile.in | wc -l)" = 2 ] || { echo "FATAL: geoip pkgdatadir" >&2; exit 1; }
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake check; gmake install
+      ${chk ''"$out/bin/geoiplookup" -f data/GeoIP.dat 12.87.118.0'' "^GeoIP Country Edition: US, United States$"}   # test/country_test.txt's first entry
+      grep -q /var/lib/geoip-databases "$out/lib/amd64/libGeoIP.so" || { echo "FATAL: geoip: no default data dir in libGeoIP" >&2; exit 1; }
+    '';
+  };
+
+  # cadical (MIT): Armin Biere's CDCL SAT solver (cadical, mobical, libcadical.a, its C and C++ headers and nixpkgs' cadical.pc), its
+  # own configure and makefile, as nixpkgs ($(AR) for its archive; nixpkgs' out/dev/lib outputs in one). build.hpp records
+  # `uname -srmn` and the date: the node name is dropped (the build HOST's name, which NixOS's sandbox pins to localhost) and TZ is
+  # UTC, so the bytes do not follow the host.
+  cadical = mkSrcPkg {
+    pname = "cadical"; version = "3.0.1";
+    src = { url = "https://github.com/arminbiere/cadical/archive/rel-3.0.1.tar.gz";
+            sha256 = "0a8ea563b5a25f5aa064634814edab45cc0e45111ea0f5d412a565f806fd7e11"; };
+    deps = [ world ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      export TZ=UTC
+      [ "$(grep -c 'ar rc' makefile.in)" = 1 ] && [ "$(grep -c 'uname -srmn' scripts/make-build-header.sh)" = 1 ] \
+        && grep -qx 'mobical: mobical.o libcadical.a makefile $(LIBS)' makefile.in || { echo "FATAL: cadical anchors" >&2; exit 1; }
+      sed -i 's/ar rc/$(AR) rc/' makefile.in; sed -i 's/uname -srmn/uname -srm/' scripts/make-build-header.sh
+      # random.cpp seeds from getifaddrs/getnameinfo: libsocket and libnsl on illumos (configure takes -l args into LIBS). mobical's
+      # rule lists $(LIBS) as a prerequisite, not on its link line: moved, as the cadical rule above it has it.
+      sed -i -e 's/^mobical: mobical.o libcadical.a makefile $(LIBS)$/mobical: mobical.o libcadical.a makefile/' \
+        -e 's/^\t$(COMPILE_CPP) -o $@ $< -L. libcadical.a$/\t$(COMPILE_CPP) -o $@ $< -L. libcadical.a $(LIBS)/' makefile.in
+      [ "$(grep -c -- '-L. libcadical.a $(LIBS)$' makefile.in)" = 2 ] || { echo "FATAL: cadical mobical link" >&2; exit 1; }
+      ./configure -lsocket -lnsl
+      gmake -j8
+      install -Dm0755 build/cadical "$out/bin/cadical"; install -Dm0755 build/mobical "$out/bin/mobical"
+      install -Dm0644 src/ccadical.h "$out/include/ccadical.h"; install -Dm0644 src/cadical.hpp "$out/include/cadical.hpp"
+      install -Dm0644 src/cadical.hpp "$out/include/cadical/cadical.hpp"; install -Dm0644 src/tracer.hpp "$out/include/cadical/tracer.hpp"
+      install -Dm0644 build/libcadical.a "$out/lib/libcadical.a"
+      mkdir -p "$out/share/doc/cadical"; install -m0644 LICEN?E README* VERSION "$out/share/doc/cadical/"
+      mkdir -p "$out/lib/pkgconfig"
+      printf '%s\n' "includedir=$out/include" "libdir=$out/lib" "" "Name: cadical" "Description: Simplified Satisfiability Solver" \
+        "Version: 3.0.1" "Cflags: -I\''${includedir}" "Libs: -L\''${libdir} -lcadical" > "$out/lib/pkgconfig/cadical.pc"
+      printf 'p cnf 2 2\n1 2 0\n-1 0\n' > "$W/s.cnf"; printf 'p cnf 1 2\n1 0\n-1 0\n' > "$W/u.cnf"
+      ${chk ''"$out/bin/cadical" -q "$W/s.cnf"; echo "rc=$?"; "$out/bin/cadical" -q "$W/u.cnf"; echo "rc=$?"'' "^"}
+      tr '\n' ' ' < "$W/chk.out" | grep -Eq '^s SATISFIABLE v -1 2 0 rc=10 s UNSATISFIABLE rc=20 $' || { echo "FATAL: cadical solve" >&2; cat "$W/chk.out" >&2; exit 1; }
+      cat > "$W/t.cc" <<'TPROG'
+#include <cadical.hpp>
+#include <cstdio>
+int main(){ CaDiCaL::Solver s; s.add(1); s.add(2); s.add(0); s.add(-1); s.add(0); int r = s.solve(); std::printf("ok %d %d %s\n", r, s.val(2), CaDiCaL::Solver::version()); }
+TPROG
+      "$CXX" $(PKG_CONFIG_PATH="$out/lib/pkgconfig" pkg-config --cflags cadical) "$W/t.cc" $(PKG_CONFIG_PATH="$out/lib/pkgconfig" pkg-config --libs cadical) -o "$W/t"
+      ${chk ''"$W/t"'' "^ok 10 2 3\\.0\\.1$"}
+    '';
+  };
+
+  # nlopt (LGPL-2.1-or-later): the nonlinear optimization library (C and C++ API, the Luksan solvers), cmake, shared, as nixpkgs (no
+  # Python/Octave/Java/Guile/SWIG bindings). nixpkgs builds it with clang; gcc here. Its own test suite runs (ctest), as nixpkgs.
+  # nixpkgs' nlopt.pc and cmake-file fixups undo an absolute CMAKE_INSTALL_LIBDIR/INCLUDEDIR, which cmakeB does not pass.
+  nlopt = mkSrcPkg {
+    pname = "nlopt"; version = "2.11.0";
+    src = { url = "https://github.com/stevengj/nlopt/archive/refs/tags/v2.11.0.tar.gz";
+            sha256 = "53e552d83e9294d67db37f0f4a23f15933a9ef698485301a18b98b40004cf0de"; };
+    deps = [ world ]; nativeTools = [ cmake base.pkgconf ] ++ hostTools;
+    build = ''
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DNLOPT_CXX=ON -DNLOPT_PYTHON=OFF -DNLOPT_OCTAVE=OFF -DNLOPT_JAVA=OFF -DNLOPT_SWIG=OFF -DNLOPT_FORTRAN=OFF -DNLOPT_MATLAB=OFF -DNLOPT_GUILE=OFF -DNLOPT_LUKSAN=ON -DNLOPT_TESTS=ON"}
+      (cd _b && ctest -j8 --output-on-failure) >&2
+      ${chk ''PKG_CONFIG_PATH="$out/lib/amd64/pkgconfig" pkg-config --libs nlopt'' "^-L/nix/store/[a-z0-9]{32}-nlopt-2\\.11\\.0/lib/amd64 -lnlopt *$"}
+      ${tprog ''#include <nlopt.h>
+#include <stdio.h>
+static double f(unsigned n, const double *x, double *g, void *d){ (void)n; (void)g; (void)d; return (x[0]-1)*(x[0]-1) + (x[1]-2)*(x[1]-2); }
+int main(void){ nlopt_opt o = nlopt_create(NLOPT_LN_NELDERMEAD, 2); double x[2] = {0, 0}, m;
+nlopt_set_min_objective(o, f, NULL); nlopt_set_xtol_rel(o, 1e-10);
+int r = nlopt_optimize(o, x, &m); printf("ok %d %.4f %.4f\n", r > 0, x[0], x[1]); nlopt_destroy(o); return 0; }'' "-lnlopt -lm"}
+      ${chk ''"$W/t"'' "^ok 1 1\\.0000 2\\.0000$"}
+    '';
+  };
 }
