@@ -49,7 +49,7 @@ let
     ACLOCAL_PATH="''${_acl#:}" LIBTOOLIZE="$BASH ${c4.libtool}/bin/libtoolize" autoreconf -fi >&2
   '';
   h = args // { inherit scrub gnulibFix dropDocs chk autoreconfTools autoreconf; };
-  c1 = import ./c-base.nix (h // { inherit shared; });
+  c1 = import ./c-base.nix (h // { inherit shared; inherit (c5) gnupatch; });   # gnupatch: flex's fae57c41b4 (gnupatch's closure has no flex)
   c2 = import ./c-net.nix (h // { inherit (c1) readline; });
   c3 = import ./c-gnupg.nix (h // { inherit (c1) readline; });
   c4 = import ./c-big.nix (h // { inherit (c1) readline gnum4; inherit (c2) sqlite; inherit (c5) gnupatch; });   # gnupatch: perl's no-sys-dirs (no perl in its closure)

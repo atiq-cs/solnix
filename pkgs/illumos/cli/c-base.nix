@@ -1,5 +1,5 @@
 # cli/c-base.nix -- small GNU/C tools: file (libmagic), bc, GNU m4, readline.
-{ mkSrcPkg, world, zlib, ncurses, chk, gnulibFix, dropDocs, hostTools, shared ? { }, ... }:
+{ mkSrcPkg, world, zlib, ncurses, chk, gnulibFix, dropDocs, hostTools, gnupatch, shared ? { }, ... }:
 rec {
   file = mkSrcPkg {
     pname = "file"; version = "5.46";
@@ -37,15 +37,18 @@ rec {
   # flex 2.6.4 (nixpkgs' version and tarball): bc's configure wants flex for --with-readline ("readline works only with flex"); the
   # OpenIndiana build host had /usr/bin/flex, a solnix host has none. The tarball ships generated scan.c/parse.c: no flex/bison to build it.
   flex = mkSrcPkg {
-    pname = "flex"; version = "2.6.4";
-    src = { url = "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz";
-            sha256 = "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995"; };
-    deps = [ world ]; nativeTools = [ gnum4 ] ++ hostTools;   # GNU m4 (-P): the world's m4 is SVR4 ('bad option: -P'); OI had /usr/bin/gm4
+    pname = "flex"; version = "2.6.5";
+    src = { url = "https://github.com/westes/flex/releases/download/v2.6.5/flex-2.6.5.tar.gz";
+            sha256 = "4dfb3d6095c0cd58f050dd66fa132ad52c118c5ae26a4bddd916557720920769"; };
+    # GNU patch for fae57c41b4 on x86 (the store-only PATH has no patch: P0 "patch: command not found"); aarch64's tool PATH has one, and
+    # it and the seed instance (hostTools = [ ]) keep this nativeTools text, so their flex drvs stay.
+    deps = [ world ]; nativeTools = [ gnum4 ] ++ (if hostTools == [ ] then [ ] else [ gnupatch ]) ++ hostTools;   # GNU m4 (-P): the world's m4 is SVR4 ('bad option: -P'); OI had /usr/bin/gm4
     build = ''
+      patch -p1 < ${../patches/flex-2.6.5-gettext-no-nls.patch} >&2
       MAKEINFO=true HELP2MAN=true ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls
       gmake -j8 MAKEINFO=true HELP2MAN=true; gmake install MAKEINFO=true HELP2MAN=true
       ${dropDocs}
-      ${chk ''"$out/bin/flex" --version'' "^flex 2\\.6\\.4"}
+      ${chk ''"$out/bin/flex" --version'' "^flex 2\\.6\\.5"}
     '';
   };
   # bison 3.8.2 (nixpkgs' version; .sig Good, Akim Demaille) and autoconf-archive 2024.10.16 (nixpkgs'; .sig Good, Peter Simons):
