@@ -28,12 +28,30 @@ rec {
     build = ''
       ${pre}
       patch -p1 < ${./patches/clang-lld-23-illumos.patch}
+      # -fuse-ld=bfd|gld (and CLANG_DEFAULT_LINKER=bfd|gld): upstream names the OI path /usr/gnu/bin/ld, a build-host path in
+      # libclang-cpp.so (gate B13). GNU ld is the store binutils' gld, found as clang finds every tool (-B dirs, its own dir,
+      # PATH), as the lld case above does: the -fuse-ld case looks it up, and the default-linker case (Solaris::getDefaultLinker,
+      # which getLinkerPath returns as is) names "gld", which getLinkerPath then looks up the same way.
+      f=clang/lib/Driver/ToolChains/Solaris.cpp
+      [ "$(grep -c 'return "/usr/gnu/bin/ld";' $f)" = 1 ] && [ "$(grep -c '.Cases({"bfd", "gld"}, "/usr/gnu/bin/ld")' $f)" = 1 ] \
+        && [ "$(grep -c '^  return ToolChain.getDefaultLinker();$' $f)" = 1 ] || { echo "FATAL: clang gld anchors" >&2; exit 1; }
+      sed -i -e 's|return "/usr/gnu/bin/ld";|return ToolChain.GetProgramPath("gld");|' \
+        -e 's|.Cases({"bfd", "gld"}, "/usr/gnu/bin/ld")|.Cases({"bfd", "gld"}, "gld")|' \
+        -e 's|^  return ToolChain.getDefaultLinker();$|  const char *DL = ToolChain.getDefaultLinker();\n  return llvm::sys::path::is_absolute(DL) ? std::string(DL) : ToolChain.GetProgramPath(DL);|' $f
+      ! grep -n /usr/gnu/ $f || { echo "FATAL: clang still names /usr/gnu/" >&2; exit 1; }
       cmake -S clang -B _b ${runpath [ llvm ]} -DLLVM_DIR=${llvm}/lib/cmake/llvm -DLLVM_TABLEGEN_EXE=${llvm}/bin/llvm-tblgen \
         -DCLANG_LINK_CLANG_DYLIB=ON -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF -DCLANG_ENABLE_ARCMT=OFF \
         -DCLANG_DEFAULT_RTLIB=libgcc -DCLANG_DEFAULT_CXX_STDLIB=libstdc++
       ${ninjaInstall}
       ${noBuildDir}
       "$out/bin/clang" --version | grep -q "clang version ${version}" || { echo "FATAL: clang --version" >&2; exit 1; }
+      for f in "$out"/lib/libclang*.so* "$out"/lib/libclangDriver.a; do
+        [ -h "$f" ] || [ "$(tr '\000' '\n' < "$f" | grep -c -F /usr/gnu/)" = 0 ] || { echo "FATAL: $f names /usr/gnu/" >&2; exit 1; }
+      done
+      # the GNU link job runs the gld clang finds, not a fixed host path: an empty PATH leaves the bare name
+      : > "$TMPDIR/t.o"
+      "$out/bin/clang" -fuse-ld=gld -### -o "$TMPDIR/a" "$TMPDIR/t.o" > "$TMPDIR/gld.txt" 2>&1 || true
+      grep -q '^ *"gld" ' "$TMPDIR/gld.txt" || { echo "FATAL: clang -fuse-ld=gld:" >&2; cat "$TMPDIR/gld.txt" >&2; exit 1; }
       printf '#include <stddef.h>\nstruct s { size_t n; int a[4]; };\n' > "$TMPDIR/t.h"
       "$out/bin/clang" --sysroot=${gate} -fsyntax-only -x c "$TMPDIR/t.h" || { echo "FATAL: clang cannot parse a header" >&2; exit 1; }
     '';
