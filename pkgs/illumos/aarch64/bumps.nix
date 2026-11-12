@@ -52,12 +52,18 @@ in {
   # archive is fetched too (its 2290 files == sqlite-src-3540100.zip's, and its generated sqlite3.c == the autoconf one: checked
   # here, cmp). testrunner.tcl knows no SunOS: SunOS takes its BSD arm. veryquick (330525 tests, 0 errors on dixa) runs on the
   # fixed tcl (build-time only: not in the out). The summary line is printed without its hostname.
+  # intarray-1.1b matches the pointer string test1.c makes with sprintf("ptr:%p") against /0 ptr:(0x)?[0-9A-Z]+/ (upper case only;
+  # upstream 1f2f8741b7 made the 0x optional for Windows). illumos %p is lower-case hex with no 0x (ptr:fef240), so the test passed only
+  # when the first hex digit was 0-9: 8/12 runs on the a64rows host, 7/12 on dixa, by ASLR (a64rows2 ptrfmt.sh); dixa's build of the
+  # 4bfc83c drv failed on it. The pattern takes both cases, so the test checks what it means to: a pointer came back.
   sqlite = { version = "3.54.1";
     src = src "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz" "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e";
     build = rep "sqlite" "^3\\.53\\.2" "^3\\.54\\.1" args.build + ''
       mkdir -p "$W/sqt"; cd "$W/sqt"; tar xzf ${sqTree}; cd sqlite-version-3.54.1
       ./configure --build=aarch64-unknown-solaris2.11 --with-tcl=${tcl}/lib --with-tclsh=${tcl}/bin/tclsh8.6 --disable-readline >&2
       gmake sqlite3.c >&2; cmp sqlite3.c "$SRC/sqlite3.c" || { echo "FATAL: the tested sqlite3.c is not the shipped one" >&2; exit 1; }
+      sed -i 's|^} {/0 ptr:(0x)?\[0-9A-Z\]+/} $|} {/0 ptr:(0x)?[0-9A-Fa-f]+/} |' test/intarray.test
+      grep -q '^} {/0 ptr:(0x)?\[0-9A-Fa-f\]+/} $' test/intarray.test || { echo "FATAL: sqlite intarray-1.1b anchor" >&2; exit 1; }
       sed -i 's/^  \*freebsd\* -$/  *sunos* -\n  *freebsd* -/' test/testrunner.tcl; grep -q '^  \*sunos\* -$' test/testrunner.tcl || { echo "FATAL: sqlite testrunner sunos anchor" >&2; exit 1; }
       gmake -j16 testfixture >&2; r=0; LD_LIBRARY_PATH=${tcl}/lib ./testfixture test/testrunner.tcl --jobs 16 veryquick > "$W/sqt.out" 2>&1 || r=$?
       s=$(tr '\r' '\n' < "$W/sqt.out" | grep -E '^[0-9]+ errors out of [0-9]+ tests' | tail -1 | sed 's/ on .*//'); echo "sqlite veryquick: $s (rc $r)" >&2
