@@ -30,8 +30,12 @@ ghc -package-env=- --make -threaded -O0 -o Setup Setup.*hs > "$W/setup.log" 2>&1
 ./Setup copy > "$W/copy.log" 2>&1 || { tail -20 "$W/copy.log" >&2; exit 1; }
 mkdir -p "$DB" "$out/nix-support"; echo "$all" > "$out/nix-support/hs-deps"
 ./Setup register --gen-pkg-config="$W/pkg.conf" > "$W/reg.log" 2>&1 || { tail -20 "$W/reg.log" >&2; exit 1; }
-if [ -d "$W/pkg.conf" ]; then cp "$W"/pkg.conf/* "$DB/"; elif [ -f "$W/pkg.conf" ]; then
-  id=$(sed -n 's/^id: *//p' "$W/pkg.conf"); cp "$W/pkg.conf" "$DB/$id.conf"; fi
+# a package with sub-libraries gets a DIRECTORY of confs named N-<id> (no .conf: recache would skip them); nixpkgs'
+# generic-builder renames each to <id>.conf, as here
+if [ -d "$W/pkg.conf" ]; then confs=$(ls -d "$W"/pkg.conf/*); elif [ -f "$W/pkg.conf" ]; then confs=$W/pkg.conf; else confs=; fi
+for c in $confs; do
+  id=$(sed -n 's/^id: *//p' "$c"); [ -n "$id" ] || { echo "FATAL: no id: in $c" >&2; exit 1; }; cp "$c" "$DB/$id.conf"
+done
 [ -z "$(ls "$DB")" ] || ghc-pkg --package-db="$DB" recache
 rmdir "$DB" 2>/dev/null || :   # an executable-only package registers nothing
 # gates: DT_CHECKSUM, host refs, then the closure gate (store-only RUNPATH, ldd in the store, no global errno; the ghc
