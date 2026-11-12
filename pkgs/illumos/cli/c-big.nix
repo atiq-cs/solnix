@@ -95,14 +95,34 @@ rec {
     src = { url = "https://mirrors.kernel.org/gnu/libtool/libtool-2.6.2.tar.xz";
             sha256 = "2ef1067c16c97db930fd740cc9bc3d3ba9a583804ae5ac42cc3e8719e49e191e"; };
     deps = [ gnum4 ];
-    nativeTools = hostTools;   # store-only PATH + config.site (wave4)
-    build = ''
+    # gnum4 on PATH and M4 exported, as nixpkgs' libtool has m4 in nativeBuildInputs: Makefile.in computes libtoolize's
+    # ltdl_ac_aux_dir with `build-aux/extract-trace AC_CONFIG_AUX_DIR libltdl/configure.ac` inside backticks, and extract-trace
+    # finds GNU m4 only by name on PATH or through M4 (configure's M4= does not reach it). Without either it dies quietly and
+    # libtoolize shipped `ltdl_ac_aux_dir=""` (served bgbjnx5h): `libtoolize --ltdl` in a project with LT_CONFIG_LTDL_DIR then built
+    # the sed filter `s||..|g`, which every sed rejects, and autoreconf failed (unixodbc, qnew2 2026-11-12).
+    # x86 store-only only: aarch64 (hostTools = [ ]) has GNU m4 on its build PATH, and its libtoolize says "../build-aux" (measured on
+    # the aarch64 out nwv2kws6), so its drv stays as it is; the seed instance (hostTools = [ ]) too.
+    nativeTools = if hostTools == [ ] then hostTools else [ gnum4 ] ++ hostTools;   # store-only PATH + config.site (wave4)
+    build = (if hostTools == [ ] then "" else ''
+      export M4=${gnum4}/bin/m4
+    '') + ''
       MAKEINFO=true ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static M4=${gnum4}/bin/m4
       gmake -j8 MAKEINFO=true; gmake install MAKEINFO=true
       ${scrub}
       ${dropDocs}
       ${chk ''"$out/bin/libtool" --version'' "GNU libtool\\) 2\\.6\\.2"}
       ${chk ''"$out/bin/libtoolize" --version'' "^libtoolize \\(GNU libtool\\) 2\\.6\\.2"}
-    '';
+    '' + (if hostTools == [ ] then "" else ''
+      grep -qx '    ltdl_ac_aux_dir="../build-aux"' "$out/bin/libtoolize" || { echo "FATAL: libtoolize: ltdl_ac_aux_dir is not ../build-aux" >&2; exit 1; }
+      # libtoolize --ltdl on a minimal project that bundles libltdl in a subdir (unixodbc's shape): it must write the subdir's
+      # configure.ac and Makefile.am. With the empty ltdl_ac_aux_dir it wrote neither (sed: first RE may not be empty).
+      T="$W/ltdl-t"; mkdir -p "$T/m4"; cd "$T"
+      printf 'AC_INIT([t],[1])\nAC_CONFIG_AUX_DIR([build-aux])\nAC_CONFIG_MACRO_DIRS([m4])\nLT_CONFIG_LTDL_DIR([libltdl])\nLT_INIT([dlopen])\nLTDL_INIT([subproject])\nAC_OUTPUT\n' > configure.ac
+      PATH="$out/bin:$PATH" "$BASH" "$out/bin/libtoolize" --copy --ltdl > "$W/ltdl-t.log" 2>&1 || { cat "$W/ltdl-t.log" >&2; echo "FATAL: libtoolize --ltdl failed" >&2; exit 1; }
+      [ -s libltdl/configure.ac ] && [ -s libltdl/Makefile.am ] && grep -q '^AC_CONFIG_AUX_DIR(\[\.\./build-aux\])$' libltdl/configure.ac \
+        || { cat "$W/ltdl-t.log" >&2; ls -la libltdl >&2; echo "FATAL: libtoolize --ltdl did not write libltdl/configure.ac + Makefile.am" >&2; exit 1; }
+      ! grep -i "empty\|no previous regular" "$W/ltdl-t.log" >&2 || { echo "FATAL: libtoolize --ltdl: sed error" >&2; exit 1; }
+      cd "$SRC"
+    '');
   };
 }
