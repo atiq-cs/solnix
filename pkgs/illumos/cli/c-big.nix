@@ -74,9 +74,9 @@ rec {
   };
 
   automake = mkSrcPkg {
-    pname = "automake"; version = "1.19";
-    src = { url = "https://mirrors.kernel.org/gnu/automake/automake-1.19.tar.xz";
-            sha256 = "e3e2c2e3abf37898138db5b6c1d1dc35c9160c5978be7947d2c741705251d445"; };
+    pname = "automake"; version = "1.20";
+    src = { url = "https://mirrors.kernel.org/gnu/automake/automake-1.20.tar.xz";
+            sha256 = "f6f34dad4cbe395715762b0710f7c511e39bd5cf777e6b95818ccbecf7714248"; };
     deps = [ perl autoconf ];
     # store-only PATH + config.site (recipes1). bash: configure insists on a "sturdy" POSIX shell for its testsuite (the world's sh fails
     # that probe) and finds it on PATH; NixOS's stdenv always has bash on PATH.
@@ -86,7 +86,7 @@ rec {
       MAKEINFO=true ./configure --prefix="$out" PERL=${perl}/bin/perl
       gmake -j8 MAKEINFO=true; gmake install MAKEINFO=true
       ${dropDocs}
-      ${chk ''"$out/bin/automake" --version'' "^automake \\(GNU automake\\) 1\\.19"}
+      ${chk ''"$out/bin/automake" --version'' "^automake \\(GNU automake\\) 1\\.20"}
     '';
   };
 
