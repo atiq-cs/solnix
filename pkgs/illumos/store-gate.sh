@@ -6,7 +6,9 @@
 IB=${ILLUMOS_BIN:-/usr/bin}   # illumos elfedit/elfdump/ldd: the world's usr/bin in a store-only build, /usr/bin when exempt
 set -eu
 d=$1; tsg=$2; shift 2
-T=$(mktemp -d /var/tmp/sgate.XXXXXX); : > "$T/fail"
+# under the build's own TMPDIR (Nix's build dir), removed on exit: /var/tmp is the host's (no sandbox), and 84 sgate.* dirs
+# outlived their builds on woof (recipes4 tmpcensus)
+T=$(mktemp -d "${TMPDIR:-/var/tmp}/sgate.XXXXXX"); trap 'find "$T" -depth -delete' EXIT; : > "$T/fail"
 /usr/bin/bash "$tsg" "$d" 2>> "$T/fail" || echo "ts-errno gate failed" >> "$T/fail"
 find "$d" -type f > "$T/files"
 n=0

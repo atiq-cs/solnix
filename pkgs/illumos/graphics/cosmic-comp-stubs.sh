@@ -5,7 +5,8 @@
 # and cosmic-comp-config's `input` crate LINK. udev_new()/libinput_*_create_context() return NULL,
 # so any runtime use fails loudly as an Err, never silently.
 set -eu
-V=$1; O=$2; T=$(mktemp -d /var/tmp/ccstub.XXXXXX); mkdir -p "$O/pkgconfig"
+# the build's own TMPDIR, removed on exit: /var/tmp is the host's (no sandbox; 11 ccstub.* dirs outlived their builds on woof)
+V=$1; O=$2; T=$(mktemp -d "${TMPDIR:-/var/tmp}/ccstub.XXXXXX"); trap 'find "$T" -depth -delete' EXIT; mkdir -p "$O/pkgconfig"
 gen() { # gen <soname> <pcname> <version> <files...>
   so=$1 pcn=$2 ver=$3; shift 3
   # a real library (solnix's libudev, libinput: pkgs/illumos/input-stack) replaces this STUB: it is in libDirs instead
