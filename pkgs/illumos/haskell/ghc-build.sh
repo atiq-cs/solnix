@@ -44,10 +44,13 @@ echo "$hackage" | while read -r pv t c; do cp "$t" "$W/hs/$pv.tar.gz"; cp "$c" "
   || { tail -40 "$W/hadrian.log" >&2; exit 1; }
 
 # 4. configure (nixpkgs' flags; pkgsrc: no @file for ar, ALEX/HAPPY/HSCOLOUR unset so a stray one on PATH is not used;
-#    dtrace off: the build host's dtrace is not a store tool)
+#    dtrace off: the build host's dtrace is not a store tool; -D_TS_ERRNO: per-thread errno in every C object, as mk-src-pkg's
+#    wrappers (ts-errno-gate.sh says why): without it process's cbits referenced the global errno (measured, r1). The installed
+#    settings keep it, so user cbits get it too.)
 conf() {
   fp_cv_prog_ar_supports_atfile=no ac_cv_path_ALEX= ac_cv_path_HAPPY= ac_cv_path_HSCOLOUR= \
   CONF_GCC_LINKER_OPTS_STAGE1="-Wl,-R,$R" CONF_GCC_LINKER_OPTS_STAGE2="-Wl,-R,$R" \
+  CONF_CC_OPTS_STAGE1=-D_TS_ERRNO CONF_CC_OPTS_STAGE2=-D_TS_ERRNO \
   "$BASH" ./configure "$@" CC=gcc CXX=g++ LD=$LDP AR=$binutils/bin/gar RANLIB=$binutils/bin/granlib MergeObjsCmd=$LDP \
     --with-system-libffi --with-ffi-includes=$libffi/include --with-ffi-libraries=$libffi/lib/amd64 \
     --with-gmp-includes=$gmp/include --with-gmp-libraries=$gmp/lib/amd64 \
@@ -74,9 +77,19 @@ sed -i -e "s|(\"C compiler command\", \"gcc\")|(\"C compiler command\", \"$gccWr
        -e "s|(\"Haskell CPP command\", \"gcc\")|(\"Haskell CPP command\", \"$gccWrapper/bin/gcc\")|" \
        -e "s|(\"C-- CPP command\", \"gcc\")|(\"C-- CPP command\", \"$gccWrapper/bin/gcc\")|" "$ST"
 grep -qF "\"C compiler command\", \"$gccWrapper/bin/gcc\"" "$ST" || { echo "FATAL: settings edit did not apply" >&2; exit 1; }
+grep -q '"C compiler flags", "[^"]*-D_TS_ERRNO' "$ST" || { echo "FATAL: settings lack -D_TS_ERRNO" >&2; exit 1; }
 # package.cache is a binary db regenerated from the .conf files; keep it (ghc reads it), but drop the lock (pkgsrc does too)
 rm -f "$out/lib/ghc-9.10.3/lib/package.conf.d/package.cache.lock"
 
+# the debug-way RTS (libHSrts*_debug*, built -g) keeps DWARF naming the unwrapped gcc and the gate proto (its sysroot), which
+# made both RUNTIME references (measured: 6-9 files of r2's out). strip --strip-debug those files (mk-src-pkg's strip phase;
+# -D: deterministic ar headers), then fail if anything still names them.
+GCCU=$(sed -n 's|^exec \(/nix/store/[^ /]*\)/bin/gcc .*|\1|p' "$gccWrapper/bin/gcc"); SYSR=$(gcc -print-sysroot)
+case "$GCCU:$SYSR" in /nix/store/*:/nix/store/*) ;; *) echo "FATAL: gcc '$GCCU' or sysroot '$SYSR' not found" >&2; exit 1;; esac
+grep -rlF -e "$GCCU" -e "$SYSR" "$out" | while read -r f; do
+  case "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" in 7f454c46|213c6172) chmod u+w "$f"; gstrip --strip-debug -D "$f";; esac
+done
+! grep -rlF -e "$GCCU" -e "$SYSR" "$out" | head -5 | grep . >&2 || { echo "FATAL: $out still names the gcc or the gate proto" >&2; exit 1; }
 # 7. checks: DT_CHECKSUM, then the gates (no global errno, every RUNPATH in the store or $ORIGIN, ldd resolves in the store,
 #    no #! or symlink to the host), then compile + run (hello, C FFI + threaded RTS, a dynamic link)
 : > "$W/zc"; /usr/bin/bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }

@@ -39,7 +39,16 @@ rmdir "$DB" 2>/dev/null || :   # an executable-only package registers nothing
 : > "$W/zc"; /usr/bin/bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
 /usr/bin/bash "$outHostRefs" "$out"
 ! grep -rqF "$W/db" "$out" || { echo "FATAL: $out names the build db" >&2; exit 1; }
-if find "$out" -type f | while read -r f; do [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] && elfdump -d "$f" 2>/dev/null | grep -q NEEDED && echo y; done | grep -q y; then
-  /usr/bin/bash "$storeGate" "$out" "$tsErrnoGate"; fi
+# the closure gate (store-gate.sh's, but $ORIGIN allowed, as ghc-build.sh and publish-gate S1): ldd must resolve in the store
+: > "$W/fail"; /usr/bin/bash "$tsErrnoGate" "$out" 2>> "$W/fail" || echo "ts-errno gate failed" >> "$W/fail"
+find "$out" -type f | while read -r f; do
+  [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue
+  elfdump -d "$f" 2>/dev/null | grep -q NEEDED || continue
+  for e in $(elfdump -d "$f" | awk '$2=="RUNPATH"||$2=="RPATH"{print $4}' | tr ':' ' '); do
+    case "$e" in /nix/store/*|'$ORIGIN'*) ;; *) echo "$f RUNPATH $e" >> "$W/fail";; esac
+  done
+  (unset LD_LIBRARY_PATH LD_LIBRARY_PATH_64; ldd "$f") 2>&1 | awk -v f="$f" '/not found/ || (/=>/ && $NF !~ /^\/nix\/store\//) {print f": "$0}' >> "$W/fail"
+done
+if [ -s "$W/fail" ]; then echo "FATAL: closure gate failed:" >&2; head -40 "$W/fail" >&2; exit 1; fi
 cd "$W"; eval "$check"
 echo "=== $name: check passed ===" >&2
