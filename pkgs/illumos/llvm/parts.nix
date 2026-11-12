@@ -101,9 +101,10 @@ let parts = rec {
       set -eu; /usr/bin/bash "$pathGate"
       mkdir -p $out/bin
       for t in clang clang++ clang-cpp; do
-        printf '#!/usr/bin/bash\nexec %s/bin/%s --sysroot=%s --gcc-toolchain=%s -fuse-ld=%s -B%s/bin -Wl,-R,%s/lib/amd64:%s/lib "$@"\n' \
+        # #!/bin/sh, as base-src.nix gccWrapper (gate B9 rejects #!/usr/bin/bash): the script only execs with "$@"
+        printf '#!/bin/sh\nexec %s/bin/%s --sysroot=%s --gcc-toolchain=%s -fuse-ld=%s -B%s/bin -Wl,-R,%s/lib/amd64:%s/lib "$@"\n' \
           "$clang" "$t" "$gate" "$gcc" "$ldBin" "$lld" "$gccLib" "$gccLib" > "$out/bin/$t"
-        chmod +x "$out/bin/$t"
+        chmod +x "$out/bin/$t"; [ "$(head -1 "$out/bin/$t")" = "#!/bin/sh" ]
       done
       ln -s clang $out/bin/cc; ln -s clang++ $out/bin/c++
       for t in ld.lld llvm-ar llvm-nm llvm-objdump llvm-readelf llvm-strip llvm-objcopy; do
