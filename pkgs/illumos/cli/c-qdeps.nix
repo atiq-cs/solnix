@@ -109,6 +109,29 @@ printf("ok %d %u %d %d\n", TIFFLIB_VERSION > 20250000, w, TIFFIsCODECConfigured(
     '';
   };
 
+  # lcms2 (MIT): Little CMS, the colour management engine and its tools (tificc, transicc, linkicc, jpgicc, psicc), autotools, shared, on
+  # libtiff, libjpeg-turbo and zlib, as nixpkgs. The check runs upstream's own testbed (testcms2) and a transform through transicc.
+  lcms2 = mkSrcPkg {
+    pname = "lcms2"; version = "2.19.1";
+    src = { url = "https://downloads.sourceforge.net/lcms/lcms2-2.19.1.tar.gz"; sha256 = "bfc54f7bab59fbc921012014a8032e4cba4abd46db47d46b76416a8c0b2815c8"; };
+    deps = [ world libtiff libjpeg-turbo zlib ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --with-tiff=${libtiff} --with-jpeg=${libjpeg-turbo}
+      gmake -j''${NIX_BUILD_CORES} >&2; gmake install >&2
+      for b in tificc transicc linkicc jpgicc psicc; do [ -x "$out/bin/$b" ] || { echo "FATAL: lcms2: no $b" >&2; exit 1; }; done
+      # upstream's testbed: exits with its failure count (and prints FAIL! per failed check); the speed tests are part of it
+      ( cd testbed && gmake -j''${NIX_BUILD_CORES} testcms >&2 && ./testcms ) > "$W/tb.out" 2>&1 || { echo "FATAL: lcms2 testbed" >&2; grep -B1 "FAIL!" "$W/tb.out" | head -20 >&2; tail -5 "$W/tb.out" >&2; exit 1; }
+      ! grep -q "FAIL!" "$W/tb.out" && [ "$(grep -c '^Checking .*\.\.\.' "$W/tb.out")" -gt 100 ] || { echo "FATAL: lcms2 testbed output" >&2; tail -5 "$W/tb.out" >&2; exit 1; }
+      ${chk ''printf '128 128 128\n' | "$out/bin/transicc" -i '*sRGB' -o '*Lab' -n | tail -1'' "^53\\.5[0-9]+ +-?0\\.0000 +-?0\\.0000"}   # mid-grey: L* 53.585, a* b* 0 (either sign)
+      ${tprog ''#include <lcms2.h>
+#include <stdio.h>
+int main(void){ cmsHPROFILE s = cmsCreate_sRGBProfile(), l = cmsCreateLab4Profile(NULL); cmsHTRANSFORM x = cmsCreateTransform(s, TYPE_RGB_8, l, TYPE_Lab_DBL, INTENT_PERCEPTUAL, 0);
+unsigned char w[3] = { 255, 255, 255 }; cmsCIELab o; cmsDoTransform(x, w, &o, 1); printf("ok %d %d\n", cmsGetEncodedCMMversion(), (int)(o.L + 0.5)); return 0; }'' "-llcms2"}
+      ${chk ''"$W/t"'' "^ok 2190 100$"}
+      ${noBuildDir}
+    '';
+  };
+
   # zeromq (MPL-2.0): libzmq, the ZeroMQ messaging library, cmake, shared, with CURVE on libsodium, no drafts, nixpkgs' three patches
   # and its CMAKE_INSTALL_FULL_* postPatch. Source: the 4.3.5 release tarball (the same code as nixpkgs' tag archive, plus the generated
   # docs), whose doc/*.3 and *.7 are the asciidoc man pages nixpkgs builds: installed from there (solnix has no asciidoc). Poller: devpoll,
