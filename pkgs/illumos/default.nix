@@ -476,7 +476,7 @@ let
   # gtkMeson: desktop/gtk's store meson/samurai/nasm (+ freetype, noto-sans) for cli/c-recipes4.nix's meson recipes (gtk takes cli's
   # python3/cmake/gnupatch, which are outside c-recipes4, so there is no cycle)
   cli = import ./cli { base = srcPkgs; inherit world graphics goChain; inherit (cargo) cargoPkg;
-    gtkMeson = { inherit (gtk) nasm freetype fontconfig gtkTools harfbuzz fribidi glib pcre2 gperf; ftPriv = [ srcPkgs.zlib gtk.libpng srcPkgs.nixChain.brotli srcPkgs.nixChain.bzip2 ]; meson = gtk.meson_1_10; samurai = graphics.samurai; inherit (cosmicData) noto-sans; }; };
+    gtkMeson = { inherit (gtk) nasm freetype fontconfig gtkTools harfbuzz fribidi glib pcre2 gperf libpng libjpeg-turbo; ftPriv = [ srcPkgs.zlib gtk.libpng srcPkgs.nixChain.brotli srcPkgs.nixChain.bzip2 ]; meson = gtk.meson_1_10; samurai = graphics.samurai; inherit (cosmicData) noto-sans; }; };
   # libtorrent-rasterbar + solnix-torrent, the community seeder's BitTorrent client (./solnix-torrent.nix).
   torrent = import ./solnix-torrent.nix {
     inherit (srcPkgs) mkSrcPkg openssl pkgconf gccWrapper binutils hostTools; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
