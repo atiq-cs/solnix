@@ -4744,4 +4744,46 @@ printf("ok %s %s %d\n", u->portal, u->target, u->lun); iscsi_destroy_url(u); isc
       ${chk ''"$W/t"'' "^ok 127\\.0\\.0\\.1:3260 iqn\\.2026-11\\.io\\.solnix:disk 1$"}
     '';
   };
+
+
+  # ---- qnew4 batch 6: leaves the x86 queue has jobs for, no other lane's (every source = nixpkgs f4a03c0's, by hash) ---------------
+  # kytea (Apache-2.0): Japanese/Chinese word segmentation and pronunciation estimation (libkytea, kytea, train-kytea) with its bundled
+  # model (share/kytea/model.bin, 128 MB), autotools from the release tarball, as nixpkgs: its gcc-O3 patch (explicit template
+  # instantiations the -O3 build needs) and its test suite (`make check`). The check segments a Japanese sentence with the model.
+  kytea = mkSrcPkg {
+    pname = "kytea"; version = "0.4.7";
+    src = { url = "http://www.phontron.com/kytea/download/kytea-0.4.7.tar.gz";
+            sha256 = "534a33d40c4dc5421f053c71a75695c377df737169f965573175df5d2cff9f46"; };
+    deps = [ world ]; nativeTools = [ gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${npPatch "ky/kytea/gcc-O3.patch" "6837593c6224eab9e631df1fb7d85cc9e7b6aaed55b577112e1619f6835ba6b5"}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static LDFLAGS="-L$gccLib/amd64"
+      # its test writes fixed /tmp/kytea-*.bin paths: with no build sandbox, files left by another nixbld user make it fail (measured:
+      # "Couldn't open file '/tmp/kytea-svm-model.bin' for output"). Build-private dir instead.
+      mkdir "$W/kt"; [ "$(grep -c '"/tmp/kytea-' src/test/test-analysis.h)" = 9 ] || { echo "FATAL: kytea /tmp anchor" >&2; exit 1; }
+      sed -i "s|\"/tmp/kytea-|\"$W/kt/kytea-|g" src/test/test-analysis.h
+      gmake -j8; gmake check; gmake install
+      # "kyou wa hare desu" (UTF-8): the model must split it into words; compared as hex (od -An -tx1, joined)
+      printf '\344\273\212\346\227\245\343\201\257\346\231\264\343\202\214\343\201\247\343\201\231\n' > "$W/in.txt"
+      ${chk ''"$out/bin/kytea" -notags < "$W/in.txt" | od -An -tx1 | tr -d ' \n'; echo'' "^e4bb8ae697a520e381af20e699b4e3828c20"}
+    '';
+  };
+
+  # openfst (Apache-2.0): weighted finite-state transducers (libfst and its fst* tools), C++17, autotools from the release tarball, as
+  # nixpkgs: its nine --enable extensions (compact, compress, const, far, linear, lookahead, mpdt, ngram, pdt). Its test suite runs
+  # (`make check`). The check compiles a two-arc acceptor with fstcompile and prints it back.
+  openfst = mkSrcPkg {
+    pname = "openfst"; version = "1.8.4";
+    src = { url = "http://www.openfst.org/twiki/pub/FST/FstDownload/openfst-1.8.4.tar.gz";
+            sha256 = "a8ebbb6f3d92d07e671500587472518cfc87cb79b9a654a5a8abb2d0eb298016"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static LDFLAGS="-L$gccLib/amd64" \
+        --enable-compact-fsts --enable-compress --enable-const-fsts --enable-far --enable-linear-fsts --enable-lookahead-fsts \
+        --enable-mpdt --enable-ngram-fsts --enable-pdt
+      gmake -j''${NIX_BUILD_CORES:-4}; gmake -j''${NIX_BUILD_CORES:-4} check; gmake install
+      printf '0 1 a a 0.5\n1 2 b b 1.5\n2\n' > "$W/t.txt"; printf '<eps> 0\na 1\nb 2\n' > "$W/s.txt"
+      ${chk ''"$out/bin/fstcompile" --isymbols="$W/s.txt" --osymbols="$W/s.txt" "$W/t.txt" "$W/t.fst" && "$out/bin/fstprint" --isymbols="$W/s.txt" --osymbols="$W/s.txt" "$W/t.fst" | tr '\t\n' ' ;' '' "^0 1 a a 0\\.5;1 2 b b 1\\.5;2;$"}
+    '';
+  };
 }
