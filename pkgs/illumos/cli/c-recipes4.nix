@@ -4499,4 +4499,38 @@ printf("ok %lu %lu %d\n", (unsigned long)n, (unsigned long)s, r); return 0; }'' 
       ${chk ''"$out/bin/potrace" --version | head -1'' "^potrace 1\\.16\\."}
     '';
   };
+
+
+  # ---- qnew3 batch 3: leaves the x86 queue has jobs for, no other lane's (every source = nixpkgs f4a03c0's, by hash) -------------
+  # bbe (GPL-2.0-or-later): sed-like editor for binary files, autotools from the release tarball (its shipped bbe.info/bbe.1), as
+  # nixpkgs (autoreconf).
+  bbe = mkSrcPkg {
+    pname = "bbe"; version = "0.2.2";
+    src = { url = "https://downloads.sourceforge.net/bbe-/0.2.2/bbe-0.2.2.tar.gz";
+            sha256 = "baaeaf5775a6d9bceb594ea100c8f45a677a0a7d07529fa573ba0842226edddb"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out"
+      gmake -j8; gmake install
+      printf 'solnix\000ABC' > "$W/in"
+      ${chk ''"$out/bin/bbe" -e 's/ABC/xyz/' -e 'r 0 S' "$W/in" | od -An -c | tr -s ' ' '' "^ S o l n i x \\\\0 x y z$"}
+    '';
+  };
+
+  # mtools (GPL-3.0-or-later): read and write MS-DOS FAT file systems without mounting them (mformat, mcopy, mdir, ...), autotools,
+  # as nixpkgs (`make check` is a no-op upstream). The check formats a FAT12 image, copies a file in and back out.
+  mtools = mkSrcPkg {
+    pname = "mtools"; version = "4.0.49";
+    src = { url = "https://ftpmirror.gnu.org/mtools/mtools-4.0.49.tar.bz2";
+            sha256 = "6fe5193583d6e7c59da75e63d7234f76c0b07caf33b103894f46f66a871ffc9f"; };
+    deps = [ world ]; nativeTools = [ bzip2-bin ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --sysconfdir=/etc
+      gmake -j8; gmake install
+      printf 'solnix mtools\n' > "$W/f.txt"
+      export MTOOLSRC=/dev/null MTOOLS_SKIP_CHECK=1
+      ${chk ''"$out/bin/mformat" -C -f 1440 -v SOLNIX -i "$W/fat.img" :: && "$out/bin/mcopy" -i "$W/fat.img" "$W/f.txt" ::/F.TXT && "$out/bin/mcopy" -i "$W/fat.img" ::/F.TXT "$W/back.txt" && cmp "$W/f.txt" "$W/back.txt" && "$out/bin/mdir" -i "$W/fat.img" -b ::'' "^::/F\\.TXT$"}
+    '';
+  };
 }
