@@ -87,9 +87,6 @@ in {
   # flex 2.6.5, automake 1.20, hunspell 1.7.6 (the queue's versions): cli/ recipes both arches share, bumped here for aarch64 only with
   # wave8's exact strings (floki wave8/SHARED-BUMP-STRINGS.md). wave8's x86 commit bumps the shared recipe and deletes the entry, and the
   # aarch64 drvs stay where they are. flex .sig Good (Flex Releases 15A2D3E3...), automake .sig Good (Kamila Szewczyk D5D527E7...).
-  automake = { version = "1.20";
-    src = src "https://mirrors.kernel.org/gnu/automake/automake-1.20.tar.xz" "f6f34dad4cbe395715762b0710f7c511e39bd5cf777e6b95818ccbecf7714248";
-    build = rep "automake" "^automake \\(GNU automake\\) 1\\.19" "^automake \\(GNU automake\\) 1\\.20" args.build; };
   hunspell = { version = "1.7.6";
     src = src "https://github.com/hunspell/hunspell/releases/download/v1.7.6/hunspell-1.7.6.tar.gz" "9c650ace31d4d8cc1da925a9507c3de1d50f1a54857af2f72429f517d5d53467";
     build = rep "hunspell" "Hunspell 1\\.7\\.3" "Hunspell 1\\.7\\.6" args.build; };
