@@ -13,6 +13,8 @@ for f in $(grep -r -l -a -F 'SunOS' "$1" 2>/dev/null); do
   for o in $(grep -a -b -o -F 'SunOS' "$f" | cut -d: -f1); do
     [ "$o" -ge $((doff)) ] && [ $((o + 5 * 257)) -le $((doff + dsz)) ] || continue
     [ "$(dd if="$f" bs=1 skip=$((o + 5)) count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 00 ] || continue
+    # dd edits the inode: break a hard link first, so no other name sharing it is edited too (userland1 WAVE7-NOTES audit 1)
+    if [ "$(ls -ld "$f" | awk '{print $2}')" -gt 1 ]; then chmod u+w "$(dirname "$f")"; cp -p "$f" "$f.dofcp" && mv -f "$f.dofcp" "$f"; fi
     chmod u+w "$f"
     dd if=/dev/zero of="$f" bs=1 seek=$((o + 257)) count=257 conv=notrunc 2>/dev/null
     printf localhost | dd of="$f" bs=1 seek=$((o + 257)) conv=notrunc 2>/dev/null

@@ -50,9 +50,13 @@ derivation {
     set -eu
     mkdir -p "$out"
     cp -a "${proto}/." "$out/"
+    # fail closed: dof-nodename.sh and the scan below need GNU grep (-a -b -o). illumos grep rejects -a (exit 2), which read as "no
+    # match": on a host without /usr/gnu/bin both passed silently (userland1 WAVE7-NOTES audit 2). As scripts/publish-gate.sh.
+    printf 'a\000b\n' | grep -a -b -o -F b > /dev/null 2>&1 || { echo "FATAL: $(command -v grep) is not GNU grep (needs -a -b -o)" >&2; exit 1; }
     # no build-host name in the store: the DOF utsname nodename -> localhost (./dof-nodename.sh)
     /usr/bin/bash ${./dof-nodename.sh} "$out"
-    if grep -r -l -a -F solnix-builder-build "$out" >&2; then echo "FATAL: the proto still names its build host" >&2; exit 1; fi
+    rc=0; grep -r -l -a -F solnix-builder-build "$out" >&2 || rc=$?
+    case $rc in 0) echo "FATAL: the proto still names its build host" >&2; exit 1;; 1) ;; *) echo "FATAL: grep exited $rc" >&2; exit 1;; esac
     # sanity: aarch64 libc, headers, kernel unix + genunix (LP64, no amd64).
     [ -f "$out/lib/libc.so.1" ]                        || { echo "FATAL: no aarch64 proto libc" >&2; exit 1; }
     [ -d "$out/usr/include" ]                          || { echo "FATAL: no aarch64 proto headers" >&2; exit 1; }
