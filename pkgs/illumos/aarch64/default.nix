@@ -192,7 +192,11 @@ let
       # python3: imports during install and the in-build checks write timestamp-mode pyc (gate2 B10; --check differed on dixa). Ship
       # none, as the served x86 python3 (0 pyc; wave6's 3.13.18 recipe also rm's them first), and write none while checking.
       # _sysconfigdata named $W (abs_builddir, RUNSHARED: 7 hits on dixa): /no-such-path, as nixpkgs and wave6.
-      python3 = { build = let a = ''      ln -sf python3 "$out/bin/python"''; b = builtins.replaceStrings [ a ]
+      # ac_cv_broken_nice=no: configure's AC_RUN probe calls nice(1) then nice(2) and says "broken" when both return the same, which
+      # every build already at nice >= 18 gets (both hit the ceiling, 19). dixa builds niced 19: pyconfig.h and _sysconfigdata said
+      # HAVE_BROKEN_NICE 1 there and undef on the a64rows host (nice 0), so the NarHash differed (a64rows2 nice.sh: niced 0..17, 1/3 .. 18/19;
+      # 18 and 19: 19/19). illumos nice() returns the new priority: "no" is the answer for this libc, as at nice 0.
+      python3 = { build = "export ac_cv_broken_nice=no\n" + (let a = ''      ln -sf python3 "$out/bin/python"''; b = builtins.replaceStrings [ a ]
           [ (''      find "$out" -type d -name __pycache__ -prune -exec rm -r {} +; export PYTHONDONTWRITEBYTECODE=1'' + "\n"
             # nixpkgs postInstall (and wave6's x86 3.13.18): the recorded build configuration must not name the build dir
             + ''      for f in "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile; do chmod u+w "$f"; LC_ALL=C sed -i -e "s|$W|/no-such-path|g" "$f"; done''
@@ -200,7 +204,7 @@ let
             # mk-src-pkg's strip, which runs after this, other files under lib/python3.13 still do (the first v4 build FAILed here).
             + "\n" + ''      ! grep -lF "$W" "$out"/lib/python3.13/_sysconfigdata*.py "$out"/lib/python3.13/config-3.13*/Makefile || { echo "FATAL: python3 sysconfig still names the build dir" >&2; exit 1; }'' + "\n" + a) ] args.build; in
         # no "ships pyc" check here: the shared recipe compiles checked-hash pyc (deterministic under --check) and checks them itself
-        if b == args.build then throw "a64r python3: anchor" else b; };
+        if b == args.build then throw "a64r python3: anchor" else b); };
       # meson's symbolextractor.py (shared-lib symbol lists, for relink avoidance) prepends the OI host's /usr/gnu/bin to PATH to find GNU
       # nm/readelf on SunOS (upstream text; gate2 B13). A solnix host has no /usr/gnu: drop the prefix, so it uses PATH as is (gnu_syms
       # falls back to dummy_syms when no GNU nm is found, which only costs relinks), as NixOS patches meson's host paths.
