@@ -132,6 +132,39 @@ unsigned char w[3] = { 255, 255, 255 }; cmsCIELab o; cmsDoTransform(x, w, &o, 1)
     '';
   };
 
+  # openjpeg (BSD-2-Clause): the JPEG 2000 codec (libopenjp2, opj_compress/opj_decompress/opj_dump), cmake, shared, on libpng, libtiff,
+  # zlib and lcms2, nixpkgs' flags (no JPIP, no viewer, no java, no thirdparty) and its CVE-2026-6192 fix (upstream PR 1621, merged).
+  # nixpkgs runs ctest on a test-data checkout; the check here encodes and decodes a lossless image and compares the pixels.
+  openjpeg = mkSrcPkg {
+    pname = "openjpeg"; version = "2.5.4";
+    src = gh "uclouvain/openjpeg" "v2.5.4" "a695fbe19c0165f295a8531b1e4e855cd94d0875d2f88ec4b61080677e27188a";
+    deps = [ world libpng libtiff zlib lcms2 ]; nativeTools = [ cmake gnupatch ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://patch-diff.githubusercontent.com/raw/uclouvain/openjpeg/pull/1621.patch?full_index=1" "40648d63bfbb0f6c3a41cb9425ac48c396772c3527fff4b2979b07f42aaea6b8"}
+      ${cmakeB "-DBUILD_SHARED_LIBS=ON -DBUILD_CODEC=ON -DBUILD_THIRDPARTY=OFF -DBUILD_JPIP=OFF -DBUILD_JPIP_SERVER=OFF -DBUILD_VIEWER=OFF -DBUILD_JAVA=OFF -DBUILD_TESTING=OFF"}
+      # opj_compress reads PNG and TIFF and links lcms2 for ICC: each resolves to its store dep (one ldd check for the three)
+      /usr/bin/ldd "$out/bin/opj_compress" > "$W/ldd" || { echo "FATAL: openjpeg ldd" >&2; exit 1; }
+      for v in "libpng16.so.16 ${libpng}" "libtiff.so.6 ${libtiff}" "liblcms2.so.2 ${lcms2}"; do
+        set -- $v; grep -Eq "^[[:space:]]+$1 =>[[:space:]]+$2/" "$W/ldd" || { echo "FATAL: openjpeg: $1 not from $2" >&2; cat "$W/ldd" >&2; exit 1; }
+      done
+      printf 'P6\n4 2\n255\n' > "$W/a.ppm"; printf '\377\000\000\000\377\000\000\000\377\377\377\377\000\000\000\200\200\200\001\002\003\375\376\377' >> "$W/a.ppm"
+      "$out/bin/opj_compress" -n 1 -i "$W/a.ppm" -o "$W/a.jp2" >&2 && "$out/bin/opj_decompress" -i "$W/a.jp2" -o "$W/b.ppm" >&2
+      # opj_decompress writes its own header ("# OpenJPEG-2.5.4" comment): compare the 24 pixel bytes
+      [ "$(tail -c 24 "$W/a.ppm" | od -An -tx1)" = "$(tail -c 24 "$W/b.ppm" | od -An -tx1)" ] && head -2 "$W/b.ppm" | grep -q "^# OpenJPEG-2.5.4" \
+        || { echo "FATAL: openjpeg lossless round trip" >&2; od -c "$W/b.ppm" | head -4 >&2; exit 1; }
+      ${chk ''"$out/bin/opj_dump" -i "$W/a.jp2"'' "x1=4, y1=2"}
+      ${tprog ''#include <openjpeg.h>
+#include <stdio.h>
+int main(void){ printf("ok %s\n", opj_version()); return 0; }'' "-I$out/include/openjpeg-2.5 -lopenjp2"}
+      ${chk ''"$W/t"'' "^ok 2\\.5\\.4$"}
+      # upstream installs its man pages only with BUILD_DOC (which also needs doxygen for HTML), off in nixpkgs, so nixpkgs' out has none:
+      # the four pages by hand (a page added later would republish the out)
+      mkdir -p "$out/share/man/man1" "$out/share/man/man3"; cp doc/man/man1/opj_*.1 "$out/share/man/man1/"; cp doc/man/man3/libopenjp2.3 "$out/share/man/man3/"
+      [ "$(ls "$out/share/man/man1" | wc -l)" -eq 3 ] || { echo "FATAL: openjpeg man pages" >&2; exit 1; }
+      ${noBuildDir}
+    '';
+  };
+
   # zeromq (MPL-2.0): libzmq, the ZeroMQ messaging library, cmake, shared, with CURVE on libsodium, no drafts, nixpkgs' three patches
   # and its CMAKE_INSTALL_FULL_* postPatch. Source: the 4.3.5 release tarball (the same code as nixpkgs' tag archive, plus the generated
   # docs), whose doc/*.3 and *.7 are the asciidoc man pages nixpkgs builds: installed from there (solnix has no asciidoc). Poller: devpoll,
