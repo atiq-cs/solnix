@@ -75,7 +75,9 @@ wifi_gw() {	# $1 link: its lease's router. dhcpinfo hides option 3 when the link
 			i += 2 + b[i+1] } }'
 }
 
-leased() { ipadm show-addr -p -o type,state "$1/" 2>/dev/null | grep -q '^dhcp:ok$'; }
+# a bound lease: until dhcpagent binds, the addrobj is already "ok" with ADDR "?" (0.0.0.0, ipadm.c print_sa_cb), and a
+# route via the last lease's router (the saved .dhc) fails "Network is unreachable" (lixi's log, every boot 10-28..11-11)
+leased() { ipadm show-addr -p -o type,state,addr "$1/" 2>/dev/null | grep -q '^dhcp:ok:[0-9][0-9]*\.'; }
 rt() {	# NETD_DRY=1 logs the route change instead of making it (a test aid)
 	[ "${NETD_DRY:-0}" = 1 ] && { log "dry: route $*"; return; }
 	route -n "$@" 2>&1 | while read -r x; do log "route $*: $x"; done
