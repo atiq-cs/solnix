@@ -68,16 +68,21 @@ let
   nvMedia = gfx.onMedia && gfx.nvidia.onMedia;
   wantNv = nvMedia || nvBound;
   wantGpu = gfx.onMedia || i915Bound || nvBound;
-  gpuDrivers = [ { name = "i915"; perm = "0666 root sys"; aliases = if i915Bound then s.i915Aliases else [ ]; } ]
+  # DRM minors as NixOS (systemd 50-udev-default.rules): renderD* 0666 for everyone; the OpenBSD drm core refuses
+  # every ioctl not marked DRM_RENDER_ALLOW on a render minor (drm_ioctl.c drm_ioctl_permit), so no modeset and no
+  # master there. card* and i915's text-0 (the firmware framebuffer, gfxp_fb) stay 0600 root: card's first opener
+  # becomes DRM master, and the seat (seatd, as root) hands the compositor its fd.
+  drmPerms = { perm = "0600 root sys"; minorPerms = [ "renderD* 0666 root sys" ]; };
+  gpuDrivers = [ ({ name = "i915"; aliases = if i915Bound then s.i915Aliases else [ ]; } // drmPerms) ]
     ++ lib.optionals nvMedia nvDrivers;
   nvDrivers = [
       { name = "nvidia"; perm = "0666 root sys"; aliases = if nvBound then s.nvidiaAliases else [ ]; }
       { name = "nvidia_modeset"; perm = "0666 root sys"; aliases = [ ]; }
       { name = "nvidia_i2c"; perm = null; aliases = [ ]; }
     ];
-  # nvidia-drm (hardware.graphics.nvidia.drm): a major after nvidia's. card/renderD 0666 as i915's; its ctl minor is
-  # root-only in the driver (drv_priv). Its DRM minors use i915's ddi_display:drm devlink line.
-  nvDrmDrivers = lib.optionals gfx.nvidia.drm [ { name = "nvidia_drm"; perm = "0666 root sys"; aliases = [ ]; } ];
+  # nvidia-drm (hardware.graphics.nvidia.drm): a major after nvidia's. card/renderD as i915's; its ctl minor is
+  # root-only (0600, and drv_priv in the driver). Its DRM minors use i915's ddi_display:drm devlink line.
+  nvDrmDrivers = lib.optionals gfx.nvidia.drm [ ({ name = "nvidia_drm"; aliases = [ ]; } // drmPerms) ];
   gpuDb = if wantGpu then s.mkDriversDbWith wifiDb gpuDrivers else wifiDb;
   gpuKern0 = if wantGpu then s.mkGpuKernel wifiKern {
     nvidia = wantNv;

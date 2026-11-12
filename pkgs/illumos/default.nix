@@ -1209,11 +1209,14 @@ let
   nvidiaAliases = [ "pciex10de,2420" ];
 
   # mkDriversDbWith base drivers -- `base` (a driver DB shaped like `drivers`)
-  # with each of `drivers` ({ name; perm; aliases; }) added the mkIwxDriversDb
+  # with each of `drivers` ({ name; perm; aliases; minorPerms ? [ ]; }) added the mkIwxDriversDb
   # way: name_to_major at the lowest free major, "minor_perm <name>:* <perm>"
-  # unless perm is null, and one driver_aliases line per alias. No aliases =
+  # unless perm is null, then "<name>:<m>" for each of minorPerms ("<minor-glob> <mode> <owner> <group>"),
+  # and one driver_aliases line per alias. No aliases =
   # the system knows the driver (modload, a runtime update_drv -a work) but
-  # binds it to nothing at boot.
+  # binds it to nothing at boot. minorPerms go AFTER the * line: the kernel tries
+  # a driver's named minors before its wildcard (modctl.c dev_minorperm), but
+  # devfsadm's getattr takes the LAST line that matches (zfs:zfs, asy:*,cu).
   mkDriversDbWith = base: drivers: derivation {
     name = "illumos-driver-db-gpu";
     system = "x86_64-solaris";
@@ -1221,13 +1224,13 @@ let
     PATH = "/usr/bin:/usr/sbin";
     inherit base;
     spec = builtins.concatStringsSep "\n" (map (d:
-      "${d.name}|${if d.perm == null then "" else d.perm}|${builtins.concatStringsSep " " d.aliases}") drivers);
+      "${d.name}|${if d.perm == null then "" else d.perm}|${builtins.concatStringsSep " " d.aliases}${if d ? minorPerms then "|" + builtins.concatStringsSep ";" d.minorPerms else ""}") drivers);
     args = [ "-c" ''
       set -eu
       mkdir -p "$out"
       cp "$base"/* "$out"/
       chmod u+w "$out"/name_to_major "$out"/driver_aliases "$out"/minor_perm
-      printf '%s\n' "$spec" | while IFS='|' read -r name perm aliases; do
+      printf '%s\n' "$spec" | while IFS='|' read -r name perm aliases mperms; do
         [ -n "$name" ] || continue
         if ! awk '{print $1}' "$out/name_to_major" | grep -qx "$name"; then
           used=$(awk '{print $2}' "$out/name_to_major" | sort -n)
@@ -1244,6 +1247,13 @@ let
         want=$(set -- $aliases; echo $#)
         [ "$na" -eq "$want" ] || { echo "FATAL: $name has $na aliases, want $want" >&2; exit 1; }
         [ -z "$perm" ] || grep -q "^$name:\*" "$out/minor_perm" || { echo "FATAL: no $name minor_perm" >&2; exit 1; }
+        printf '%s\n' "$mperms" | tr ';' '\n' | while read -r m; do
+          [ -n "$m" ] || continue
+          grep -qxF "$name:$m" "$out/minor_perm" || printf '%s:%s\n' "$name" "$m" >> "$out/minor_perm"
+          # after the wildcard line, or devfsadm (last match wins) applies the wildcard's mode
+          awk -v w="$name:*" -v l="$name:$m" '$1==w {s=NR} $0==l {p=NR} END {exit !(p && (!s || p > s))}' "$out/minor_perm" \
+            || { echo "FATAL: $name:$m is not after $name:*" >&2; exit 1; }
+        done
         # DRM minors (DDI_NT_DISPLAY_DRM, "ddi_display:drm") get /dev/dri/<minor>, as OI's
         # drm package adds: devfsadm has no built-in rule for that node type. Type only: a
         # devlink.tab "name=" selects the node name (display), not the driver, and matched

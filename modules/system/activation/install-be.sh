@@ -385,6 +385,21 @@ mv etc/devlink.tab.new etc/devlink.tab || die "laying /etc/devlink.tab"
 sed '/^# solnix drivers (generated)$/,$d' etc/dacf.conf > etc/dacf.conf.new
 [ ! -e "$R$DRV/dacf.conf.add" ] || { echo '# solnix drivers (generated)'; cat "$R$DRV/dacf.conf.add"; } >> etc/dacf.conf.new
 mv etc/dacf.conf.new etc/dacf.conf || die "laying /etc/dacf.conf"
+# DRM render nodes are 0666 by minor_perm (wireless-iwx.nix drmPerms, NixOS's udev default). The stock
+# logindevperm(5) hands /dev/dri/* to the console user and back to root:root 0600 at logout, and devfs
+# keeps that chmod as a shadow node in this dataset's /devices, which then wins over minor_perm in every
+# BE cloned from it (measured on lixi: card0/renderD128 root:root 0600 since a console logout on 10-27).
+# So logindevperm keeps card* only (the seat's nodes), and a cloned BE drops its DRM shadow nodes.
+lay_drm_perms() {
+  sed 's,/dev/dri/\*,/dev/dri/card[0-9]+,' etc/logindevperm > etc/logindevperm.new && mv etc/logindevperm.new etc/logindevperm \
+    && chown 0:3 etc/logindevperm && chmod 0644 etc/logindevperm || die "laying /etc/logindevperm"
+  # only a BE dataset's own /devices (devfs's attribute store), never a mounted devfs or the running root
+  if [ -z "${SOLNIX_LIVE:-}" ] && [ "$(cd "$ROOT" && pwd -P)" != / ] && [ -d devices ] && [ "$(df -n devices 2>/dev/null | awk '{print $NF}')" = zfs ]; then
+    find devices -type c \( -name '*:card[0-9]' -o -name '*:card[0-9][0-9]' -o -name '*:renderD[0-9][0-9][0-9]' \) \
+      -exec rm -f {} + || die "dropping DRM shadow nodes"
+  fi
+}
+lay_drm_perms
 [ -e etc/path_to_inst ] || : > etc/path_to_inst
 # pkcs11_tpm.so NEEDs libtspi (trousers), which is not built: every libpkcs11
 # consumer that loads it dies in ld.so.1 (measured: `digest -a sha1` killed, so

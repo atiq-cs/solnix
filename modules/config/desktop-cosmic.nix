@@ -8,7 +8,8 @@
 #   * SMF services instead of systemd units: greetd, cosmic-greeter-daemon, the
 #     system bus is illumos's own dbus service, and a seatd daemon (NixOS without logind).
 #   * PAM is illumos libpam: both services fall to the stock pam.conf "other" stack.
-#   * /dev/dri access follows illumos's logindevperm (the console user owns it).
+#   * /dev/dri as NixOS: renderD* 0666 for everyone (minor_perm, modules/config/wireless-iwx.nix drmPerms);
+#     card* 0600 root, opened for the compositor by seatd (root) through libseat, as logind does on NixOS.
 #   * no xdg-desktop-portal-cosmic (PipeWire + GStreamer). cosmic-settings-daemon is in, with its PipeWire
 #     audio backend gated off (no audio devices), as NixOS lists it in corePkgs.
 #   * the session does not start the cosmic-greeter screen locker (no logind Lock signal; cosmic-apps-src-fixup.py).
