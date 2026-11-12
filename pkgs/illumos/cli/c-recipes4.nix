@@ -2738,8 +2738,16 @@ int main(void){ vpx_codec_ctx_t c; int r = vpx_codec_dec_init(&c, vpx_codec_vp9_
       f=Source/Lib/Codec/svt_malloc.h
       [ "$(grep -c 'if (posix_memalign((void\*\*)&(pointer), ALVALUE, size) != 0) \\$' $f)" = 1 ] || { echo "FATAL: svt-av1 memalign anchor" >&2; exit 1; }
       sed -i 's/if (posix_memalign((void\*\*)&(pointer), ALVALUE, size) != 0) \\$/if (posix_memalign((void**)\&(pointer), ALVALUE, (size) ? (size) : 1) != 0) \\/' $f
-      ${cmakeB "-DSVT_AV1_LTO=ON -DBUILD_TESTING=OFF"}
+      # gate B8: illumos ld names an STT_FILE symbol after the -o path as given, and nasm one after each input path. Upstream writes its
+      # outputs to ''${PROJECT_SOURCE_DIR}/Bin, outside the build tree, so cmake links with an absolute -o: a dir inside _b gets a relative
+      # one. nasm takes its sources through nasmRel (relative paths).
+      ${nasmRel}
+      ${cmakeB ''-DSVT_AV1_LTO=ON -DBUILD_TESTING=OFF -DCMAKE_ASM_NASM_COMPILER="$W/nasm" -DCMAKE_OUTPUT_DIRECTORY="$PWD/_b/Bin/Release/"''}
       grep -q '^Threads_FOUND:INTERNAL=TRUE$\|^CMAKE_HAVE_LIBC_PTHREAD:INTERNAL=1$' _b/CMakeCache.txt || { echo "FATAL: svt-av1: cmake probes failed" >&2; exit 1; }
+      [ -n "$(find _b -name '*.asm.o' | head -1)" ] || { echo "FATAL: svt-av1: no nasm objects" >&2; exit 1; }
+      for f in "$out/lib/amd64/libSvtAv1Enc.so.4.1.0" "$out/bin/SvtAv1EncApp"; do
+        ! /usr/bin/elfdump -s "$f" | grep -F "$W" || { echo "FATAL: svt-av1: $f names the build dir" >&2; exit 1; }
+      done
       ${tprog ''#include <svt-av1/EbSvtAv1Enc.h>
 #include <stdio.h>
 int main(void){ printf("ok %s\n", svt_av1_get_version()); return 0; }'' "$out/lib/amd64/libSvtAv1Enc.so"}
