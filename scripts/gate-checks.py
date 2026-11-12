@@ -50,16 +50,22 @@ PSLICE_PATH = "/usr/gnu/bin:/usr/bin:/usr/sbin:/sbin"
 A64SEED_KEYS = {"PATH", "SOURCE_DATE_EPOCH", "abisArg", "btPath", "build", "buildKey", "builder", "depsArg", "gate", "gcc", "gccLib",
                 "gstripCands", "linkDepsArg", "name", "out", "pname", "rtDirs", "selfRp", "srcSha256", "srcTar", "stage0", "system"}
 A64GLIBS_KEYS = {"builder", "gate", "libc", "name", "out", "roots", "system", "zlib"}   # seed-main src.nix mkGateLibs (8wdlmw06), exactly
+# sparcv9's gcc 14 (pkgs/illumos/sparcv9/gcc-src.nix, stage0 OI's /usr/gcc/13): its env keys, exactly (measured on 0a3imb4l, sv9gcc)
+SV9GCC_KEYS = {"PATH", "SOURCE_DATE_EPOCH", "buildKey", "builder", "gate", "gccSrc", "gmpSrc", "ldBin", "lib", "libcDir", "mpcSrc", "mpfrSrc",
+               "name", "out", "outputs", "stage0", "system", "tsErrnoPatch", "version", "zeroChecksum"}
 
 def _marker(m, d, clo):
-    """The markers of bootstrap-exempt.tsv. They agree with wave6's pkgs/illumos/path-gate.sh --exempt-check, except pslice, a64seed
-    and a64glibs, which path-gate.sh lacks until the next drv-moving change (see the shortcut at pslice below)."""
+    """The markers of bootstrap-exempt.tsv. They agree with wave6's pkgs/illumos/path-gate.sh --exempt-check, except pslice, a64seed,
+    a64glibs and sv9gccseed, which path-gate.sh lacks until the next drv-moving change (see the shortcut at pslice below)."""
     env = d["env"]
     if m == "seed": return "btPath" in env and env["btPath"] == ""
-    if m == "gccseed": return env.get("stage0") == "/usr/gcc/14" and "gccSrc" in env and "btPath" not in env
+    # x86 only: aarch64's gcc 14 is exempt by exact path (gate2-exemptions.tsv), sparcv9's by sv9gccseed; without the system test a
+    # sparcv9 drv naming stage0 /usr/gcc/14 passed here (sv9gcc selftest)
+    if m == "gccseed": return (env.get("stage0") == "/usr/gcc/14" and "gccSrc" in env and "btPath" not in env
+                               and d["system"] == "x86_64-solaris")
     if m == "slice": return "gate" in env and "filesArg" in env
-    # shortcut: path-gate.sh --exempt-check lacks pslice, a64seed and a64glibs until the next drv-moving change (it is an inputSrc of
-    # every store-only drv); until then it reports pslice and a64seed drvs FAIL (unknown marker: fail closed); drv-gate.sh (this
+    # shortcut: path-gate.sh --exempt-check lacks pslice, a64seed, a64glibs and sv9gccseed until the next drv-moving change (it is an
+    # inputSrc of every store-only drv); until then it reports those drvs FAIL (unknown marker: fail closed); drv-gate.sh (this
     # function) is authoritative.
     if m == "pslice":   # mk-proto-slice (wave6v; its env keys measured on illumos-early/-zfs/-smf): exact keys, exact PATH, and every
         # input drv is the gate proto's, a slice/pslice, or an output named in depsArg (zlib/libxml2: judged as themselves)
@@ -91,6 +97,10 @@ def _marker(m, d, clo):
             x = clo[i]; op = x["outputs"].get("out", {}).get("path")
             got.append(next((k for k, ok in role.items() if op == env[k] and ok(x)), None))
         return sorted(got, key=str) == sorted(role)
+    # sparcv9's gcc 14 compiled by OI's IPS gcc-13 (gccseed's twin: OI's sparc catalog has no gcc-14): exact keys, sparcv9 only
+    if m == "sv9gccseed":
+        return (set(env) == SV9GCC_KEYS and d["system"] == env["system"] == "sparcv9-solaris" and d["builder"] == "/usr/bin/bash"
+                and env["stage0"] == "/usr/gcc/13")
     if m == "fod": return env.get("outputHashMode") == "recursive" and len(env.get("outputHash", "")) + 1 > 40 and "btPath" not in env
     if m == "seedenv":   # every path it links is an output of an input drv that is itself seed, gccseed or seedenv
         ps = (env.get("paths", "") + " " + env.get("gnutar", "")).split()
@@ -1294,6 +1304,13 @@ def selftest():
         e = {"gate": GP64, "libc": po_(ld_), "zlib": po_(zd), "roots": "libsec.so.1 libgen.so.1"}; e.update(extra or {})
         return fake_drv(tag, ["-c", "set -eu; export PATH=/usr/gnu/bin:/usr/bin\ncp $gate/lib/libsec.so.1 $out/lib/"], e,
                         idrvs=[gp64, ld_, zd] + list(more), name=name, system=system)
+    # sparcv9's gcc 14 (sv9gccseed): the measured shape of 0a3imb4l (20 env keys, host PATH, stage0 /usr/gcc/13)
+    SV9 = "sparcv9-solaris"
+    def SV(tag, extra=None, system=SV9, name="gcc-14.3.0", drop=None, builder="/usr/bin/bash"):
+        e = {k: "x" for k in SV9GCC_KEYS - {"name", "out", "builder", "system"}}
+        e.update({"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin", "stage0": "/usr/gcc/13", "outputs": "out lib"}); e.update(extra or {})
+        if drop: del e[drop]
+        return fake_drv(tag, ["-c", "export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin"], e, name=name, system=system, builder=builder)
     cases = [  # (label, drv, expect PASS?, check id that must appear)
         ("good: store-only PATH, store MAKE, CA .sh", D("good", args=[good_sh], srcs=[good_sh], env={"PATH": T + "/bin"}), True, None),
         ("A1 env PATH=/usr/bin", D("a1env", env={"PATH": T + "/bin:/usr/bin"}), False, "A1-path"),
@@ -1354,6 +1371,19 @@ def selftest():
         ("NOT exempt: a64glibs whose libc input is an x86 libc slice", GL("glh", libc=slc), False, "A1-path"),
         ("NOT exempt: a64glibs whose env zlib is not its zlib input", GL("gli", extra={"zlib": po_(zst)}), False, "A1-path"),
         ("NOT exempt: a64glibs shape under another gate-libs name (-ssh)", GL("glg", name="illumos-gate-libs-ssh"), False, "A1-path"),
+        ("exempt: x86 gccseed gcc 14 (stage0 /usr/gcc/14, gccSrc, no btPath)", fake_drv("gsx", ["-c", "export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin"], {"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin", "stage0": "/usr/gcc/14", "gccSrc": "x"}, name="gcc-14.3.0"), True, "EXEMPT"),
+        ("NOT exempt: x86 gccseed shape on aarch64-solaris", fake_drv("gsa", ["-c", "export PATH=/usr/gnu/bin:/usr/bin:/usr/sbin"], {"PATH": "/usr/gnu/bin:/usr/bin:/usr/sbin", "stage0": "/usr/gcc/14", "gccSrc": "x"}, name="gcc-14.3.0", system="aarch64-solaris"), False, "A1-path"),
+        # sv9gccseed: sparcv9's gcc 14 from OI's /usr/gcc/13 (the measured shape of 0a3imb4l)
+        ("exempt: sv9gccseed gcc 14 (sparcv9, its 20 keys, stage0 /usr/gcc/13)", SV("sva"), True, "EXEMPT"),
+        ("NOT exempt: sv9gccseed shape on x86_64-solaris", SV("svb", system="x86_64-solaris"), False, "A1-path"),
+        ("NOT exempt: sv9gccseed shape with stage0 /usr/gcc/14", SV("svc", extra={"stage0": "/usr/gcc/14"}), False, "A1-path"),
+        ("NOT exempt: sv9gccseed shape with stage0 /usr/gcc/12", SV("svd", extra={"stage0": "/usr/gcc/12"}), False, "A1-path"),
+        ("NOT exempt: sv9gccseed shape with one more env key (btPath)", SV("svf", extra={"btPath": ""}), False, "A1-path"),
+        ("NOT exempt: sv9gccseed shape with one more env key (LDFLAGS)", SV("svg", extra={"LDFLAGS": "-L/x"}), False, "A1-path"),
+        ("NOT exempt: sv9gccseed shape with one key missing (tsErrnoPatch)", SV("svh", drop="tsErrnoPatch"), False, "A1-path"),
+        ("NOT exempt: sv9gccseed shape under another name (gcc-15.3.0)", SV("svi", name="gcc-15.3.0"), False, "A1-path"),
+        ("NOT exempt: sv9gccseed shape with a store builder", SV("svj", builder=STORE + "5" * 32 + "-bash"), False, "A1-path"),
+        ("NOT exempt: x86 gccseed shape on sparcv9 (stage0 /usr/gcc/13, x86 keys)", fake_drv("svk", ["-c", "export PATH=/usr/gnu/bin:/usr/bin"], {"stage0": "/usr/gcc/13", "gccSrc": "x"}, name="gcc-14.3.0", system=SV9), False, "A1-path"),
     ]
     ca = lambda p: FAKE_CA.get(p, True)
     bad = selftest_out() + selftest_log() + selftest_b19()
