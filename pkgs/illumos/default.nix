@@ -1512,7 +1512,10 @@ in
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
     noto-fonts-color-emoji xdg-utils xdg-user-dirs solnix-help solnix-nm solnix-power solnix-accounts;
   inherit llvmPackages llvmPackages_23 llvmPackages_21;
-  inherit (llvmPackages) llvm lld lldb;
+  # top-level llvm and lld are 21.1.8, as in nixpkgs (llvm = llvmPackages.llvm, nixpkgs' default set = 21); lldb stays on 23:
+  # there is no lldb 21 (the illumos port is 23-only). llvmPackages (COSMIC's libclang) stays 23.
+  inherit (llvmPackages_21) llvm lld;
+  inherit (llvmPackages) lldb;
   clang-unwrapped = llvmPackages.clang;   # nixpkgs' names: clang is the wrapped compiler
   clang_23 = llvmPackages.clang-wrapper;
   # nixpkgs' versioned top-level names for 21.1.8 (llvm_21 = llvmPackages_21.llvm, clang_21 = its wrapped clang); no lldb_21
