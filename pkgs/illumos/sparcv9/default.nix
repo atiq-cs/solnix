@@ -1,6 +1,6 @@
 # pkgs/illumos/sparcv9 -- the native sparcv9 set (lixu: sun's zone), first rung: the gate proto (./gate.nix), its libc slice, and a
-# seed zlib built with OI's gcc 13 (stage0, a host build tool, as x86's seed used /usr/gcc/14). See floki
-# /scratch/solnix/lixu/SPARCV9-SET-PLAN.md (S0 + the zlib spike); gcc from source (S1) and the store-only final set (S3) come next.
+# seed zlib built with OI's gcc 13 (stage0, a host build tool, as x86's seed used /usr/gcc/14), and the ld slice (sv9-2 S2a: floki
+# /scratch/solnix/lixu3/SPARC-ROWS-PLAN.md). gcc 14.3.0 from source (S2b), the seed build tools (S2c) and gcc 15 (S2d) come next.
 # mk-src-pkg.nix's x86 text serves sparcv9 unchanged but for the LP64 lib dir (lib/amd64 -> lib/sparcv9), rewritten here (sparcv9Fix)
 # so the shared file and every x86/aarch64 drv stay as they are.
 { system ? "sparcv9-solaris" }:
@@ -16,6 +16,30 @@ let
       ++ map (o: "usr/lib/sparcv9/${o}") [ "crt1.o" "crti.o" "crtn.o" "values-Xa.o" "values-Xc.o" "values-Xs.o" "values-Xt.o"
         "values-xpg4.o" "values-xpg6.o" "libc.so" "libm.so" "libsocket.so" "libnsl.so" "libresolv.so" "libelf.so" ]
       ++ [ "usr/include" ];
+  };
+  # usr/bin/ld: the proto tarball holds the proto's libraries and headers only (./mk-proto-tarball.sh), so the link-editor driver
+  # (26 KB; its libld/liblddbg/libumem/libldstab are in the proto) is pinned on its own: OI developer/linker@0.5.11-2025.0.0.21764,
+  # the proto's osnet build (31d3d510), packed in zone lixu like the proto (pkg verify OK, sha1 == the IPS manifest's, two packs
+  # byte-identical; banked floki /scratch/solnix-bank/sv9gcc-20261112/). The same builtin:unpack-channel as ./gate.nix: no host tool.
+  # shortcut: until infra hosts the URL, `nix-store --add-fixed sha256 proto-ld_sparcv9.tar.gz` first (as ./gate.nix says).
+  ldProto = derivation {
+    name = "illumos-sparcv9-ld-proto"; system = "builtin"; builder = "builtin:unpack-channel"; channelName = "ld";
+    src = import <nix/fetchurl.nix> {
+      url = "https://s3.solnix.io/solnix-cache/ami/sparcv9-ld-oi202604-21764/proto-ld_sparcv9.tar.gz";
+      sha256 = "d8b47fdf3fd0d4158ed0d6552d1e1537fb83b71a686d4bc80793b12485fc4edc";
+    };
+  };
+  # ld: the Solaris link-editor as a store slice (x86's/aarch64's `ld`), so collect2 runs it, not the host's /usr/bin/ld (gcc -Qy
+  # records the ld version in every ELF). usr/bin/ld reaches lib/sparcv9 by $ORIGIN/../../lib/sparcv9, libldstab by $out/usr/lib/sparcv9,
+  # libelf + libc come from the libc slice.
+  ld = import ../mk-illumos-component.nix {
+    inherit gate system;
+    name = "ld";
+    originParts = [ "$ORIGIN" "$ORIGIN/../../lib/sparcv9" ];
+    files = [ "lib/sparcv9/libld.so.4" "lib/sparcv9/liblddbg.so.4" "lib/sparcv9/libumem.so.1" "usr/lib/sparcv9/libldstab.so.1" ];
+    extraFiles = [ { src = "${ldProto}/ld/usr/bin/ld"; dst = "usr/bin/ld"; } ];
+    selfLibDirs = [ "usr/lib/sparcv9" ];
+    depRunpaths = [ "${libc}/lib/sparcv9" ];
   };
   # the 64-bit ISA dir is lib/sparcv9 where x86's is lib/amd64; buildKey recomputed the way mk-src-pkg computes it
   sparcv9Fix = d: let
@@ -34,7 +58,7 @@ let
     runtimeLibDirs = [ "${libc}/lib/sparcv9" ]; } (args // { inherit system; }));
 in
 {
-  inherit libc;
+  inherit libc ld;
   # as ../aarch64/src.nix's zlib (OI symbol-version mapfile), LP64 only; --libdir first: zlib's configure is not autoconf
   zlib = mkSrcPkg {
     pname = "zlib"; version = "1.3.2";
