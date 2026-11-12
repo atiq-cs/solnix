@@ -169,4 +169,43 @@ TPROG
       ${noBuildDir}
     '';
   };
+
+  # lua5_4 (MIT): Lua 5.4, the interpreter, luac and liblua.so (nixpkgs' lua-dso.make: liblua.so.5.4), its own Makefile, on readline,
+  # as nixpkgs' interpreter.nix: pname is the queue's attr (lua5_4; nixpkgs' drv pname is lua), compat 5.3 off, LUA_ROOT = $out, the
+  # nixpkgs pkg-config files, MYLIBS=-lncurses. PLAT=solaris is nixpkgs' isSunOS answer, and upstream's solaris target links no readline
+  # (nixpkgs reads readline only through linux-readline): the interpreter has no line editing, as nixpkgs' lua on SunOS.
+  lua5_4 = mkSrcPkg {
+    pname = "lua5_4"; version = "5.4.9";
+    src = { url = "https://www.lua.org/ftp/lua-5.4.9.tar.gz"; sha256 = "2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6"; };
+    deps = [ world base.ncurses ]; nativeTools = hostTools;
+    build = ''
+      grep -q '^#define LUA_ROOT	"/usr/local/"$' src/luaconf.h || { echo "FATAL: lua LUA_ROOT anchor" >&2; exit 1; }
+      sed -i "s@#define LUA_ROOT[[:space:]]*\"/usr/local/\"@#define LUA_ROOT  \"$out/\"@g" src/luaconf.h
+      sed -e '1s/^/LUA_SO = liblua.so/' -e 's/ALL_T *= */&$(LUA_SO) /' -i src/Makefile
+      cat ${npFile "development/interpreters/lua-5/lua-dso.make" "33c0692540c79140291f27f0dd46cc7df82b6ebac29da2a178654644458aaf4b"} >> src/Makefile
+      # GNU -soname: illumos ld's is -h
+      sed -i 's/-Wl,-soname,/-Wl,-h,/' src/Makefile
+      gmake -j''${NIX_BUILD_CORES} INSTALL_TOP="$out" INSTALL_MAN="$out/share/man/man1" R=5.4.9 LDFLAGS=-fPIC V=5.4 PLAT=solaris CC=gcc RANLIB=ranlib \
+        MYLIBS=-lncurses CFLAGS='-O2 -fPIC $(SYSCFLAGS)' solaris >&2
+      gmake INSTALL_TOP="$out" INSTALL_MAN="$out/share/man/man1" R=5.4.9 V=5.4 TO_BIN="lua luac" INSTALL_DATA='cp -d' \
+        TO_LIB="liblua.a liblua.so liblua.so.5.4 liblua.so.5.4.9" install >&2
+      mkdir -p "$out/share/doc/lua-5.4.9" "$out/lib/pkgconfig"; cp doc/*.png doc/*.css doc/*.html "$out/share/doc/lua-5.4.9/"   # 5.4.9 ships no .gif (nixpkgs' glob)
+      rmdir "$out/share/lua/5.4" "$out/lib/lua/5.4" "$out/share/lua" "$out/lib/lua"
+      printf '%s\n' "prefix=$out" "libdir=$out/lib" "includedir=$out/include" "INSTALL_BIN=$out/bin" "INSTALL_INC=$out/include" "INSTALL_LIB=$out/lib" \
+        "INSTALL_MAN=$out/man/man1" "" "Name: Lua" "Description: An Extensible Extension Language" "Version: 5.4.9" "Requires:" "Libs: -L$out/lib -llua" "Cflags: -I$out/include" > "$out/lib/pkgconfig/lua.pc"
+      for n in lua-5.4 lua5.4 lua54; do ln -s "$out/lib/pkgconfig/lua.pc" "$out/lib/pkgconfig/$n.pc"; done
+      /usr/bin/elfdump -d "$out/lib/liblua.so.5.4.9" | grep -Eq 'SONAME +0x[0-9a-f]+ +liblua\.so\.5\.4$' || { echo "FATAL: liblua soname" >&2; exit 1; }
+      ${chk ''"$out/bin/lua" -v'' "^Lua 5\\.4\\.9"}
+      ${chk ''"$out/bin/lua" -e 'print(string.format("ok %s %d %s", _VERSION, 7 // 2, package.path:find("'"$out"'", 1, true) and "root" or "noroot"))' '' "^ok Lua 5\\.4 3 root$"}
+      printf 'return 6 * 7\n' > "$W/a.lua"; "$out/bin/luac" -o "$W/a.luac" "$W/a.lua"
+      ${chk ''"$out/bin/lua" -e 'print("ok", dofile("'"$W/a.luac"'"))' '' "^ok	42$"}
+      ${tprog ''#include <lua.h>
+#include <lauxlib.h>
+#include <lualib.h>
+#include <stdio.h>
+int main(void){ lua_State *L = luaL_newstate(); luaL_openlibs(L); luaL_dostring(L, "return ('solnix'):upper()"); printf("ok %s %s\n", LUA_RELEASE, lua_tostring(L, -1)); lua_close(L); return 0; }'' "-L$out/lib -llua -lm -Wl,-R,$out/lib"}
+      ${chk ''"$W/t"'' "^ok Lua 5\\.4\\.9 SOLNIX$"}
+      ${noBuildDir}
+    '';
+  };
 }
