@@ -4360,4 +4360,143 @@ int r = nlopt_optimize(o, x, &m); printf("ok %d %.4f %.4f\n", r > 0, x[0], x[1])
       ${chk ''"$W/t"'' "^ok 1 1\\.0000 2\\.0000$"}
     '';
   };
+
+
+  # ---- qnew3 batch 2: leaves the x86 queue has jobs for, no other lane's (every source = nixpkgs f4a03c0's, by hash) -------------
+  # gsl (GPL-3.0-or-later): the GNU Scientific Library (libgsl, libgslcblas, gsl-config, gsl-randist, gsl-histogram), autotools, as
+  # nixpkgs: -mno-fma on x86_64 (its tests compare floating-point results that fused multiply-add changes), `make check`. nixpkgs'
+  # one patch is a darwin libtool flag (-no_fixup_chains), so it is not applied here.
+  gsl = mkSrcPkg {
+    pname = "gsl"; version = "2.8";
+    src = { url = "https://ftpmirror.gnu.org/gsl/gsl-2.8.tar.gz";
+            sha256 = "6a99eeed15632c6354895b1dd542ed5a855c0f15d9ad1326c6fe2b2c9e423190"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static CFLAGS="-O2 -g -mno-fma"
+      gmake -j8; gmake -j8 check; gmake install
+      ${tprog ''#include <gsl/gsl_sf_bessel.h>
+#include <gsl/gsl_version.h>
+#include <stdio.h>
+int main(void){ printf("ok %s %.6f\n", gsl_version, gsl_sf_bessel_J0(5.0)); return 0; }'' "-lgsl -lgslcblas -lm"}
+      ${chk ''"$W/t"'' "^ok 2\\.8 -0\\.177597$"}
+      ${chk ''"$out/bin/gsl-config" --libs'' "^-L/nix/store/[a-z0-9]{32}-gsl-2\\.8/lib/amd64 -lgsl -lgslcblas -lm *$"}
+    '';
+  };
+
+  # liburcu (LGPL-2.1-or-later): userspace RCU (liburcu, -memb, -mb, -bp, -qsbr, -cds, -signal, -common), autotools, as nixpkgs: its
+  # 24 unit tests run (nixpkgs' `make check`; here without tap-driver.sh, see below). Upstream lists Solaris as "should work"; its
+  # default flavor falls back from the Linux membarrier syscall to barriers on illumos (sys-membarrier-fallback, the configure default).
+  liburcu = mkSrcPkg {
+    pname = "liburcu"; version = "0.15.7";
+    src = { url = "https://lttng.org/files/urcu/userspace-rcu-0.15.7.tar.bz2";
+            sha256 = "2556b83adc0f9b3ac8024e613e17d014d04c4c49110604ce55fcb14eae32edd3"; };
+    deps = [ world ]; nativeTools = [ bzip2-bin perl ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j8; gmake -j8 check TESTS=   # builds every check program, runs none (TESTS of tests/regression and benchmark are empty)
+      # automake's tap-driver.sh needs gawk (it reads its input with a getline loop the illumos awks end early: measured, a 20-line TAP
+      # stream gives "too few tests run (expected 20, got 0)" under /usr/bin/awk and nawk, all 20 under gawk), and no gawk is served.
+      # So each unit test runs here directly: it must exit 0 and print as many ok lines as its plan, and no "not ok".
+      # The sysfs ones are bash scripts that skip off Linux ("1..0 # skip"), with the env tap-driver.sh's caller gives them.
+      export URCU_TESTS_SRCDIR="$PWD/tests" URCU_TESTS_BUILDDIR="$PWD/tests"
+      n=0 sk=0; for t in $(sed -n '/^TESTS = /,/^$/p' tests/unit/Makefile.am | tr -d '\\' | tr -s ' \t' '\n' | grep '^test_'); do
+        (cd tests/unit && if head -c2 $t | grep -q '#!'; then bash ./$t; else ./$t; fi) > "$W/tap.out" 2>&1 || { echo "FATAL: liburcu unit test $t exited $?" >&2; tail -5 "$W/tap.out" >&2; exit 1; }
+        p=$(sed -n 's/^1\.\.\([0-9]*\).*$/\1/p' "$W/tap.out"); k=$(grep -c '^ok ' "$W/tap.out" || true)
+        [ -n "$p" ] && [ "$p" = "$k" ] && ! grep -q '^not ok' "$W/tap.out" || { echo "FATAL: liburcu unit test $t: plan $p, ok $k" >&2; tail -5 "$W/tap.out" >&2; exit 1; }
+        [ "$p" = 0 ] && sk=$((sk + 1)); n=$((n + 1))
+      done
+      [ $n = 24 ] && [ $sk = 6 ] || { echo "FATAL: liburcu: $n unit tests ran ($sk skipped), want 24 (6: the Linux sysfs ones)" >&2; exit 1; }
+      echo "liburcu: 24 unit tests PASS, 6 of them skip off Linux (plan = ok count, exit 0)" >&2
+      gmake install
+      ${tprog ''#include <urcu.h>
+#include <stdio.h>
+#include <stdlib.h>
+struct n { int v; }; static struct n *g;
+int main(void){ rcu_register_thread(); struct n *a = malloc(sizeof *a); a->v = 7; rcu_assign_pointer(g, a);
+rcu_read_lock(); int v = rcu_dereference(g)->v; rcu_read_unlock();
+struct n *b = malloc(sizeof *b); b->v = 8; struct n *o = rcu_xchg_pointer(&g, b); synchronize_rcu(); free(o);
+rcu_read_lock(); int w = rcu_dereference(g)->v; rcu_read_unlock(); rcu_unregister_thread(); printf("ok %d %d\n", v, w); return 0; }'' "-lurcu -lpthread"}
+      ${chk ''"$W/t"'' "^ok 7 8$"}
+    '';
+  };
+
+  # libdbi (LGPL-2.1-or-later): the database-independent abstraction layer (drivers are separate packages, libdbi-drivers), autotools,
+  # as nixpkgs. Its docs need openjade (not in nixpkgs' build either: the configure probe finds none and skips them).
+  libdbi = mkSrcPkg {
+    pname = "libdbi"; version = "0.9.0";
+    src = { url = "https://downloads.sourceforge.net/libdbi/libdbi-0.9.0.tar.gz";
+            sha256 = "dafb6cdca524c628df832b6dd0bf8fabceb103248edb21762c02d3068fca4503"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-docs
+      gmake -j8; gmake install
+      # no driver installed: an empty driver dir opens with 0 drivers, a missing one fails (-1)
+      mkdir "$W/drv"
+      ${tprog ''#include <dbi/dbi.h>
+#include <stdio.h>
+int main(int c, char **v){ dbi_inst i, j; int n = dbi_initialize_r(v[1], &i), m = dbi_initialize_r(v[2], &j);
+printf("ok %d %d %s %u\n", n, m, dbi_version(), dbi_version_numeric()); dbi_shutdown_r(i); return 0; }'' "-ldbi"}
+      ${chk ''"$W/t" "$W/drv" "$W/none"'' "^ok 0 -1 libdbi v0\\.9\\.0 900$"}
+    '';
+  };
+
+  # judy (LGPL-2.1-or-later): Judy arrays (libJudy: Judy1, JudyL, JudySL, JudyHS) and their man pages, autotools, as nixpkgs: its three
+  # patches (CC_FOR_BUILD for the table generators, a C99 flexible array member for JudySL's struct hack, and no build date in the
+  # generated man pages), serial make, its test suite (`make -C test check-TESTS`).
+  judy = mkSrcPkg {
+    pname = "judy"; version = "1.0.5";
+    src = { url = "https://downloads.sourceforge.net/judy/Judy-1.0.5.tar.gz";
+            sha256 = "d2704089f85fdb6f2cd7e77be21170ced4b4375c03ef1ad4cf1075bd414a63eb"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ [ gnupatch ] ++ hostTools;
+    build = ''
+      for p in ${npPatch "ju/judy/cross.patch" "26cc16e2aacd79bb4016d092e4718993177fb61747fdc255290168d834e1e951"} \
+               ${npPatch "ju/judy/no-struct-hack.patch" "e8792389ed7db7fa160d3bed0b884cfdc910969c77bd24afc1dcabe23127e596"} \
+               ${npPatch "ju/judy/fix-source-date.patch" "869ea24b84abbd18d5005c1e2a3eba50dd8a10d1958f62da111083e2a31e986e"}; do patch -p1 < "$p"; done
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static CC_FOR_BUILD="$CC"
+      gmake; gmake -C test check-TESTS; gmake install
+      ${tprog ''#include <Judy.h>
+#include <stdio.h>
+int main(void){ Pvoid_t a = NULL; PWord_t v; Word_t i, n = 0, s = 0; int r;
+for (i = 1; i <= 1000; i++) { JLI(v, a, i * 3); *v = i; }
+i = 0; JLF(v, a, i); while (v) { n++; s += *v; JLN(v, a, i); }
+Pvoid_t b = NULL; J1S(r, b, 42); J1T(r, b, 42); Word_t f; JLFA(f, a); J1FA(f, b);
+printf("ok %lu %lu %d\n", (unsigned long)n, (unsigned long)s, r); return 0; }'' "-lJudy"}
+      ${chk ''"$W/t"'' "^ok 1000 500500 1$"}
+      m=$(ls "$out"/share/man/man3/Judy.3 "$out"/share/man/man3/Judy 2>/dev/null | head -1)
+      [ -n "$m" ] && grep -q '^.\\" Auto-translated to nroff -man from ' "$m" && ! grep -q 'Auto-translated.* at ' "$m" || { echo "FATAL: judy man pages" >&2; exit 1; }
+    '';
+  };
+
+  # lzip (GPL-2.0-or-later): the lossless LZMA-based compressor, its own configure, as nixpkgs (its flags, `make check`); the man and
+  # info pages in the one out.
+  lzip = mkSrcPkg {
+    pname = "lzip"; version = "1.26";
+    src = { url = "https://download.savannah.gnu.org/releases/lzip/lzip-1.26.tar.gz";
+            sha256 = "641cf30961525cbe3b340cc883436c8854e9f5032f459f444de4782b621e6572"; };
+    deps = [ world ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" CPPFLAGS=-DNDEBUG CFLAGS=-O3 CXXFLAGS=-O3 CXX="$CXX"
+      gmake -j8; gmake check; gmake install install-man
+      printf 'solnix lzip\n%.0s' $(seq 1 100) > "$W/in"
+      ${chk ''"$out/bin/lzip" -9 -c "$W/in" > "$W/in.lz" && "$out/bin/lzip" -t "$W/in.lz" && "$out/bin/lzip" -dc "$W/in.lz" | cmp - "$W/in" && echo same'' "^same$"}
+    '';
+  };
+
+  # potrace (GPL-2.0-or-later): bitmap tracing (potrace, mkbitmap) and its library (--with-libpotrace), on the served zlib, autotools,
+  # as nixpkgs (`make check`).
+  potrace = mkSrcPkg {
+    pname = "potrace"; version = "1.16";
+    src = { url = "https://potrace.sourceforge.net/download/1.16/potrace-1.16.tar.gz";
+            sha256 = "be8248a17dedd6ccbaab2fcc45835bb0502d062e40fbded3bc56028ce5eb7acc"; };
+    deps = [ world zlib ]; nativeTools = hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --with-libpotrace
+      gmake -j8; gmake check; gmake install
+      # a 4x4 black square on white, as a PBM: one closed path in the SVG
+      printf 'P1\n8 8\n00000000\n00000000\n00111100\n00111100\n00111100\n00111100\n00000000\n00000000\n' > "$W/sq.pbm"
+      ${chk ''"$out/bin/potrace" -s -o - "$W/sq.pbm" | grep -c "<path"'' "^1$"}
+      ${chk ''"$out/bin/potrace" --version | head -1'' "^potrace 1\\.16\\."}
+    '';
+  };
 }
