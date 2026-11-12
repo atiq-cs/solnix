@@ -87,13 +87,6 @@ in {
   # flex 2.6.5, automake 1.20, hunspell 1.7.6 (the queue's versions): cli/ recipes both arches share, bumped here for aarch64 only with
   # wave8's exact strings (floki wave8/SHARED-BUMP-STRINGS.md). wave8's x86 commit bumps the shared recipe and deletes the entry, and the
   # aarch64 drvs stay where they are. flex .sig Good (Flex Releases 15A2D3E3...), automake .sig Good (Kamila Szewczyk D5D527E7...).
-  flex = { version = "2.6.5";
-    src = src "https://github.com/westes/flex/releases/download/v2.6.5/flex-2.6.5.tar.gz" "4dfb3d6095c0cd58f050dd66fa132ad52c118c5ae26a4bddd916557720920769";
-    # upstream fae57c41b4 (2026-11-11, #844): with --disable-nls flexdef.h skipped gettext.h, so main.c's ngettext was an implicit
-    # declaration, an error since GCC 14 (a64rows2: 4bfc83c's flex failed on the a64rows host). The .patch as GitHub serves it. The
-    # line goes where the shared recipe's first line is (after perPkg's export M4), so wave8's c-base.nix bump gives the same text.
-    build = rep "flex" "MAKEINFO=true HELP2MAN=true ./configure" "patch -p1 < ${../patches/flex-2.6.5-gettext-no-nls.patch} >&2\nMAKEINFO=true HELP2MAN=true ./configure"
-      (rep "flex" "^flex 2\\.6\\.4" "^flex 2\\.6\\.5" args.build); };
   automake = { version = "1.20";
     src = src "https://mirrors.kernel.org/gnu/automake/automake-1.20.tar.xz" "f6f34dad4cbe395715762b0710f7c511e39bd5cf777e6b95818ccbecf7714248";
     build = rep "automake" "^automake \\(GNU automake\\) 1\\.19" "^automake \\(GNU automake\\) 1\\.20" args.build; };
