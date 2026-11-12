@@ -7,7 +7,6 @@ export PATH="${toolPath:+$toolPath:}$tools/bin:$ghc/bin:$gccWrapper/bin:$binutil
 # FIXED build dir: .hi files and Paths_* modules record it (as ghc-build.sh); drv-keyed, so the same on every host
 W=/var/tmp/ghc-$buildKey; rm -rf "$W"; mkdir -m 700 "$W"; trap 'cd /; rm -rf "$W"' EXIT; cd "$W"
 export HOME=$W/home LANG=C.UTF-8 LC_ALL=C.UTF-8 SOURCE_DATE_EPOCH=315532800; mkdir home
-J=${NIX_BUILD_CORES:-16}; [ "$J" -gt 0 ] || J=16
 GV=$(ghc --numeric-version); LIBDIR=$out/lib/ghc-$GV/lib; DB=$LIBDIR/package.conf.d
 # the build db: every hsDep's conf files, transitively (each out lists its own in nix-support/hs-deps, as nixpkgs propagates)
 mkdir db; all=""
@@ -25,8 +24,12 @@ ghc -package-env=- --make -threaded -O0 -o Setup Setup.*hs > "$W/setup.log" 2>&1
   --package-db="$W/db" --with-gcc="$gccWrapper/bin/gcc" --with-ld="$(gcc -print-prog-name=ld)" \
   --enable-shared --enable-library-vanilla --disable-library-profiling --disable-profiling --enable-split-sections \
   --disable-library-stripping --disable-executable-stripping --disable-tests --disable-benchmarks \
-  --ghc-option=-j$J $configureFlags > "$W/conf.log" 2>&1 || { tail -40 "$W/conf.log" >&2; exit 1; }
-./Setup build -j$J > "$W/build.log" 2>&1 || { tail -60 "$W/build.log" >&2; exit 1; }
+  $configureFlags > "$W/conf.log" 2>&1 || { tail -40 "$W/conf.log" >&2; exit 1; }
+# -j1: ghc --make -jN shares one Unique supply between threads, so local symbol names (.L<unique>_bytes) follow the
+# thread schedule and the objects differ per build (measured: hscolour, alex --check NOT SAME at -j16). GHC 9.12+
+# has -fobject-determinism (nixpkgs passes it from 9.12 on and builds -j$NIX_BUILD_CORES); 9.10 has neither, so build
+# -j1. hadrian builds ghc itself one module per process, so ghc is not affected.
+./Setup build -j1 > "$W/build.log" 2>&1 || { tail -60 "$W/build.log" >&2; exit 1; }
 ./Setup copy > "$W/copy.log" 2>&1 || { tail -20 "$W/copy.log" >&2; exit 1; }
 mkdir -p "$DB" "$out/nix-support"; echo "$all" > "$out/nix-support/hs-deps"
 ./Setup register --gen-pkg-config="$W/pkg.conf" > "$W/reg.log" 2>&1 || { tail -20 "$W/reg.log" >&2; exit 1; }
