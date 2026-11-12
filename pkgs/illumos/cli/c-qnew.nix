@@ -61,9 +61,8 @@ printf("ok %s %d %d\n", id3_version, n < 300, strcmp((char *)l, s) == 0 && (g->f
     src = { url = "https://github.com/llnl/conduit/releases/download/v0.9.9/conduit-v0.9.9-src-with-blt.tar.gz";
             sha256 = "53cb6258de9b846ccc5a05205db36e88209fe45c5b786a1f0c0ae63a4302148b"; };
     deps = [ world ]; nativeTools = [ cmake ] ++ hostTools;
-    # libconduit_relay's DWARF names $out (CONDUIT_RELAY_SOURCE_DIR below): keep that .debug uncompressed, or --check DIFFERS in -debug
-    # only (one .debug_info, measured on the qnew host; glib's case, mk-src-pkg splitDebugSelfRef)
-    splitDebugSelfRef = true;
+    # libconduit_relay's DWARF names $out (CONDUIT_RELAY_SOURCE_DIR below): split-debug-od.sh keeps that .debug uncompressed, or
+    # --check DIFFERS in -debug only (one .debug_info, measured on the qnew host; glib's case)
     build = ''
       cd src
       # conduit::about() and conduit_config.h record CMAKE_CXX_COMPILER, which is the build dir's wrapper (/var/tmp/srcpkg-<key>/bin64/g++):

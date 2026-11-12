@@ -64,8 +64,6 @@
 , hostPathAllow ? ""         # grep -E of documented exceptions for ./host-path-scan.sh (a recipe's own, rare)
 , buildOnlyRefs ? [ ]        # build-time-only store paths (header-only libs: nix's boost/json/toml11) that no shipped file, $debug
                              # included, may name: the gate/compiler guard below covers them too (nixpkgs disallowedReferences)
-, splitDebugSelfRef ? false  # the DWARF names $out (a string constant as a DW_OP_implicit_value): ./split-debug-selfref.sh. shortcut:
-                             # per recipe so no other drv moves; the default at the next full rebuild (WAVE7-NOTES glibdbg)
 , nativeTools ? null         # NixOS nativeBuildInputs: store paths whose bin/ (and sbin/, usr/bin/) make up the WHOLE builder PATH
                              # after buildTools: no /usr/gnu, no host /usr/bin. null => defaultNativeTools (storeOnly) or the
                              # old OI PATH text (an exempt instance).
@@ -112,9 +110,9 @@ let
       "${./aarch64/zero-checksum.sh}" ] t;
   # x86 store-only: od's e_type compared numerically (./split-debug-od.sh; illumos od zero-pads, wave7). The seed instance and aarch64
   # keep ./split-debug.sh: both run GNU od first, and their drvs must not move. The stripLoop text below is an aarch64 anchor.
-  # splitDebugSelfRef (x86 store-only): ./split-debug-selfref.sh, which keeps a .debug uncompressed when its DWARF names this
-  # build's own outputs, so an unsandboxed --check can rewrite the scratch hash (glib, glibdbg 2026-11-11).
-  splitDebugSh = if storeOnly && splitDebugSelfRef then ./split-debug-selfref.sh else if storeOnly then ./split-debug-od.sh else ./split-debug.sh;
+  # It also keeps a .debug uncompressed when its DWARF names this build's own outputs, so an unsandboxed --check can rewrite the
+  # scratch hash (glib, glibdbg 2026-11-11). shortcut: ./split-debug.sh has the same exposure (no case today); fix it in its own wave.
+  splitDebugSh = if storeOnly then ./split-debug-od.sh else ./split-debug.sh;
   # aarch64 store-only (a64h): ./aarch64/split-debug-od.sh = x86's split-debug-od.sh as wave8 has it: od's e_type compared with -eq
   # (illumos od zero-pads; GNU od is first on the a64 PATH today, so the same files split), and a .debug that names this build's own
   # outputs stays uncompressed, so an unsandboxed --check can rewrite the scratch hash (glibdbg). The seed keeps ./split-debug.sh.
