@@ -15,12 +15,20 @@
 #   4. gstrip --strip-debug -D. ar archives and ET_REL objects are only stripped (as before). A failure is a closure-gate
 #      failure (written to <fail-file>): the out never ships DWARF that names a build input, and never loses it silently.
 # Departure from NixOS: every package, not opt-in (the maintainer wants symbols on every test host).
+# Step 2 keeps a .debug UNCOMPRESSED when it names one of this build's outputs (glibdbg 2026-11-11; wave8 made it the default
+# for every x86 store-only, cargo and go build, where it had been glib's opt-in copy split-debug-selfref.sh).
 set -u
 out=$1; dbg=$2; key=$3; bu=$4; fail=$5
 # binutils names: g-prefixed in the store binutils (OI layout), plain in an OI host's /usr/gnu/bin
 tool() { for n in "$bu/g$1" "$bu/$1"; do [ -x "$n" ] && { echo "$n"; return 0; }; done; echo "FATAL: no $1 in $bu" >&2; return 1; }
 OBJCOPY=$(tool objcopy) && READELF=$(tool readelf) && STRIP=$(tool strip) || { echo "split-debug: binutils missing in $bu" >> "$fail"; exit 0; }
 mkdir -p "$dbg/lib/debug"
+# this build's own outputs (Nix rewrites each one's scratch hash under --check). mk-src-pkg's man/info/doc are output paths; in
+# cargo-build.sh and go-pkg-build.sh $man is the man-install SHELL TEXT, so only a word whose hash part is 32 nix-base32 chars counts
+# (an empty hash would make `grep -q ""` match every file and leave every .debug uncompressed).
+own=""; set -f   # no globbing of that shell text
+for o in $out $dbg ${man:-} ${info:-} ${doc:-}; do h=${o:11:32}
+  case $h in *[!0-9a-z]*) continue;; esac; [ ${#h} = 32 ] && own="$own $h"; done; set +f
 # sorted: of two hard links (perl, perl5.42.3) the first path names the build-id, and find's order is the directory's
 find "$out" -type f | LC_ALL=C sort | while read -r f; do
   m=$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')
@@ -44,8 +52,21 @@ find "$out" -type f | LC_ALL=C sort | while read -r f; do
     d="$dbg/lib/debug/.build-id/$(echo "$id" | cut -c1-2)"; r=$(echo "$id" | cut -c3-)
     if [ ! -e "$d/$r.debug" ]; then   # Go: two binaries with one id (never seen) keep the first; objcopy breaks hard links
       mkdir -p "$d"
-      "$OBJCOPY" --only-keep-debug --compress-debug-sections=zlib "$f" "$d/$r.debug" 2>> "$fail.log" \
+      # A .debug whose DWARF names this build's own outputs stays UNCOMPRESSED (glib: GIO_MODULE_DIR as a DW_OP_implicit_value).
+      # An unsandboxed --check builds at a scratch out and Nix rewrites that hash back in the output's bytes, but not inside a
+      # zlib stream, so a compressed copy DIFFERS (glibdbg 2026-11-11). Every other .debug: the same one-step compressed copy.
+      "$OBJCOPY" --only-keep-debug "$f" "$d/$r.debug" 2>> "$fail.log" \
         || echo "$f: split-debug: --only-keep-debug failed" >> "$fail"
+      # one hash per grep: illumos grep with two -e patterns misses a match in a file with NUL bytes (measured, glibdbg)
+      keep=0
+      for h in $own; do rc=0; LC_ALL=C grep -q "$h" "$d/$r.debug" || rc=$?
+        case $rc in 0) keep=1;; 1) ;; *) echo "$f: split-debug: grep exited $rc" >> "$fail";; esac
+      done
+      if [ $keep = 0 ]; then
+        rm -f "$d/$r.debug"
+        "$OBJCOPY" --only-keep-debug --compress-debug-sections=zlib "$f" "$d/$r.debug" 2>> "$fail.log" \
+          || echo "$f: split-debug: --only-keep-debug failed" >> "$fail"
+      fi
       chmod 0444 "$d/$r.debug"; ln -s "$f" "$d/$r.executable"
     fi
   fi
