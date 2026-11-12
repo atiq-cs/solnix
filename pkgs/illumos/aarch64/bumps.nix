@@ -58,7 +58,7 @@ in {
   # 4bfc83c drv failed on it. The pattern takes both cases, so the test checks what it means to: a pointer came back.
   sqlite = { version = "3.54.1";
     src = src "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz" "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e";
-    build = rep "sqlite" "^3\\.53\\.2" "^3\\.54\\.1" args.build + ''
+    build = rep "sqlite" "^3\\.54\\.0" "^3\\.54\\.1" args.build + ''
       mkdir -p "$W/sqt"; cd "$W/sqt"; tar xzf ${sqTree}; cd sqlite-version-3.54.1
       ./configure --build=aarch64-unknown-solaris2.11 --with-tcl=${tcl}/lib --with-tclsh=${tcl}/bin/tclsh8.6 --disable-readline >&2
       gmake sqlite3.c >&2; cmp sqlite3.c "$SRC/sqlite3.c" || { echo "FATAL: the tested sqlite3.c is not the shipped one" >&2; exit 1; }
@@ -70,7 +70,7 @@ in {
       echo "$s" | grep -Eq '^0 errors out of [0-9]{6,} tests' && [ $r = 0 ] || { tr '\r' '\n' < "$W/sqt.out" | grep -E '^(FAILED|!)' | head -20 >&2; echo "FATAL: sqlite veryquick" >&2; exit 1; }
       cd "$SRC"
     ''; };
-  python3 = { build = rep "python3" "OpenSSL 3\\.5\\.9 .* 3\\.53\\.2" "OpenSSL 3\\.4\\.8 .* 3\\.54\\.1" args.build; };   # its in-build ssl/sqlite3 check
+  python3 = { build = rep "python3" "OpenSSL 3\\.5\\.9 .* 3\\.54\\.0" "OpenSSL 3\\.4\\.8 .* 3\\.54\\.1" args.build; };   # its in-build ssl/sqlite3 check
   # 1.1.1 (CVE-2026-111497). Its ctest suite (round trips over tests/testdata, compatibility) runs here, as upstream builds it.
   brotli = { version = "1.1.1";
     src = src "https://github.com/google/brotli/archive/refs/tags/v1.1.1.tar.gz" "1a84dfaa740994d19254bf78aa7d74a4a8040d1638f3d5f2cdecb188fd520da8";
