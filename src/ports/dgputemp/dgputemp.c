@@ -13,6 +13,13 @@
  *                                     -1 when unreadable. pr3_sta is a Name the
  *                                     AML sets; PSTA reads the GPIOs (SSDT14)
  *   kstat -p dgputemp:0:ec:reads      ks_update calls that evaluated the EC
+ *   kstat -p dgputemp:0:ec:fan_rpm    EC field HSPD (0x84, 16 bits): the speed
+ *                                     of the fan fan_sel names; -1 unreadable
+ *   kstat -p dgputemp:0:ec:fan_sel    EC field HFNI (0x83): which fan HSPD
+ *                                     reports (thinkpad_acpi's fan select)
+ *   kstat -p dgputemp:0:ec:fan_mode   EC field HFSP (0x2F): the fan mode the EC
+ *                                     runs (thinkpad_acpi's fan level: bit 7
+ *                                     auto, 0x40 full speed, else level 0-7)
  *
  * GPUT is the byte after TMP0 in the EC's ECOR region (BIOS N3JET48W,
  * dsdt.dsl: Offset 0x78 TMP0, GPUT; GSTM(1) returns it, 0x80 when it has no
@@ -21,6 +28,9 @@
  * EC's own reading, so it works before and without the nvidia driver. The EC
  * is the HKEY device's parent (\_SB.PC00.LPCB.EC), found by name. Nothing is
  * evaluated until the kstat is read. A misc module: modload, no driver entry.
+ * The fan fields are read the same way and never written: the EC drives the
+ * fans by itself (THM0 has no active trip points), and these only show
+ * whether it does so when the dGPU heats (nvgpu6 THERMAL.md).
  */
 #include <sys/types.h>
 #include <sys/modctl.h>
@@ -46,6 +56,17 @@ dgt_find(char **names)
 		if (AcpiGetHandle(NULL, names[i], &h) == AE_OK)
 			return (h);
 	return (NULL);
+}
+
+/* An EC field as is (a raw register, no range check), or -1. Read-only. */
+static void
+dgt_field(kstat_named_t *k, char *name)
+{
+	int v = -1;
+
+	if (dgt_ech == NULL || acpica_eval_int(dgt_ech, name, &v) != AE_OK)
+		v = -1;
+	k->value.i32 = v;
 }
 
 static int
@@ -75,6 +96,9 @@ dgt_update(kstat_t *ksp, int rw)
 	if (dgt_porth == NULL || acpica_eval_int(dgt_porth, "PSTA", &v) != AE_OK)
 		v = -1;
 	kn[4].value.i32 = v;
+	dgt_field(&kn[5], "HSPD");
+	dgt_field(&kn[6], "HFNI");
+	dgt_field(&kn[7], "HFSP");
 	return (0);
 }
 
@@ -93,7 +117,7 @@ _init(void)
 	if (dgt_ech == NULL)
 		return (ENXIO);	/* not a ThinkPad EC this knows */
 	mutex_init(&dgt_lock, NULL, MUTEX_DRIVER, NULL);
-	dgt_ks = kstat_create("dgputemp", 0, "ec", "misc", KSTAT_TYPE_NAMED, 5, 0);
+	dgt_ks = kstat_create("dgputemp", 0, "ec", "misc", KSTAT_TYPE_NAMED, 8, 0);
 	if (dgt_ks == NULL) {
 		mutex_destroy(&dgt_lock);
 		return (ENOMEM);
@@ -104,6 +128,9 @@ _init(void)
 	kstat_named_init(&kn[2], "tmp0_C", KSTAT_DATA_INT32);
 	kstat_named_init(&kn[3], "reads", KSTAT_DATA_UINT64);
 	kstat_named_init(&kn[4], "psta", KSTAT_DATA_INT32);
+	kstat_named_init(&kn[5], "fan_rpm", KSTAT_DATA_INT32);
+	kstat_named_init(&kn[6], "fan_sel", KSTAT_DATA_INT32);
+	kstat_named_init(&kn[7], "fan_mode", KSTAT_DATA_INT32);
 	dgt_ks->ks_update = dgt_update;
 	dgt_ks->ks_lock = &dgt_lock;	/* one EC evaluation at a time */
 	kstat_install(dgt_ks);
