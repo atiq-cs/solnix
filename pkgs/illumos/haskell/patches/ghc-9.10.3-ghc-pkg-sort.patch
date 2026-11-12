@@ -1,0 +1,16 @@
+Sort the .conf files ghc-pkg reads from a package db directory (solnix; upstream master still reads them unsorted,
+utils/ghc-pkg/Main.hs). getDirectoryContents returns readdir order, which on ZFS differs for every fresh copy of the same
+directory (measured: 4 copies of GHC 9.10.3's package.conf.d gave 4 orders in the regenerated package.cache), so two
+builds of GHC shipped different package.cache files, and every unit-id FastString was interned in a different order.
+
+--- utils/ghc-pkg/Main.hs.orig
++++ utils/ghc-pkg/Main.hs
+@@ -923,7 +923,7 @@
+                               warn ("Timestamp " ++ show tFile
+                                 ++ " for " ++ file ++ rel)
+             where
+-                 confs = map (path </>) $ filter (".conf" `isSuffixOf`) fs
++                 confs = map (path </>) $ sort $ filter (".conf" `isSuffixOf`) fs
+ 
+                  ignore_cache :: (FilePath -> IO ()) -> IO (PackageDB mode)
+                  ignore_cache checkTime = do

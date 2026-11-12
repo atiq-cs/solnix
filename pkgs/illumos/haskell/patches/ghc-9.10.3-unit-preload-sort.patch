@@ -1,0 +1,28 @@
+Backport of GHC a8aa18688d2aba09dede9f1f1b82a83265351ae5 (master 2026-03-06, "Fix determinism of linker arguments",
+Fixes #26838; not on ghc-9.10 or ghc-9.12): sort the preload units taken from a UniqMap, so the -l order GHC passes to the
+linker, and with it each library's DT_NEEDED order and the static archive order, does not depend on Unique allocation
+order. Measured on solnix (ghc1 --check, 2026-11-12): libHSunix and 12 libraries and 9 executables linking it differed
+only in NEEDED order; the ghc-iserv static executables in link order.
+
+--- compiler/GHC/Unit/State.hs.orig
++++ compiler/GHC/Unit/State.hs
+@@ -111,7 +111,7 @@
+ import Control.Monad
+ import Data.Graph (stronglyConnComp, SCC(..))
+ import Data.Char ( toUpper )
+-import Data.List ( intersperse, partition, sortBy, isSuffixOf, sortOn )
++import Data.List ( intersperse, partition, sortBy, isSuffixOf, sortOn, sort )
+ import Data.Set (Set)
+ import Data.Monoid (First(..))
+ import qualified Data.Semigroup as Semigroup
+@@ -1676,7 +1676,9 @@
+   -- NB: preload IS important even for type-checking, because we
+   -- need the correct include path to be set.
+   --
+-  let preload1 = nonDetKeysUniqMap (filterUniqMap (isJust . uv_explicit) vis_map)
++  -- NB: Sorting keys here to ensure a deterministic order for the linker.
++  --
++  let preload1 = sort $ nonDetKeysUniqMap (filterUniqMap (isJust . uv_explicit) vis_map)
+ 
+       -- add default preload units if they can be found in the db
+       basicLinkedUnits = fmap (RealUnit . Definite)

@@ -1,0 +1,99 @@
+Backport of GHC b3f7fb80781bac756efdd7fdde836bf4742a75fc (2024-10-24, "determinism: Interface re-export list det",
+Fixes #25304; in 9.14.1, not 9.10/9.12), without its DetOrdAvails newtype: sort the avails of the docs structure in
+interface files (sortAvails, moved from mkIfaceExports to GHC.Types.Avail). Measured on solnix (ghc1 --check): the docs
+section of 7 System.Posix* interfaces of unix (x3 ways) listed the re-exported OpenFileFlags/FdOption avails in a
+different order in each of 3 builds.
+
+--- compiler/GHC/Types/Avail.hs.orig
++++ compiler/GHC/Types/Avail.hs
+@@ -19,6 +19,7 @@
+     filterAvail,
+     filterAvails,
+     nubAvails,
++    sortAvails,
+   ) where
+ 
+ import GHC.Prelude
+@@ -36,7 +37,7 @@
+ import Control.DeepSeq
+ import Data.Data ( Data )
+ import Data.Functor.Classes ( liftCompare )
+-import Data.List ( find )
++import Data.List ( find, sortBy )
+ import qualified Data.Semigroup as S
+ 
+ -- -----------------------------------------------------------------------------
+@@ -92,6 +93,20 @@
+ stableAvailCmp (AvailTC n ns) (AvailTC m ms) = stableNameCmp n m S.<> liftCompare stableNameCmp ns ms
+ stableAvailCmp (AvailTC {})   (Avail {})     = GT
+ 
++-- | Sort Avails/AvailInfos
++sortAvails :: Avails -> Avails
++sortAvails = sortBy stableAvailCmp . map sort_subs
++  where
++    sort_subs :: AvailInfo -> AvailInfo
++    sort_subs (Avail n) = Avail n
++    sort_subs (AvailTC n []) = AvailTC n []
++    sort_subs (AvailTC n (m:ms))
++       | n == m
++       = AvailTC n (m:sortBy stableNameCmp ms)
++       | otherwise
++       = AvailTC n (sortBy stableNameCmp (m:ms))
++       -- Maintain the AvailTC Invariant
++
+ -- -----------------------------------------------------------------------------
+ -- Operations on AvailInfo
+ 
+--- compiler/GHC/Iface/Make.hs.orig
++++ compiler/GHC/Iface/Make.hs
+@@ -473,18 +473,7 @@
+     }
+ 
+ mkIfaceExports :: [AvailInfo] -> [IfaceExport]  -- Sort to make canonical
+-mkIfaceExports exports
+-  = sortBy stableAvailCmp (map sort_subs exports)
+-  where
+-    sort_subs :: AvailInfo -> AvailInfo
+-    sort_subs (Avail n) = Avail n
+-    sort_subs (AvailTC n []) = AvailTC n []
+-    sort_subs (AvailTC n (m:ms))
+-       | n == m
+-       = AvailTC n (m:sortBy stableNameCmp ms)
+-       | otherwise
+-       = AvailTC n (sortBy stableNameCmp (m:ms))
+-       -- Maintain the AvailTC Invariant
++mkIfaceExports = sortAvails
+ 
+ {-
+ Note [Original module]
+--- compiler/GHC/HsToCore/Docs.hs.orig
++++ compiler/GHC/HsToCore/Docs.hs
+@@ -163,13 +163,17 @@
+       (IEGroup _ level doc, _)         -> DsiSectionHeading level (unLoc doc)
+       (IEDoc _ doc, _)                 -> DsiDocChunk (unLoc doc)
+       (IEDocNamed _ name, _)           -> DsiNamedChunkRef name
+-      (_, avails)                      -> DsiExports (nubAvails avails)
++      (IEThingWith{}, avails)          ->
++        DsiExports $
++          {- For explicit export lists, use the explicit order. It is deterministic by construction -}
++          nubAvails avails
++      (_, avails)                      -> DsiExports (sortAvails (nubAvails avails))
+ 
+     moduleExport :: ModuleName -- Alias
+                  -> Avails
+                  -> DocStructureItem
+     moduleExport alias avails =
+-        DsiModExport (nubSortNE orig_names) (nubAvails avails)
++        DsiModExport (nubSortNE orig_names) (sortAvails (nubAvails avails))
+       where
+         orig_names = M.findWithDefault aliasErr alias aliasMap
+         aliasErr = error $ "mkDocStructureFromExportList: "
+@@ -205,7 +209,7 @@
+     avails :: [Located DocStructureItem]
+     avails = flip fmap all_exports $ \avail ->
+       case M.lookup (availName avail) name_locs of
+-        Just loc -> L loc (DsiExports [avail])
++        Just loc -> L loc (DsiExports (sortAvails [avail]))
+         -- FIXME: This is just a workaround that we use when handling e.g.
+         -- associated data families like in the html-test Instances.hs.
+         Nothing -> noLoc (DsiExports [])

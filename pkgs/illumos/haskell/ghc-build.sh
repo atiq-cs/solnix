@@ -59,7 +59,10 @@ conf() {
 }
 conf --prefix="$out" --disable-dtrace GHC="$W/boot/bin/ghc" > "$W/conf.log" 2>&1 || { tail -40 "$W/conf.log" >&2; exit 1; }
 
-# 5. build: nixpkgs' hadrianFlags for 9.10
+# 5. build: nixpkgs' hadrianFlags for 9.10. TAR_OPTIONS: hadrian makes share/doc/.../libraries.html.tar.xz with `tar -c` of a
+#    directory, so in readdir order (on ZFS different in every fresh build dir), with build mtimes and the build user (measured,
+#    ghc1 --check: same members, different order and owner). Name order and fixed metadata make it reproducible.
+TAR_OPTIONS="--sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner" \
 hadrian/bootstrap/_build/bin/hadrian -j"$J" --flavour=release+split_sections --bignum=gmp --docs=no-sphinx --hash-unit-ids \
   binary-dist-dir > "$W/build.log" 2>&1 || { grep -v '^| Run' "$W/build.log" | tail -60 >&2; exit 1; }
 
@@ -89,7 +92,11 @@ case "$GCCU:$SYSR" in /nix/store/*:/nix/store/*) ;; *) echo "FATAL: gcc '$GCCU' 
 grep -rlF -e "$GCCU" -e "$SYSR" "$out" | while read -r f; do
   case "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" in 7f454c46|213c6172) chmod u+w "$f"; gstrip --strip-debug -D "$f";; esac
 done
-! grep -rlF -e "$GCCU" -e "$SYSR" "$out" | head -5 | grep . >&2 || { echo "FATAL: $out still names the gcc or the gate proto" >&2; exit 1; }
+# ELF/ar files only: package.conf.d/system-cxx-std-lib-1.0.conf (and package.cache) name the gcc's libstdc++ dirs on purpose
+grep -rlF -e "$GCCU" -e "$SYSR" "$out" | while read -r f; do
+  case "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" in 7f454c46|213c6172) echo "$f";; esac
+done > "$W/gccref"
+[ ! -s "$W/gccref" ] || { echo "FATAL: $out still names the gcc or the gate proto:" >&2; head -5 "$W/gccref" >&2; exit 1; }
 # 7. checks: DT_CHECKSUM, then the gates (no global errno, every RUNPATH in the store or $ORIGIN, ldd resolves in the store,
 #    no #! or symlink to the host), then compile + run (hello, C FFI + threaded RTS, a dynamic link)
 : > "$W/zc"; /usr/bin/bash "$zeroChecksum" "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
