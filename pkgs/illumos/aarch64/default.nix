@@ -204,9 +204,10 @@ let
       # meson's symbolextractor.py (shared-lib symbol lists, for relink avoidance) prepends the OI host's /usr/gnu/bin to PATH to find GNU
       # nm/readelf on SunOS (upstream text; gate2 B13). A solnix host has no /usr/gnu: drop the prefix, so it uses PATH as is (gnu_syms
       # falls back to dummy_syms when no GNU nm is found, which only costs relinks), as NixOS patches meson's host paths.
+      # The shared recipe (gtk/tools.nix, graphics/tools.nix: 45e7fba7) now rewrites it in the source tree before the copy, so here
+      # only the shipped file is checked (the old anchor for the unrewritten line FATALed at 1dc6881).
       meson = { build = let a = ''cp -r mesonbuild meson.py "$out/lib/meson/"''; b = builtins.replaceStrings [ a ] [ (a + "\n"
-          + ''f="$out/lib/meson/mesonbuild/scripts/symbolextractor.py"; grep -q "'/usr/gnu/bin:' + origpath" "$f" || { echo "FATAL: meson symbolextractor anchor" >&2; exit 1; }''
-          + "\n" + ''sed -i "s|'/usr/gnu/bin:' + origpath|origpath|" "$f"; ! grep -q /usr/gnu "$f" || { echo "FATAL: meson still names /usr/gnu" >&2; exit 1; }'') ] args.build; in
+          + ''f="$out/lib/meson/mesonbuild/scripts/symbolextractor.py"; [ -f "$f" ] && ! grep -q /usr/gnu "$f" || { echo "FATAL: meson symbolextractor missing or names /usr/gnu" >&2; exit 1; }'') ] args.build; in
         if b == args.build then throw "a64r meson: anchor" else b; };
       # xkeyboard-config's rules/ needs python >= 3.11: x86 links the OI host's /usr/bin/python3.14; here the store python3 (3.13, b2)
       xkeyboard-config = { build = let a = "ln -sf /usr/bin/python3.14 "; b = builtins.replaceStrings [ a ] [ "ln -sf ${homePkgs.cliSet.python3}/bin/python3 " ] args.build; in
