@@ -4658,4 +4658,90 @@ TPROG
       ${chk ''DISPLAY=:solnix-none "$out/bin/xinput" --version'' "^xinput version 1\\.6\\.4$"}
     '';
   };
+
+
+  # ---- qnew4 batch 5: leaves the x86 queue has jobs for, no other lane's (every source = nixpkgs f4a03c0's, by hash) ---------------
+  # libpipeline (GPL-3.0-or-later): pipelines of subprocesses as a C library (man-db), autotools from the release tarball, as nixpkgs;
+  # its check-framework test suite runs (`make check`, the served check). The check runs a two-command pipeline through it.
+  libpipeline = mkSrcPkg {
+    pname = "libpipeline"; version = "1.5.8";
+    src = { url = "https://download.savannah.gnu.org/releases/libpipeline/libpipeline-1.5.8.tar.gz";
+            sha256 = "1b1203ca152ccd63983c3f2112f7fe6fa5afd453218ede5153d1b31e11bb8405"; };
+    deps = [ world ]; linkDeps = [ check ]; nativeTools = [ base.pkgconf ] ++ hostTools;
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      # the tests link the served check as a linkDep (no RUNPATH entry, by design): its lib dir for the test run only
+      gmake -j8; LD_LIBRARY_PATH=${check}/lib/amd64 gmake check; gmake install
+      # configure drops tests/ from SUBDIRS without check: the suite must have run
+      ls tests/basic.log tests/redirect.log > /dev/null || { echo "FATAL: libpipeline: its test suite did not run" >&2; exit 1; }
+      ${tprog ''#include <pipeline.h>
+#include <stdio.h>
+int main(void){ pipeline *p = pipeline_new_command_args("printf", "b\\na\\nb\\n", (void *)0); pipeline_command_args(p, "sort", "-u", (void *)0);
+pipeline_want_out(p, -1); pipeline_start(p); const char *l; int n = 0; while ((l = pipeline_readline(p))) { printf("%s", l); n++; }
+printf("ok %d %d\n", n, pipeline_wait(p)); pipeline_free(p); return 0; }'' "-lpipeline"}
+      ${chk ''"$W/t" | tr '\n' ' ' '' "^a b ok 2 0 $"}
+    '';
+  };
+
+  # chmlib (LGPL-2.0-only): Microsoft HTML Help (.chm) reading (libchm and its example tools), autotools from the git rev nixpkgs uses
+  # (with its flags: examples, devel, gnu17), autoreconf. The check feeds a non-CHM file and a missing one to chm_open.
+  chmlib = mkSrcPkg {
+    pname = "chmlib"; version = "0.40a";
+    src = { url = "https://github.com/jedwing/CHMLib/archive/2bef8d063ec7d88a8de6fd9f0513ea42ac0fa21f.tar.gz";
+            sha256 = "c6a6e0cc46d0597045e82972347f95744bb2da6c1db7afc6db303051b37b1ca7"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      ${autoreconf}
+      # chm_http (an example server) needs libsocket and libnsl on illumos
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-examples --enable-devel CFLAGS="-std=gnu17 -g -O2 -Wno-error=implicit-function-declaration" LIBS="-lsocket -lnsl"
+      gmake -j8; gmake install
+      printf 'ITSF not really\n' > "$W/bad.chm"
+      ${tprog ''#include <chm_lib.h>
+#include <stdio.h>
+int main(int c, char **v){ struct chmFile *a = chm_open(v[1]), *b = chm_open(v[2]); printf("ok %d %d\n", a == NULL, b == NULL); return 0; }'' "-lchm"}
+      ${chk ''"$W/t" "$W/bad.chm" "$W/none.chm"'' "^ok 1 1$"}
+      ${chk ''"$out/bin/test_chmLib" 2>&1'' "[Uu]sage"}
+    '';
+  };
+
+  # libiscsi (LGPL-2.1-or-later; utils GPL-2.0-or-later): the iSCSI initiator library and its iscsi-* utilities, autotools from the tag,
+  # as nixpkgs (its socket.c prototype fix). No CUnit, so no test-tool or tests (as nixpkgs). include/md5.h decides endianness with
+  # `__BYTE_ORDER == __BIG_ENDIAN`, which the illumos headers never define (0 == 0, so x86 took the WORDS_BIGENDIAN path; measured that
+  # md5.c's byteSwap there assembles words from bytes, so the digest was right either way, only the swap is wasted): pinned to gcc's
+  # __BYTE_ORDER__. The check runs RFC 1321's test vectors through the built md5.c, and its multithreading thread id is _lwp_self().
+  libiscsi = mkSrcPkg {
+    pname = "libiscsi"; version = "1.20.3";
+    src = { url = "https://github.com/sahlberg/libiscsi/archive/1.20.3.tar.gz";
+            sha256 = "212f6e1fd8e7ddb4b02208aafc6de600f6f330f40359babeefdd83b0c79d47a1"; };
+    deps = [ world ]; nativeTools = autoreconfTools ++ hostTools;
+    build = ''
+      [ "$(grep -c '^void iscsi_decrement_iface_rr() {$' lib/socket.c)" = 1 ] && [ "$(grep -c '^#if (__BYTE_ORDER == __BIG_ENDIAN)$' include/md5.h)" = 1 ] \
+        || { echo "FATAL: libiscsi anchors" >&2; exit 1; }
+      sed -i 's/^void iscsi_decrement_iface_rr() {$/void iscsi_decrement_iface_rr(void) {/' lib/socket.c
+      sed -i 's/^#if (__BYTE_ORDER == __BIG_ENDIAN)$/#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__/' include/md5.h
+      # the thread id for its multithreading mode: no SYS_gettid on illumos; _lwp_self() is the calling thread's LWP id (<sys/lwp.h>)
+      [ "$(grep -c '^#elif defined(SYS_gettid)$' lib/multithreading.c)" = 1 ] || { echo "FATAL: libiscsi gettid anchor" >&2; exit 1; }
+      sed -i 's|^#elif defined(SYS_gettid)$|#elif defined(__sun)\n        return _lwp_self();\n#elif defined(SYS_gettid)|' lib/multithreading.c
+      sed -i 's|^#include <sys/syscall.h>$|#include <sys/syscall.h>\n#ifdef __sun\n#include <sys/lwp.h>\n#endif|' lib/multithreading.c
+      [ "$(grep -c '_lwp_self\|sys/lwp.h' lib/multithreading.c)" = 2 ] || { echo "FATAL: libiscsi lwp edit" >&2; exit 1; }
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-werror
+      gmake -j8; gmake install
+      cat > "$W/m.c" <<'TPROG'
+#include <stdio.h>
+#include <string.h>
+#include "md5.h"
+int main(void){ const char *v[] = { "", "abc", "message digest" }; for (int i = 0; i < 3; i++) { struct MD5Context c; unsigned char d[16];
+MD5Init(&c); MD5Update(&c, (const unsigned char *)v[i], strlen(v[i])); MD5Final(d, &c); for (int j = 0; j < 16; j++) printf("%02x", d[j]); printf(" "); }
+printf("\n"); return 0; }
+TPROG
+      "$CC" -Iinclude -I. "$W/m.c" lib/.libs/libiscsipriv.a -o "$W/m"
+      ${chk ''"$W/m"'' "^d41d8cd98f00b204e9800998ecf8427e 900150983cd24fb0d6963f7d28e17f72 f96b697d7cb7938d525a2f31aaf161d0 $"}
+      ${tprog ''#include <iscsi/iscsi.h>
+#include <stdio.h>
+int main(void){ struct iscsi_context *c = iscsi_create_context("iqn.2026-11.io.solnix:t"); struct iscsi_url *u = iscsi_parse_full_url(c, "iscsi://127.0.0.1:3260/iqn.2026-11.io.solnix:disk/1");
+printf("ok %s %s %d\n", u->portal, u->target, u->lun); iscsi_destroy_url(u); iscsi_destroy_context(c); return 0; }'' "-liscsi"}
+      ${chk ''"$W/t"'' "^ok 127\\.0\\.0\\.1:3260 iqn\\.2026-11\\.io\\.solnix:disk 1$"}
+    '';
+  };
 }
