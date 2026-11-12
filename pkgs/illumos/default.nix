@@ -470,6 +470,25 @@ let
   hostfixTools = buildEnv { name = "solnix-hostfix-tools"; pathsToLink = [ "/bin" ];
     # bash: rust's `x install` runs install.sh as bare "bash" from PATH (P0 run n: rust-1.98 failed there); NixOS's PATH always has it
     paths = [ seedBuildTools srcPkgs.coreutils srcPkgs.findutils cliBase.gnupatch cliBase.cmake srcPkgs.pkgconf srcPkgs.bash ]; };   # pkgconf: -sys crates' pkg-config
+  # GHC 9.10.3 from source, by pkgsrc's 9.8.2 solaris2 bootkit as the seed (./haskell/ghc-9.10.3.nix).
+  ghc = import ./haskell/ghc-9.10.3.nix { inherit (srcPkgs) gccWrapper binutils libiconv ncurses; inherit world;
+    tools = hostfixTools; inherit (cliBase) python3; gmp = cliBase.gmp6; inherit (graphics) libffi;
+    autotools = with cliBase; [ autoconf automake libtool gnum4 perl ]; };
+  # Hackage packages on ghc (./haskell/haskell-pkg.nix, nixpkgs' generic-builder reduced); versions + hashes as nixpkgs'
+  # hackage-packages.nix at the pin. The first leaves of haskellPackages: happy, alex, hscolour.
+  hsPkg = import ./haskell/haskell-pkg.nix { inherit ghc world; inherit (srcPkgs) gccWrapper binutils; tools = hostfixTools;
+    storeGate = ./store-gate.sh; tsErrnoGate = ./ts-errno-gate.sh; zeroChecksum = ./zero-checksum.sh; pathGate = ./path-gate.sh;
+    illumosBin = ./illumos-bin.sh; outHostRefs = ./out-host-refs.sh; };
+  haskellLeaves = rec {
+    happy-lib = hsPkg { pname = "happy-lib"; version = "2.1.7"; sha256 = "0sgj004khhy95xlw514s7pl8vk02fmssh3sn7kxgmdgjlg2b49gn";
+      check = ''ls "$out"/lib/ghc-*/lib/package.conf.d/happy-lib-2.1.7-*.conf''; };
+    happy = hsPkg { pname = "happy"; version = "2.1.7"; sha256 = "0aky5m9r3420h88ghq0qf9ck09g8ysr1aqlgb531vlc2n050yfcy";
+      hsDeps = [ happy-lib ]; check = ''"$out/bin/happy" --version | grep -q "Happy Version 2.1.7"''; };
+    alex = hsPkg { pname = "alex"; version = "3.5.4.2"; sha256 = "06248zzh03ijyaj98a54p1rqgvyl3w1kawsz74q9mig2c34isj6z";
+      toolDeps = [ happy ]; check = ''"$out/bin/alex" --version | grep -q "Alex version 3.5.4.2"''; };
+    hscolour = hsPkg { pname = "hscolour"; version = "1.25"; sha256 = "0z679khnmb6as1zcdb44n9qjk7in32jpm4ldscpqg7jrapd31kjl";
+      check = ''printf 'main = print 1\n' | "$out/bin/HsColour" -tty | grep -q main''; };
+  };
   # Go from source: go1.4 (C) -> 1.17 -> 1.20 -> 1.22 -> 1.24 -> 1.26 (./go.nix).
   goChain = import ./go.nix { inherit gcc world; gate = gate'; gccLib = gcc.lib; inherit (srcPkgs.nixChain) cacert;
     tools = hostfixTools; inherit (cliBase) python3; };
@@ -1525,6 +1544,8 @@ in
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
   cargoLib = cargo;
   inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;
+  inherit ghc;
+  inherit (haskellLeaves) happy alex hscolour;
   inherit bsdfetch;
   inherit (torrent) libtorrent-rasterbar solnix-torrent;
   xz = srcPkgs.nixChain.xz;
