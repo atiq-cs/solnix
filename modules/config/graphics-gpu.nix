@@ -118,7 +118,9 @@ in
       description = ''
         Runtime D3cold, coarse (NVIDIA's NVreg_DynamicPowerManagement=1): the
         nvidia module powers the dGPU off (D3hot, then the root port's ACPI
-        _PR3 power resource off) 10 s after the last client closes it, and on
+        _PR3 power resource off) as soon as the last client has closed it and RM
+        has shut the GPU down (as Linux does: a powered GPU with RM down is
+        unmanaged and heats), and on
         again at the next open. Without it an attached GPU idles in D0. The
         thermal guard accepts the missing reading of a GPU that is off only
         when both the power resource and the GPU's power GPIO say off. The

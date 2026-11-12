@@ -9,7 +9,7 @@
 # kernel's messages and left to the guard: no reboot here, so the failed state can be read over ssh.
 # RTD3=1 (hardware.graphics.nvidia.rtd3): tzmon powered the GPU off at boot; the open of nvidia@0:nvidia-poweron
 # attaches nvidia to it (the cold attach). The probe then opens the GPU once (RmInitAdapter, GSP) and closes it, so
-# the nvidia module powers it off 10 s later (runtime D3cold); this then logs the power state every 60 s.
+# the nvidia module powers it off right after RM shuts down (runtime D3cold); this then logs the power state every 60 s.
 # env: PROBE (nvidia-probe), LOG, OKFILE (the guard's per-sample file), RTD3.
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin
@@ -37,7 +37,7 @@ fi
 [ -c /dev/nvidia0 ] || fail "no /dev/nvidia0 (the GPU did not attach)"
 if [ "${RTD3:-0}" = 1 ]; then
   "$PROBE" >> "$LOG" 2>&1 || fail "nvidia-probe failed (RmInitAdapter/GSP? see the probe lines above)"
-  log "probed and released; runtime D3cold: off after 10 s idle"
+  log "probed and released; runtime D3cold: off once RM has shut down"
   i=0
   while :; do
     sleep 60; i=$((i + 60))
