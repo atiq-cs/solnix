@@ -1,7 +1,16 @@
 # desktop/gtk/base.nix -- glib and the font/image libraries under pango, cairo and gtk3, from source (nixpkgs 7f81d69
 # versions and tarballs; illumos fixes from OI oi-userland where upstream still needs them).
-{ mkSrcPkg, tools, zlib, python3, cmake, graphics, nixChain, noto-sans }:
-let m = tools.mesonBuild; inherit (graphics) libffi expat; in
+{ mkSrcPkg, tools, zlib, python3, cmake, graphics, nixChain, noto-sans
+, a64Fonts ? false   # aarch64 (a64r-pkgs.nix): freetype 2.14.3 + fontconfig 2.18.1 until the aarch64 lane bumps them (served A rows)
+}:
+let m = tools.mesonBuild; inherit (graphics) libffi expat;
+  # x86: freetype 2.15.0 (.sig Werner Lemberg E30674707856409FF1948010BE6C3AAC63AD8E3F) and fontconfig 2.18.3 (sha256 = upstream's
+  # .sha256sum), the x86 queue's targets. The OI GS patch applies to 2.15.0; freetype2.pc stays 26.x (version_info 26:7:20).
+  ftV = if a64Fonts then { v = "2.14.3"; h = "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f"; }
+    else { v = "2.15.0"; h = "93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5"; };
+  fcV = if a64Fonts then { v = "2.18.1"; h = "2300f3dbfa7253b3a44f4feecdbc8dfa45dde5dc2cfb71fceaf31f394cb41031"; }
+    else { v = "2.18.3"; h = "4f7b554a38cdf78c033f666c8871f3749e14a094f65a07f630c91ed0b43d35e3"; };
+in
 rec {
   # freetype2.pc Requires.private zlib/libpng/libbrotlidec: pkg-config needs them to answer at all (link time only)
   ftPriv = [ zlib libpng nixChain.brotli nixChain.bzip2 ];
@@ -99,9 +108,9 @@ rec {
   # freetype without harfbuzz (nixpkgs builds it so; harfbuzz depends on freetype, not the reverse). OI's GS fix:
   # <sys/regset.h> defines GS on x86 illumos, which clobbers TT_ExecContext's GS member.
   freetype = mkSrcPkg {
-    pname = "freetype"; version = "2.14.3";
-    src = { url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz";
-            sha256 = "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f"; };
+    pname = "freetype"; version = ftV.v;
+    src = { url = "https://download.savannah.gnu.org/releases/freetype/freetype-${ftV.v}.tar.xz";
+            sha256 = ftV.h; };
     deps = [ zlib libpng nixChain.bzip2 nixChain.brotli ];
     build = ''
       ${tools.path}
@@ -119,9 +128,9 @@ rec {
   # (written by the desktop module); `make install sysconfdir=$out/etc` keeps the default config in the store.
   # Default font dir when no config loads: the store noto-sans (nixpkgs uses dejavu.minimal).
   fontconfig = mkSrcPkg {
-    pname = "fontconfig"; version = "2.18.1";
-    src = { url = "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.1/fontconfig-2.18.1.tar.xz";
-            sha256 = "2300f3dbfa7253b3a44f4feecdbc8dfa45dde5dc2cfb71fceaf31f394cb41031"; };
+    pname = "fontconfig"; version = fcV.v;
+    src = { url = "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/${fcV.v}/fontconfig-${fcV.v}.tar.xz";
+            sha256 = fcV.h; };
     deps = [ freetype expat ];
     linkDeps = ftPriv;
     build = ''
