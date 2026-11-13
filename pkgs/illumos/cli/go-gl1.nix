@@ -1623,4 +1623,84 @@ in {
   ssh-key-confirmer = pkg { pname = "ssh-key-confirmer"; version = "0.1"; src = gh "benjojo/ssh-key-confirmer" "v0.1" "4cbae943dff900662231cb2c04fd06a8d5cede0c0f2c31b2722e9597cc3a7aff";
     vendorHash = "sha256-toUU26VZxAtKbi7+m/tf24KzPnQVwW86eqWt0zbd2N0="; subPkgs = "."; ldflags = "-s -w";
     check = chk ''"$out/bin/ssh-key-confirmer" --help'' "[Uu]sage"; };
+  # ssh-to-age (MIT): convert ssh private keys in ed25519 format to age keys.
+  ssh-to-age = pkg { pname = "ssh-to-age"; version = "1.3.0"; src = gh "Mic92/ssh-to-age" "refs/tags/v1.3.0" "5c1734a59f398779c6a4ce3b09602c0ce942f850997651efa4a14c80e666fdd3";
+    vendorHash = "sha256-gZPDfoifYMt1CRbAtDeuk2htBr1ByhgloPchKrD4i48="; subPkgs = "./cmd/ssh-to-age"; ldflags = "-s -X main.version=1.3.0";
+    check = chk ''"$out/bin/ssh-to-age" --version'' "1\\.3\\.0"; };
+  # sshchecker (MIT): dedicated SSH brute-forcing tool.
+  sshchecker = pkg { pname = "sshchecker"; version = "1.0"; src = gh "lazytools/sshchecker" "v1.0" "4c2546bf307cab201b03c137a2c1badd83fea7edeedc0ef6d89bd0a1e47c0097";
+    vendorHash = "sha256-jaRmOsk75iRRtAjWflLuzLctkhH+NtVSVT99tQ2CcTs="; subPkgs = "./cmd/sshchecker";
+    check = chk ''"$out/bin/sshchecker" --version'' "1\\.0"; };
+  # sshm (MIT): terminal UI to manage and connect to SSH hosts.
+  sshm = pkg { pname = "sshm"; version = "1.11.0"; src = gh "Gu1llaum-3/sshm" "refs/tags/v1.11.0" "9474fc4439773ed52b1f14ee7277a0ea0928a045234e20a2f334aa0efd0bc5a0";
+    vendorHash = "sha256-ESq/RTJR3+B8uk6dhbzfPDbTN2dyJ3uqy6c/mepZ47o="; subPkgs = "."; ldflags = "-s -w -X=github.com/Gu1llaum-3/sshm/cmd.AppVersion=1.11.0";
+    check = chk ''"$out/bin/sshm" --version'' "1\\.11\\.0"; };
+  # sshocker (Apache-2.0): tool for SSH, reverse sshfs and port forwarder.
+  sshocker = pkg { pname = "sshocker"; version = "0.3.11"; src = gh "lima-vm/sshocker" "refs/tags/v0.3.11" "1f1fe344a96f82ef459521e98bf05745491db0273b77c856d7c313ca9cd1d65e";
+    vendorHash = "sha256-SHjmBaaPCeX+8jA0oEahI4XdEKn59CX2kIogD8iMlF8="; subPkgs = "./cmd/sshocker"; ldflags = "-s -w -X=github.com/lima-vm/sshocker/pkg/version.Version=0.3.11";
+    check = chk ''"$out/bin/sshocker" --version'' "0\\.3\\.11"; };
+  # stackblur-go (MIT): fast, almost Gaussian Blur implementation in Go.
+  stackblur-go = pkg { pname = "stackblur-go"; version = "1.1.1"; src = gh "esimov/stackblur-go" "v1.1.1" "92978b07a3a72f81e5ab87c732e75c8713cfaa73e1f1b9dd78f8f7fdaa6c14d5";
+    vendorHash = null; subPkgs = "./cmd/stackblur"; ldflags = "-s -w";
+    check = chk ''"$out/bin/stackblur" --help'' "[Uu]sage"; };
+  # stave (Apache-2.0): tool to find compound attack paths that single-resource scanners miss.
+  stave = pkg { pname = "stave"; version = "0.0.3"; src = gh "sufield/stave" "refs/tags/v0.0.3" "671dd1df6e4ad4f1539148c5730b78086007b26e4b892dd22386f01ad6e32b90";
+    vendorHash = null; subPkgs = "./cmd/stave"; ldflags = "-s -X=github.com/sufield/stave/internal/version.Version=v0.0.3 -X=github.com/sufield/stave/internal/version.Commit=refs/tags/v0.0.3 -X=github.com/sufield/stave/internal/version.Date=1970-01-01T00:00:00Z -X=github.com/sufield/stave/internal/version.BuiltBy=nixpkgs";
+    check = chk ''"$out/bin/stave" --version'' "0\\.0\\.3"; };
+  # stock-tui (MIT): terminal-based stock and cryptocurrency price tracker.
+  stock-tui = pkg { pname = "stock-tui"; version = "0.1.0"; src = gh "ni5arga/stock-tui" "refs/tags/v0.1.0" "a6b1d74d2534613ede6230c0a2f23d05cdb5b07b597618307b98ef074d471762";
+    vendorHash = "sha256-XN8BgfjYEo/Lmo+6YqS229mwXnxvG6y7dCv7YruK1RE="; subPkgs = "./cmd/stock-tui";
+    check = chk ''"$out/bin/stock-tui" --help'' "[Uu]sage"; };
+  # subjs (MIT): fetcher for JavaScript files.
+  subjs = pkg { pname = "subjs"; version = "1.0.1"; src = gh "lc/subjs" "v1.0.1" "a1772a7cc9a46befd4465616041ff52b3375033f0ec13c48212b776fea37aa24";
+    vendorHash = "sha256-Tw0RaBh3ZRBkjgTP0KROdlqZvCXGAFASswv9xwz1zkU="; subPkgs = "."; ldflags = "-s -w -X main.AppVersion=1.0.1";
+    check = chk ''"$out/bin/subjs" --version'' "1\\.0\\.1"; };
+  # swaynag-battery (MIT): shows a message when your battery is discharging.
+  swaynag-battery = pkg { pname = "swaynag-battery"; version = "0.2.0"; src = gh "m00qek/swaynag-battery" "v0.2.0" "8d78aa19f11fdde26da40ec5769c42709c828eface56784e4fc4f4ca963cca0e";
+    vendorHash = "sha256-d5MF5eRQ7RudBGnNq4IVis08YyIS2Ah7LnB93kp5zCo="; subPkgs = ".";
+    check = chk ''"$out/bin/swaynag-battery" --help'' "[Uu]sage"; };
+  # tailsnitch (MIT): security auditor for Tailscale configurations. Scans your tailnet for misconfigurations, overly permissive access controls, and security best practice violations.
+  tailsnitch = pkg { pname = "tailsnitch"; version = "1.6"; src = gh "Adversis/tailsnitch" "refs/tags/v1.6" "cdf0a3ffac93e491520fd785e6f1b90bfd14ebc0d28ee94370caabc3574f3b3a";
+    vendorHash = "sha256-gG/9fUzf7VqFMDT/Fz+aQu/8H5Ej9m//JNydYTYM8JQ="; subPkgs = "."; ldflags = "-w -s -X=github.com/Adversis/tailsnitch/cmd.Version=1.6 -X=github.com/Adversis/tailsnitch/cmd.BuildID=1.6 -X=github.com/Adversis/tailsnitch/cmd.BuildDate=1970-01-01T00:00:00Z";
+    check = chk ''"$out/bin/tailsnitch" --version'' "1\\.6"; };
+  # tcping-go (MIT): ping over TCP instead of ICMP, written in Go.
+  tcping-go = pkg { pname = "tcping-go"; version = "0.1.1-unstable-2022-05-28"; src = gh "cloverstd/tcping" "83f644c761819f7c4386f0645cd0a337eccfc62e" "288cfc122d25a0f14da35e0085c075d58e39061519c7fa7723fce4fc34ee8ae1";
+    vendorHash = "sha256-xfAgH8sT/o6BTozv9x5j0ty1fR2KBU3V45EHoi1bgJ8="; subPkgs = ".";
+    check = chk ''"$out/bin/tcping" --help'' "[-]-dns-server"; };
+  # terminal-space-program (MIT): terminal-native orbital-mechanics rocket simulator.
+  terminal-space-program = pkg { pname = "terminal-space-program"; version = "0.51.2"; src = gh "jasonfen/terminal-space-program" "refs/tags/v0.51.2" "1bf2427fcc5f6b4f1803cdcadc296c26e2041ac634aad9ee75cdbd076937e70a";
+    vendorHash = "sha256-TRIMJ9haf2G9HzkGwa6x/hF3mz/V9IiCKvf+s1rI3MY="; subPkgs = "./cmd/terminal-space-program"; ldflags = "-X github.com/jasonfen/terminal-space-program/internal/version.Version=0.51.2";
+    check = chk ''"$out/bin/terminal-space-program" --version'' "0\\.51\\.2"; };
+  # termshot (MIT): creates screenshots based on terminal command output.
+  termshot = pkg { pname = "termshot"; version = "0.6.1"; src = gh "homeport/termshot" "refs/tags/v0.6.1" "40abea3c9ae604f3c2cdc7e2a623bf6063c6b1c504a70c5e3a1b8457dbdd2fbc";
+    vendorHash = "sha256-6onueUGEu0MVLkZNHMfAhQQSAQZE1gJMY2ECPvloh80="; subPkgs = "./cmd/termshot"; ldflags = "-s -w -X github.com/homeport/termshot/internal/cmd.version=0.6.1";
+    check = chk ''"$out/bin/termshot" --version'' "0\\.6\\.1"; };
+  # terraform-config-inspect (MPL-2.0): CLI for shallow inspection of Terraform configurations.
+  terraform-config-inspect = pkg { pname = "terraform-config-inspect"; version = "0-unstable-2026-09-04"; src = gh "hashicorp/terraform-config-inspect" "75d64de68c31445dbe4ee8308350e0b6dda1571d" "9a58feabb915cfb3e5340ce196ab64a73257a7197de5c939bdacd8e16c9220ea";
+    vendorHash = "sha256-JWsyY6qld2MAmCVv98D98KJHXvu/ChqXAMZQfU/vhZo="; subPkgs = ".";
+    check = chk ''"$out/bin/terraform-config-inspect" --help'' "[-]-after-init"; };
+  # terrapin-scanner (Apache-2.0): vulnerability scanner for the Terrapin attack.
+  terrapin-scanner = pkg { pname = "terrapin-scanner"; version = "1.1.3"; src = gh "RUB-NDS/Terrapin-Scanner" "refs/tags/v1.1.3" "3dde1f19e9228a2a284d73c63b193fdf775cb993945fb328cd01e3a6cc834bf1";
+    vendorHash = "sha256-znsRE+bBvdHS5fRPq1JzDvmXoAxsQInAimONNGq14Lg="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/Terrapin-Scanner" --version'' "1\\.1\\.3"; };
+  # tfautomv (Apache-2.0): when refactoring a Terraform codebase, you often need to write moved blocks. This can be tedious. Let tfautomv do it for you.
+  tfautomv = pkg { pname = "tfautomv"; version = "0.7.0"; src = gh "busser/tfautomv" "v0.7.0" "0a00bfb9b4a236640cc4ad0efd9d1982c14f93d5379a5adcd35b1691e0846044";
+    vendorHash = "sha256-up03VoaXPNbF7S/yOvYv+AUnhUae/aXObTVdGD51WVM="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/tfautomv" --version'' "0\\.7\\.0"; };
+  # tfk8s (MIT): utility to convert Kubernetes YAML manifests to Terraform's HCL format.
+  tfk8s = pkg { pname = "tfk8s"; version = "0.1.10"; src = gh "jrhouston/tfk8s" "v0.1.10" "be2680e76311ac7dd814a1bb0dceb486e3511d8d68845421338f9fcf5a92d5f9";
+    vendorHash = "sha256-Zkt+fFObamPFGuzkb/34ZdkZZTyXIGuj9UXvhx5GFbc="; subPkgs = "."; ldflags = "-s -w -X main.toolVersion=v0.1.10 -X main.builtBy=nixpkgs";
+    check = chk ''"$out/bin/tfk8s" --version'' "0\\.1\\.10"; };
+  # tfproviderdocs (MPL-2.0): terraform Provider Documentation Tool.
+  tfproviderdocs = pkg { pname = "tfproviderdocs"; version = "0.12.1"; src = gh "bflad/tfproviderdocs" "refs/tags/v0.12.1" "7381ef9a697b26b81ac5e2a57dcf339b8fde06891f8affe67f4703cc41e705b9";
+    vendorHash = "sha256-7wdbfMf8WYy3Z46srGu/Avk+GKvmTFUNW7N3EmdlBsY="; subPkgs = "."; ldflags = "-s -w -X github.com/bflad/tfproviderdocs/version.Version=0.12.1 -X github.com/bflad/tfproviderdocs/version.VersionPrerelease=";
+    check = chk ''"$out/bin/tfproviderdocs" --version'' "0\\.12\\.1"; };
+  # tfupdate (MIT): update version constraints in your Terraform configurations.
+  tfupdate = pkg { pname = "tfupdate"; version = "0.10.3"; src = gh "minamijoyo/tfupdate" "v0.10.3" "66d0aebdbd41c82d39edb6f2b241bb194fe7a03c162a555c6baa8f8ab7c794f6";
+    vendorHash = "sha256-1Hf8yAXcCvCQevb3VxD/tTG6lkJP6AfrTiCnSDzRluI="; subPkgs = ".";
+    check = chk ''"$out/bin/tfupdate" --version'' "0\\.10\\.3"; };
+  # tgswitch (MIT): command line tool to switch between different versions of terragrunt.
+  tgswitch = pkg { pname = "tgswitch"; version = "0.6.0"; src = gh "warrensbox/tgswitch" "0.6.0" "7a92abe68459b61857fc5f945ceef155d72c64954aa9deb409be47550ccd36e2";
+    vendorHash = "sha256-+0r1M1F/kMGMFm+TfRkSJ5YL8W4MuvQx81QH/ztOJms="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/tgswitch" --help'' "[Uu]sage"; };
 }
