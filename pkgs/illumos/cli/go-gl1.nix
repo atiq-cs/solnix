@@ -1863,4 +1863,88 @@ in {
   webanalyze = pkg { pname = "webanalyze"; version = "0.4.5"; src = gh "rverton/webanalyze" "refs/tags/v0.4.5" "02de367153517b5f20957857a1c0d7e879c4dc5d585a167163e87507b9cc34d2";
     vendorHash = "sha256-dyAUQTmsJbR78EPAJPHzlkiYsHtjh2rJ/p+WW7P2i6o="; subPkgs = "./cmd/webanalyze";
     check = chk ''"$out/bin/webanalyze" --help'' "[Uu]sage"; };
+  # websocketd (BSD-2-Clause): turn any program that uses STDIN/STDOUT into a WebSocket server.
+  websocketd = pkg { pname = "websocketd"; version = "0.4.1"; src = gh "joewalnes/websocketd" "v0.4.1" "6b8fe0fad586d794e002340ee597059b2cfc734ba7579933263aef4743138fe5";
+    vendorHash = "sha256-Fzz90CUGsulKhVB7jtd5doK2qQTJ+BNKZxA2WT1VtGk="; subPkgs = ".";
+    check = chk ''"$out/bin/websocketd" --help'' "[-]header-http"; };
+  # wgcf (MIT): cross-platform, unofficial CLI for Cloudflare Warp.
+  wgcf = pkg { pname = "wgcf"; version = "2.3.1"; src = gh "ViRb3/wgcf" "refs/tags/v2.3.1" "993b39e3085c9b53556af0e8297859c36ef1a5aeebf51378dabde49479ec1b7d";
+    vendorHash = "sha256-UoZO7Nz50v++n6RgU5p9IfYXwRen1Y3820zOw8WBPHw="; subPkgs = ".";
+    check = chk ''"$out/bin/wgcf" --help'' "[Uu]sage"; };
+  # wgo (MIT): live reload for Go apps.
+  wgo = pkg { pname = "wgo"; version = "0.7.2"; src = gh "bokwoon95/wgo" "refs/tags/v0.7.2" "71fe38b652f2a9f89f8ba18dbdd5381b35b8f5d3f7dd7eb5c382908a69ff6f93";
+    vendorHash = "sha256-wp0Zewu5wdd0j7RWEmp2M3YFRCiVZajgG0Mp00Iy2G0="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/wgo" --help'' "[Uu]sage"; };
+  # wire (Apache-2.0): code generation tool that automates connecting components using dependency injection.
+  wire = pkg { pname = "wire"; version = "0.7.0"; src = gh "google/wire" "refs/tags/v0.7.0" "06d07189bf3c2e5e1fd3d90c10e3dacf23dbf26334cd9812bfd76753b2523a97";
+    vendorHash = "sha256-YhkeOR1i2mCRfigHQMQ9hJ2yuEpgY8woSwUk+kU2Lek="; subPkgs = "./cmd/wire"; ldflags = "-s -w";
+    check = chk ''"$out/bin/wire" --help'' "[Uu]sage"; };
+  # wireguard-vanity-keygen (MIT): wireGuard vanity key generator.
+  wireguard-vanity-keygen = pkg { pname = "wireguard-vanity-keygen"; version = "1.0.1"; src = gh "axllent/wireguard-vanity-keygen" "1.0.1" "6a75aa0e5fec8f477a2316a42bc01cb88f0f259851fd1fba422b8a2b0639a6d9";
+    vendorHash = "sha256-uKPZeshLZOlD8bBL/9iE7Z4yUNAQzDWUReofevopw1g="; subPkgs = "."; ldflags = "-s -w -X main.appVersion=1.0.1";
+    check = chk ''"$out/bin/wireguard-vanity-keygen" --version'' "1\\.0\\.1"; };
+  # wpprobe (MIT): wordPress plugin enumeration tool.
+  wpprobe = pkg { pname = "wpprobe"; version = "0.12.13"; src = gh "Chocapikk/wpprobe" "refs/tags/v0.12.13" "927d0aa2dd7bdcdcc5f2c4328462a52dcbe007d0334d2a414a3665f570f0ecb1";
+    vendorHash = "sha256-oamWa5E7s9Pc8lB/uWmieqnqL4cRgSBYRxISz4BpT04="; subPkgs = "."; ldflags = "-s -w -X=github.com/Chocapikk/wpprobe/internal/version.Version=v0.12.13";
+    check = chk ''"$out/bin/wpprobe" --version'' "0\\.12\\.13"; };
+  # xcaddy (Apache-2.0): build Caddy with plugins.
+  xcaddy = pkg { pname = "xcaddy"; version = "0.4.7"; src = gh "caddyserver/xcaddy" "refs/tags/v0.4.7" "a8a092d076ea70a42198d4b35c0872da893c6d32c2d02c9df5b8935ee8ffb7ec";
+    vendorHash = "sha256-ayKuxRBvpsdJgOxze2hd6AngePtG4FGH/Ius5O7STGs="; subPkgs = "./cmd/xcaddy"; ldflags = "-s -X github.com/caddyserver/xcaddy/cmd.CustomVersion=v0.4.7";
+    check = chk ''"$out/bin/xcaddy" --version'' "0\\.4\\.7"; };
+  # xcrawl3r (MIT): CLI utility to recursively crawl webpages.
+  xcrawl3r = pkg { pname = "xcrawl3r"; version = "1.2.0"; src = gh "hueristiq/xcrawl3r" "refs/tags/1.2.0" "6822708b0d7d51911ed3df42bdd4a209250b553147b0727dd6a77de99301cf8c";
+    vendorHash = "sha256-dGfpjfStnj7XawqSFeGAcspruH8weLukqGFHjnIF5qk="; subPkgs = "./cmd/xcrawl3r"; ldflags = "-s -w";
+    check = chk ''"$out/bin/xcrawl3r" --version'' "1\\.2\\.0"; };
+  # xsubfind3r (MIT): CLI utility to find subdomains from curated passive online sources.
+  xsubfind3r = pkg { pname = "xsubfind3r"; version = "1.1.2"; src = gh "hueristiq/xsubfind3r" "refs/tags/1.1.2" "dc639d7179c25e55a407e0560b135af830dab95b6a5c17507db97942e218b6b1";
+    vendorHash = "sha256-higAP23OGVRSLGl4+FeWMf3X72ajQsNl5Ha0msp45EA="; subPkgs = "./cmd/xsubfind3r"; ldflags = "-s -w";
+    check = chk ''"$out/bin/xsubfind3r" --help'' "[-]-sources-to-exclude"; };
+  # xteve (MIT): M3U Proxy for Plex DVR and Emby Live TV.
+  xteve = pkg { pname = "xteve"; version = "2.2.0.200"; src = gh "xteve-project/xTeVe" "2.2.0.200" "d17566bc840534f4a1b1223d0d2332ab6b98e8c94f02ce1e941186b7cc67c484";
+    vendorHash = "sha256-Y2tZkeZx1ed0GPW4pMZhPQGBtBYhcAMthI/weejwNrA="; subPkgs = ".";
+    check = chk ''"$out/bin/xteve" --help'' "[Uu]sage"; };
+  # xurlfind3r (MIT): tool to discover URLs for a given domain.
+  xurlfind3r = pkg { pname = "xurlfind3r"; version = "1.3.0"; src = gh "hueristiq/xurlfind3r" "refs/tags/1.3.0" "f9ffc3926b86ae3a5b468042fd859af2081835f2066f7f3c52aee25f1e1a8a96";
+    vendorHash = "sha256-lckosf09XLDT7fRC4NeINDzA4Et49BapFM/vE0EHZrA="; subPkgs = "./cmd/xurlfind3r"; ldflags = "-s -w";
+    check = chk ''"$out/bin/xurlfind3r" --version'' "1\\.3\\.0"; };
+  # yajsv (MIT): yet Another JSON Schema Validator.
+  yajsv = pkg { pname = "yajsv"; version = "1.4.1"; src = gh "neilpa/yajsv" "v1.4.1" "08118f3614231f3c5f86f4f68816e706e120b8c91cdf6c1caaea45a71e3e5943";
+    vendorHash = "sha256-swQwVrbbB5zC4aJO7Xs/OCmhQfsJTFs0ApY3a1APiiM="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/yajsv" --help'' "[Uu]sage"; };
+  # yaml-schema-router (MIT): content-based JSON schema routing for yaml-language-server.
+  yaml-schema-router = pkg { pname = "yaml-schema-router"; version = "0.2.0"; src = gh "tepea-code/yaml-schema-router" "refs/tags/v0.2.0" "02d7de28a6189f8153dfd8c6e3cf66466ff552f245e42f882e1daf4e70b81fed";
+    vendorHash = null; subPkgs = "./cmd/yaml-schema-router"; ldflags = "-s -w";
+    check = chk ''"$out/bin/yaml-schema-router" --help'' "[-]log-file"; };
+  # yaml2json (MIT): convert yaml to json.
+  yaml2json = pkg { pname = "yaml2json"; version = "1.3.5"; src = gh "bronze1man/yaml2json" "refs/tags/v1.3.5" "efde12ca8b3ab7df3d3eaef35ecfb6e0d54baed33c8d553e7fd611a79c4cee04";
+    vendorHash = "sha256-iilIeSduL8b74CSvskMxYCBSYKsv+xDcS8GNyyWyAGM="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/yaml2json" --version'' "1\\.3\\.5"; };
+  # yatas (Apache-2.0): tool to audit AWS infrastructure for misconfiguration or potential security issues.
+  yatas = pkg { pname = "yatas"; version = "1.6.1"; src = gh "padok-team/YATAS" "refs/tags/v1.6.1" "d4ecca0180fe9c5447cc13ce9a2b2bdab4a5b977060f5e89b87e9f4ca71d5857";
+    vendorHash = "sha256-iHZ0PSJwJybOsofpK0Ce3BpdWEM15ujHQJoJXG82ruM="; subPkgs = ".";
+    check = chk ''"$out/bin/yatas" --help'' "[-]only-failure"; };
+  # yggstack (LGPL-3.0): yggdrasil as SOCKS proxy / port forwarder.
+  yggstack = pkg { pname = "yggstack"; version = "1.0.4"; src = gh "yggdrasil-network/yggstack" "1.0.4" "341a6f47ea0e1b25ed0e04aa6b3b25513da793e3847d8dbbb033193778464dbe";
+    vendorHash = "sha256-07EY6rWUz7WhG8Q3Fu7MrJfjjXEL4thxmmHlA6rpQg0="; subPkgs = "./cmd/yggstack"; ldflags = "-X github.com/yggdrasil-network/yggdrasil-go/src/version.buildVersion=1.0.4 -X github.com/yggdrasil-network/yggdrasil-go/src/version.buildName=yggstack -s -w";
+    check = chk ''"$out/bin/yggstack" --version'' "1\\.0\\.4"; };
+  # yj (Apache-2.0): convert YAML <=> TOML <=> JSON <=> HCL.
+  yj = pkg { pname = "yj"; version = "5.1.0"; src = gh "sclevine/yj" "v5.1.0" "9a3e9895181d1cbd436a1b02ccf47579afacd181c73f341e697a8fe74f74f99d";
+    vendorHash = "sha256-eMPzb9z8qYe8tNVqYGIK468Dbks1agZdMJ/LCfJCJSw="; subPkgs = "."; ldflags = "-s -w -X main.Version=5.1.0";
+    check = chk ''"$out/bin/yj" --help'' "[Uu]sage"; };
+  # yoink (MIT): automatically download freeleech torrents.
+  yoink = pkg { pname = "yoink"; version = "1.0.1"; src = gh "MrMarble/yoink" "v1.0.1" "58971b3a560b1ca2ed432dd2278464feba94b7aa3118e2861ce492f39611c0e7";
+    vendorHash = "sha256-AfktJXPAOiFVuLZJ2XtxlPHDbCBEQruhxZ2n9uDel7A="; subPkgs = "./cmd/yoink";
+    check = chk ''"$out/bin/yoink" --help'' "[-]-dry-run"; };
+  # youtubeuploader (Apache-2.0): scripted uploads to Youtube using Golang.
+  youtubeuploader = pkg { pname = "youtubeuploader"; version = "1.25.5"; src = gh "porjo/youtubeuploader" "refs/tags/v1.25.5" "b6475f3c7553b83ac1e61d4e9ab2a4c7bec502a15675a504d87323d2cf1c3884";
+    vendorHash = "sha256-YYIcQ9c0L5VzHA74V3Trk2EnRUznNEvH2y1ERsrUiCw="; subPkgs = "./cmd/youtubeuploader"; ldflags = "-s -X main.appVersion=1.25.5";
+    check = chk ''"$out/bin/youtubeuploader" --version'' "1\\.25\\.5"; };
+  # ytcast (MIT): tool to cast YouTube videos from the command-line.
+  ytcast = pkg { pname = "ytcast"; version = "1.4.1"; src = gh "MarcoLucidi01/ytcast" "v1.4.1" "0e00acd92c834ab64f7fb0b1bb682c0f62d781a0e74e0034135fe6b2330e4570";
+    vendorHash = null; subPkgs = "."; ldflags = "-X main.progVersion=1.4.1";
+    check = chk ''"$out/bin/ytcast" --version'' "1\\.4\\.1"; };
+  # zfind (MIT): CLI for file search with SQL like syntax.
+  zfind = pkg { pname = "zfind"; version = "0.4.7"; src = gh "laktak/zfind" "v0.4.7" "49bc01da8446c8a97182f9794032d851614f0efc75b4f4810a114491a08d3bd4";
+    vendorHash = "sha256-ypltHkauLjYgI0ce8CJbgXjwygjQBuo6PAhFwzwQudg="; subPkgs = "./cmd/zfind ./scripts"; ldflags = "-X main.appVersion=0.4.7";
+    check = chk ''"$out/bin/zfind" --version'' "0\\.4\\.7"; };
 }
