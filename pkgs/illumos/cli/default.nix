@@ -54,7 +54,10 @@ let
   c3 = import ./c-gnupg.nix (h // { inherit (c1) readline; });
   c4 = import ./c-big.nix (h // { inherit (c1) readline gnum4; inherit (c2) sqlite; inherit (c5) gnupatch; });   # gnupatch: perl's no-sys-dirs (no perl in its closure)
   c5 = import ./c-dev.nix (h // { inherit (c1) readline gnum4; inherit (c2) sqlite; inherit (c4) perl; });
-  c6 = import ./c-mail.nix (h // { inherit (c1) readline; inherit (c4) perl; inherit (c5) cmake gdbm; });
+  c6 = import ./c-mail.nix (h // { inherit (c1) readline; inherit (c4) perl; inherit (c5) cmake gdbm; }) // c14;   # c14: on this line, so the `in` line other lanes edit stays main's
+  # qnew8: cmake leaves of the x86 queue (a new file, so no served drv moves); x86 only, as c11
+  c14 = if gtkMeson == null then { } else import ./c-qnew8.nix (h // { inherit (c5) cmake gnupatch; inherit (c4) perl;
+    inherit (c1) flex bison; inherit (c9) utf8cpp gtest; inherit gtkMeson; });
   # recipes2: tools/libraries solnix lacked (a new file, so no served drv moves)
   c7 = import ./c-recipes2.nix (h // { inherit (c1) readline gnum4; inherit (c4) perl; inherit (c5) cmake python3; inherit (c3) libgpg-error libassuan bzip2-bin; });
   # libdb 2026.10.7.2 (+ the berkeleydb alias): Oracle Berkeley DB 5.3.28's replacement (libdb1, security)
