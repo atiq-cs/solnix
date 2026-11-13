@@ -395,4 +395,84 @@ in {
   minio-certgen = pkg { pname = "minio-certgen"; version = "1.4.0"; src = gh "minio/certgen" "v1.4.0" "b8465a146d55da55fbe349adfb7939d69acbdf0a9a63062f587b63d687f6ab54";
     vendorHash = null; subPkgs = ".";
     check = chk ''"$out/bin/certgen" --help'' "[-]common-name"; };
+  # misconfig-mapper (MIT): tool to uncover security misconfigurations on popular third-party services.
+  misconfig-mapper = pkg { pname = "misconfig-mapper"; version = "1.19.0"; src = gh "intigriti/misconfig-mapper" "refs/tags/v1.19.0" "41274e2d921c651bb7e3dd604ec9ea14a9327d621fdf734502f657a1f7ee2ac8";
+    vendorHash = "sha256-R+H1KFp/bVs+llt7DVATzUW6zfLC27NbpaTrBGyAaT8="; subPkgs = "./cmd/misconfig-mapper"; ldflags = "-s -w";
+    check = chk ''"$out/bin/misconfig-mapper" --help'' "[-]skip-misconfiguration-checks"; };
+  # mkbrr (GPL-2.0-or-later): tool to create, modify and inspect torrent files.
+  mkbrr = pkg { pname = "mkbrr"; version = "1.25.0"; src = gh "autobrr/mkbrr" "refs/tags/v1.25.0" "8ae71c48e7615b6753f3d10dc255ecc6a41985a000b263f2d69aac467afb4fdc";
+    vendorHash = "sha256-er5l36k/jS2hXlRD+qLpY5XseG2elH4TykHjnDA9uxY="; subPkgs = "."; ldflags = "-s -w -X main.version=v1.25.0 -X main.buildTime=unknown";
+    check = chk ''"$out/bin/mkbrr" version'' "1\\.25\\.0"; };
+  # mmv-go (MIT): rename multiple files using your $EDITOR.
+  mmv-go = pkg { pname = "mmv-go"; version = "0.1.6"; src = gh "itchyny/mmv" "v0.1.6" "18d181e6a53437ad18c4409f3c423bc23687152a17b53a605dde13dfffb0d215";
+    vendorHash = "sha256-T7Jnr2PxoZqtjSWvrnbxEaXdd3zMzpdYhLSyZXgt8dc="; subPkgs = "./cmd/mmv"; ldflags = "-s -w -X main.revision=v0.1.6";
+    check = chk ''"$out/bin/mmv" --version'' "0\\.1\\.6"; };
+  # moji (MIT): find and download fonts from the terminal.
+  moji = pkg { pname = "moji"; version = "0.8.0"; src = gh "Microck/moji" "refs/tags/v0.8.0" "43989e70b8dba28180e5a9bbbc51c833d74a4ebe652a2a263b266d8eea9983f4";
+    vendorHash = "sha256-iG88IOx5cJubfgehi3TfShPMwWgIiEScBH0XoCLN3gE="; subPkgs = "./cmd/moji"; ldflags = "-s -X github.com/microck/moji/internal/app.Version=0.8.0 -X github.com/microck/moji/internal/app.ReleaseMarker=moji-release-version:0.8.0:moji-marker-end";
+    check = chk ''"$out/bin/moji" --version'' "0\\.8\\.0"; };
+  # moq (MIT): interface mocking tool for go generate.
+  moq = pkg { pname = "moq"; version = "0.8.1"; src = gh "matryer/moq" "v0.8.1" "30368b3bd1e9ae523b983c07ddc3ded6fe4865d2b027de09c72cf47a74928bfc";
+    vendorHash = "sha256-PJKQQgEQst6qpsPsjqydqQKJ0LmInlcG5H8174d3Rfk="; subPkgs = "."; ldflags = "-s -w -X main.Version=0.8.1";
+    check = chk ''"$out/bin/moq" --version'' "0\\.8\\.1"; };
+  # mpls (Apache-2.0): live preview of markdown using Language Server Protocol.
+  mpls = pkg { pname = "mpls"; version = "0.23.0"; src = gh "mhersson/mpls" "refs/tags/v0.23.0" "78c7c6290813378783df1c227b1c9c540be1ae75c55c20cb680da87f88252cb5";
+    vendorHash = "sha256-3Sldpqmnyvujgo7hXBphqoIqH9Hcfb7UmJtq99fSv3Q="; subPkgs = "."; ldflags = "-s -w -X github.com/mhersson/mpls/cmd.Version=0.23.0 -X github.com/mhersson/mpls/internal/mpls.Version=0.23.0";
+    check = chk ''"$out/bin/mpls" --version'' "0\\.23\\.0"; };
+  # mqtt-benchmark (Apache-2.0): MQTT broker benchmarking tool.
+  mqtt-benchmark = pkg { pname = "mqtt-benchmark"; version = "0.2.0"; src = gh "krylovsk/mqtt-benchmark" "refs/tags/v0.2.0" "0ee1ca4fe52ec51fc13effd90fb190e74cee4a31d462b03217cef2f9ca84083b";
+    vendorHash = "sha256-uXyhmfGU0RsdvYUYKhvZg2aWcJi76MkfmP86aiyRZcg="; subPkgs = ".";
+    check = chk ''"$out/bin/mqtt-benchmark" --help'' "[-]message-interval"; };
+  # mssqlhound (Apache-2.0): go collector for adding MSSQL attack paths to BloodHound with OpenGraph.
+  mssqlhound = pkg { pname = "mssqlhound"; version = "2.0.4"; src = gh "SpecterOps/MSSQLHound" "refs/tags/v2.0.4" "862ddce8dbf1fa6838e2f949a1c9967fa9de7d301705e7cb6e72dafaa9e41436";
+    vendorHash = "sha256-wMDXvYjYMWRqnJvXW3wgmnuRiFK1ZBBqwQKVos4tn/s="; subPkgs = "./cmd/mssqlhound";
+    check = chk ''"$out/bin/mssqlhound" --version'' "2\\.0\\.4"; };
+  # mtr-exporter (BSD-3-Clause): mtr-exporter periodically executes mtr to a given host and provides the measured results as prometheus metrics.
+  mtr-exporter = pkg { pname = "mtr-exporter"; version = "0.7.0"; src = gh "mgumz/mtr-exporter" "0.7.0" "34e5afa79eea8f10c3a90d0914d19d9438971f1e0d11a81ac48e56d38e6a475f";
+    vendorHash = null; subPkgs = "./cmd/mtr-exporter";
+    check = chk ''"$out/bin/mtr-exporter" --help'' "[Uu]sage"; };
+  # mufetch (MIT): neofetch-style CLI for music metadata with album art display.
+  mufetch = pkg { pname = "mufetch"; version = "0.1.1"; src = gh "ashish0kumar/mufetch" "refs/tags/v0.1.1" "c6cba3e87e21809c640e540d396d3f72bdaa4fd42fdb79de43ada7cd6a589f0e";
+    vendorHash = "sha256-guNbRX/rdrZvaJ37cRB/v3SV3wrLQnHiOLAq2vC2CIw="; subPkgs = "."; ldflags = "-s -w -X github.com/ashish0kumar/mufetch/cmd.version=0.1.1";
+    check = chk ''"$out/bin/mufetch" --version'' "0\\.1\\.1"; };
+  # muffet (MIT): website link checker which scrapes and inspects all pages in a website recursively.
+  muffet = pkg { pname = "muffet"; version = "2.11.7"; src = gh "raviqqe/muffet" "refs/tags/v2.11.7" "21e96ba16b1b0de1d2bee16dafad4c1a5996fc6e0f550edc1377ab791421716a";
+    vendorHash = "sha256-M2q2lH2Kz1eXoOauFzglgGToylAaMA4MbFAvU7JoXUI="; subPkgs = ".";
+    check = chk ''"$out/bin/muffet" --version'' "2\\.11\\.7"; };
+  # mullvad-compass (Unlicense): find the best Mullvad VPN server to connect to.
+  mullvad-compass = pkg { pname = "mullvad-compass"; version = "0.0.4"; src = gh "Ch00k/mullvad-compass" "refs/tags/0.0.4" "bdd9f4c6b858c9dfac31ad1c590d701560a200a4c613ee1f73ddcf1e8c68d64c";
+    vendorHash = "sha256-O3OyOlr+lVofUrFdnHU07BGuSRL3Wk9lKmMpdHDr/9U="; subPkgs = "./cmd/mullvad-compass"; ldflags = "-s -w -X main.Version=0.0.4";
+    check = chk ''"$out/bin/mullvad-compass" --version'' "0\\.0\\.4"; };
+  # mx-takeover (MIT): tool to work with DNS MX records.
+  mx-takeover = pkg { pname = "mx-takeover"; version = "0.1.1"; src = gh "musana/mx-takeover" "refs/tags/v0.1.1" "98f067e99d82b0fe57ed8605985d6a48b4bfee34e6cbc90ce221c52bbbe151fb";
+    vendorHash = "sha256-eUCBTSt3Gss1BZRqWiPiRd4Ep8uafB7oFpCAijlC7z0="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/mx-takeover" --help'' "[-]show-only-mx"; };
+  # mynewt-newt (Apache-2.0): build and package management tool for embedded development.
+  mynewt-newt = pkg { pname = "mynewt-newt"; version = "1.15.0"; src = gh "apache/mynewt-newt" "mynewt_1_15_0_tag" "cb9619f4c0dd567b893cb6e48898f30a6e467fe174da18adb91a1c0da391b000";
+    vendorHash = "sha256-2I7fG06M+7Q+9YQ52MPwPSYx8miIY5YDlunS8Hg2vtg="; subPkgs = "./newt ./newtvm";
+    check = chk ''"$out/bin/newt" version'' "1\\.15\\.0"; };
+  # nexusd (MIT): full-feature WAMP v2 router written in Go.
+  nexusd = pkg { pname = "nexusd"; version = "3.3.1"; src = gh "gammazero/nexus" "v3.3.1" "806bf9fad1078e0ca7161cc7b1b2319f9185328527eb7649f1e10c58e9128b83";
+    vendorHash = "sha256-NzO4YlmBHqaKOCPvJcZkh0ncVpdJsjKFyxSQWpQ7ktI="; subPkgs = "./nexusd";
+    check = chk ''"$out/bin/nexusd" --help'' "[Uu]sage"; };
+  # nftrace (Apache-2.0): commodity tool to use nftables trace functionality.
+  nftrace = pkg { pname = "nftrace"; version = "0.1.0"; src = gh "aojea/nftrace" "refs/tags/v0.1.0" "394bcb5411e99ac328e25d44789fe613c30adc11fda8b97cf758f2b1001112a5";
+    vendorHash = "sha256-+6rAQYGKkEf9aB82nx6Fm2CgK5tPntiMG+KmAijYMRI="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/nftrace" version'' "0\\.1\\.0"; };
+  # nilaway (Apache-2.0): static Analysis tool to detect potential Nil panics in Go code.
+  nilaway = pkg { pname = "nilaway"; version = "0-unstable-2025-03-07"; src = gh "uber-go/nilaway" "19305c7c699bd0d370acd26d6769df1d7af8fb29" "2d20839ee595cb51494aecba789cea7dcbf04d02fe2fd8c495c5e786ed15d57d";
+    vendorHash = "sha256-TEEM8TJp8d8MUeJxo8fb6bVIm7N8dVgVRFt+eLQBGYw="; subPkgs = "./cmd/nilaway"; ldflags = "-s -w";
+    check = chk ''"$out/bin/nilaway" --help'' "[-]experimental-anonymous-function"; };
+  # nix-converter (MIT): all-in-one converter configuration language to Nix and vice versa.
+  nix-converter = pkg { pname = "nix-converter"; version = "1.0.0"; src = gh "theobori/nix-converter" "refs/tags/1.0.0" "7628d9c37a67ce252b7d3ccfe504c1a18f4fd764fd99636aec550b6acdd76b6c";
+    vendorHash = "sha256-i+r7y04iJYauKBzXLxuGzHf1b21tJVzkRUuXqNmt+qU="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/nix-converter" --help'' "[-]sort-iterators"; };
+  # nix-store-gcs-proxy (Apache-2.0): HTTP nix store that proxies requests to Google Storage.
+  nix-store-gcs-proxy = pkg { pname = "nix-store-gcs-proxy"; version = "0.1.0"; src = gh "tweag/nix-store-gcs-proxy" "v0.1.0" "4e4ff145dc50306c26b63f74906b13ce50817d435052aea046411b0103e6109d";
+    vendorHash = "sha256-GmB+unTwa+oa2WlDFnHnYguB2GQdX1D9lhMn6Dgq7n4="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/nix-store-gcs-proxy" --help'' "[-]-bucket-name"; };
+  # nomore403 (MIT): tool to bypass 403/40X response codes.
+  nomore403 = pkg { pname = "nomore403"; version = "2.0.1"; src = gh "devploit/nomore403" "refs/tags/v2.0.1" "d020655d1834d78ec8a6bb944d1c43b3600333411bb312d5faeacf082e488242";
+    vendorHash = "sha256-Xjaf2OKnIkEXPLzD8aXzcwFODaKub5lcitit0JmfdHE="; subPkgs = "."; ldflags = "-s -w -X=main.Version=2.0.1 -X=main.BuildDate=1970-01-01T00:00:00Z";
+    check = chk ''"$out/bin/nomore403" --version'' "2\\.0\\.1"; };
 }
