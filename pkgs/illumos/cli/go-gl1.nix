@@ -1383,4 +1383,84 @@ in {
   prometheus-qbittorrent-exporter = pkg { pname = "prometheus-qbittorrent-exporter"; version = "2.0.2"; src = gh "martabal/qbittorrent-exporter" "refs/tags/v2.0.2" "5de4c5c681b72a70a303980b3e17995ac787b9d5aacd6d957e63f1f4f1f63293";
     vendorHash = "sha256-oyKL29cPoPF+/UlQtZR5vZXsTSNEF0o1VPfgDrdR7Fc="; subPkgs = "."; ldflags = "-s -X 'qbit-exp/app.version=v2.0.2'";
     check = chk ''"$out/bin/qbit-exp" --help'' "[Uu]sage"; };
+  # protobuf-language-server (Apache-2.0): language server implementation for Google Protocol Buffers.
+  protobuf-language-server = pkg { pname = "protobuf-language-server"; version = "0.1.8"; src = gh "lasorda/protobuf-language-server" "refs/tags/v0.1.8" "9e3e7f6beb51d59644de83e36d9b1c9717f4b1bda5e72d0af8a8516235b01be8";
+    vendorHash = "sha256-cslcpNp966o26EHhaI8Od3e0jEY+L8QM8VN9EvEDonQ="; subPkgs = ". ./go-lsp/example";
+    check = chk ''"$out/bin/protobuf-language-server" --help'' "[Uu]sage"; };
+  # protoc-gen-connect-go (Apache-2.0): simple, reliable, interoperable, better gRPC.
+  protoc-gen-connect-go = pkg { pname = "protoc-gen-connect-go"; version = "1.21.0"; src = gh "connectrpc/connect-go" "refs/tags/v1.21.0" "ef9d59c948c5f126292b165f42c23e4fbda4a02284fb2dff045cc51c59cfc122";
+    vendorHash = "sha256-c5rZ56nLxbo+gu3srFORLTGOet5hm9HhHI3OYORfgm4="; subPkgs = "./cmd/protoc-gen-connect-go";
+    check = chk ''"$out/bin/protoc-gen-connect-go" --version'' "1\\.21\\.0"; };
+  # protoc-gen-doc (MIT): documentation generator plugin for Google Protocol Buffers.
+  protoc-gen-doc = pkg { pname = "protoc-gen-doc"; version = "1.5.1"; src = gh "pseudomuto/protoc-gen-doc" "v1.5.1" "75667f5e4f9b4fecf5c38f85a046180745fc73f518d85422d9c71cb845cd3d43";
+    vendorHash = "sha256-bfaaHvkblSQv6ZVXpYmZFoja5fd4gtNpmYSXkhbHcgo="; subPkgs = "./cmd/protoc-gen-doc";
+    check = chk ''"$out/bin/protoc-gen-doc" --version'' "1\\.5\\.1"; };
+  # protolint (MIT): pluggable linter and fixer to enforce Protocol Buffer style and conventions.
+  protolint = pkg { pname = "protolint"; version = "0.58.0"; src = gh "yoheimuta/protolint" "v0.58.0" "7d5f4650ed23f68c34a6be1ba77fb3661dd4b7b28b64664a479b6835febceb18";
+    vendorHash = "sha256-CqsuV72yRhnN2Ai6C2YNZMkxYrV6O5pV/toaQZwMeVs="; subPkgs = "./cmd/pl ./cmd/protoc-gen-protolint ./cmd/protolint"; ldflags = "-X github.com/yoheimuta/protolint/internal/cmd.version=0.58.0 -X github.com/yoheimuta/protolint/internal/cmd.revision=v0.58.0 -X github.com/yoheimuta/protolint/internal/cmd/protocgenprotolint.version=0.58.0 -X github.com/yoheimuta/protolint/internal/cmd/protocgenprotolint.revision=v0.58.0";
+    check = chk ''"$out/bin/protolint" --version'' "0\\.58\\.0"; };
+  # protoscope (Apache-2.0): simple, human-editable language for representing and emitting the Protobuf wire format.
+  protoscope = pkg { pname = "protoscope"; version = "0-unstable-2022-11-09"; src = gh "protocolbuffers/protoscope" "8e7a6aafa2c9958527b1e0747e66e1bfff045819" "5336bb1de8c703421e7f12c9c4e0bf8bc79f472d12448ca8d4e0a1c4fd769ba6";
+    vendorHash = "sha256-v7KGkYGgotQdejBZQJDCR1dppvCToQs96t6knCCysqY="; subPkgs = "./cmd/protoscope"; ldflags = "-s -w";
+    check = chk ''"$out/bin/protoscope" --help'' "[-]explicit-length-prefixes"; };
+  # puffin (MIT): beautiful terminal dashboard for hledger.
+  puffin = pkg { pname = "puffin"; version = "2.1.5"; src = gh "siddhantac/puffin" "v2.1.5" "cfcb3306d55b81725808f83b973f08823d3ec74cf56ca42b309da8d661641c26";
+    vendorHash = "sha256-K4afyHMCLD+ezHeUXn8bynjV6floUIJX3EYMd4sDzJ8="; subPkgs = ".";
+    check = chk ''"$out/bin/puffin" --help'' "[Uu]sage"; };
+  # pup (MIT): parsing HTML at the command line.
+  pup = pkg { pname = "pup"; version = "0.4.0-unstable-2022-03-06"; src = gh "ericchiang/pup" "5a57cf111366c7c08999a34b2afd7ba36d58a96d" "4a9192d802f006deb8506ca38e0d65d440e73e21dcad81e6e1e144d1e0c8ef9b";
+    vendorHash = "sha256-b/90J2o3h2og5c6TfV62ZyqNWq+ZGXKQabMCY6PFHjw="; subPkgs = ".";
+    check = chk ''"$out/bin/pup" --help'' "[Uu]sage"; };
+  # pwdsafety (GPL-3.0-or-later): command line tool checking password safety.
+  pwdsafety = pkg { pname = "pwdsafety"; version = "0.4.2"; src = gh "edoardottt/pwdsafety" "refs/tags/v0.4.2" "6676f7ccc1ad32e8c68b889426b563d69080a69c1f9212b32d79fccc2e70b79f";
+    vendorHash = "sha256-huhnMyNkYzSuarE3o125owEim4elaQVO+XPvKSy3qzk="; subPkgs = "./cmd/pwdsafety"; ldflags = "-w -s";
+    check = chk ''"$out/bin/pwdsafety" --version'' "0\\.4\\.2"; };
+  # px0 (MIT): fast, ultra-light, remote-first IDE for code navigation and review in your browser.
+  px0 = pkg { pname = "px0"; version = "0.1.4"; src = gh "px0-ai/px0" "refs/tags/v0.1.4" "a1f5db2c6ed9ef5370bc1e9f88f5401fa19e8e08e14dcb2c9e70c3ec3feefd57";
+    vendorHash = "sha256-5CuwxwEsAoFFBv4KTqYZWmtgeK23bMyAIOc3G91DrvI="; subPkgs = ".";
+    check = chk ''"$out/bin/px0" --version'' "0\\.1\\.4"; };
+  # q (GPL-3.0-only): tiny and feature-rich command line DNS client with support for UDP, TCP, DoT, DoH, DoQ, and ODoH.
+  q = pkg { pname = "q"; version = "0.19.12"; src = gh "natesales/q" "refs/tags/v0.19.12" "1f56ebfb93fd380dee734cca9227149de2491c49db7b2c0f21019fd463081e4c";
+    vendorHash = "sha256-lUeb7pReohN0mz4G6Sf6myby6qziMh/9OTVT+zI91GE="; subPkgs = "."; ldflags = "-s -w -X main.version=0.19.12";
+    check = chk ''"$out/bin/q" --version'' "0\\.19\\.12"; };
+  # qbec (Apache-2.0): configure kubernetes objects on multiple clusters using jsonnet https://qbec.io.
+  qbec = pkg { pname = "qbec"; version = "0.31.0"; src = gh "splunk/qbec" "v0.31.0" "28f5a7adfc5f5a409613bb2ec10aaf6bb78e49d83403ec8393b3c55d60d0cb46";
+    vendorHash = "sha256-OZj/9LZ9Kxlx6e+fyQ7upv07yGNVnDi5ICoAfbizOU0="; subPkgs = ". ./cmd/changelog-extractor ./cmd/gen-qbec-swagger ./cmd/jsonnet-qbec ./cmdtest/qbec-replay-exec"; ldflags = "-s -w -X github.com/splunk/qbec/internal/commands.version=0.31.0 -X github.com/splunk/qbec/internal/commands.commit=v0.31.0 -X github.com/splunk/qbec/internal/commands.goVersion=1.27.3";
+    check = chk ''"$out/bin/qbec" version'' "0\\.31\\.0"; };
+  # qsreplace (MIT): accept URLs on stdin, replace all query string values with a user-supplied value.
+  qsreplace = pkg { pname = "qsreplace"; version = "0.0.3"; src = gh "tomnomnom/qsreplace" "v0.0.3" "42aa588fa25ec1e0c6af7f750bb0e25987702a1dce180c42f86caa8aea1aea38";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/qsreplace" --help'' "[-]ignore-path"; };
+  # r53-ddns (MIT): DIY DynDNS tool based on Route53.
+  r53-ddns = pkg { pname = "r53-ddns"; version = "1.3.0"; src = gh "fleaz/r53-ddns" "v1.3.0" "f5ce8789f7ac7671d3300d70d574a8a6d13225c06f166ecf7e9f02b9214201ec";
+    vendorHash = "sha256-Zp7fSMQObCJuY1rPW+fbJjJqs+BcE8ns2+LAQZOJwZA="; subPkgs = ".";
+    check = chk ''"$out/bin/r53-ddns" --help'' "[-]zone-id"; };
+  # rabtap (GPL-3.0-only): rabbitMQ wire tap and swiss army knife.
+  rabtap = pkg { pname = "rabtap"; version = "1.45.0"; src = gh "jandelgado/rabtap" "v1.45.0" "cc9d00ea13136fb9e1ca7fc2cba6b7d6024906d3fedb405215eedd4fca677194";
+    vendorHash = "sha256-BdK7BUc1IVrVgs9sucv0EtApfmLCpTP/6lZ3SuxqLFg="; subPkgs = "./cmd/rabtap ./cmd/testgen"; ldflags = "-X main.BuildVersion=v1.45.0";
+    check = chk ''"$out/bin/rabtap" --version'' "1\\.45\\.0"; };
+  # rakkess (Apache-2.0): review Access - kubectl plugin to show an access matrix for k8s server resources.
+  rakkess = pkg { pname = "rakkess"; version = "0.5.1"; src = gh "corneliusweig/rakkess" "v0.5.1" "16b76999b407da4dd5a9b8d9b9d8fa048078504e1a393e633b6854b31a74dc9f";
+    vendorHash = "sha256-ahDwUoq+YEkEbG8UrFn1tix2E/U9AJ6ixlZZNhC/I6Q="; subPkgs = "."; ldflags = "-s -w -X github.com/corneliusweig/rakkess/internal/version.version=v0.5.1";
+    check = chk ''"$out/bin/rakkess" version'' "0\\.5\\.1"; };
+  # rcon-cli (Apache-2.0): little RCON cli based on james4k's RCON library for golang.
+  rcon-cli = pkg { pname = "rcon-cli"; version = "1.7.7"; src = gh "itzg/rcon-cli" "refs/tags/1.7.7" "e19d0acd3427fbbb8942bc63a6aca1d2c407791fe041b9e8d7923ec85b64958a";
+    vendorHash = "sha256-zcnk7Ry+oixGMt3AMlVl7/nHlpJv64MTlHCICZ2IkVw="; subPkgs = ".";
+    check = chk ''"$out/bin/rcon-cli" --help'' "[Uu]sage"; };
+  # rdap (MIT): command line client for the Registration Data Access Protocol (RDAP).
+  rdap = pkg { pname = "rdap"; version = "0.10.0"; src = gh "openrdap/rdap" "refs/tags/v0.10.0" "19a6b1fe6c3335fa8bb48fb4c33ce56082e0ffdd24dd649745793613ab6c85cb";
+    vendorHash = "sha256-AunR6Jxvob95AlDwaSsIRXocXyiC8S5/kKgt1oQA2Yk="; subPkgs = "./cmd/rdap"; ldflags = "-s -X=github.com/openrdap/rdap.version=0.10.0";
+    check = chk ''"$out/bin/rdap" --version'' "0\\.10\\.0"; };
+  # reddit-tui (MIT): terminal UI for reddit.
+  reddit-tui = pkg { pname = "reddit-tui"; version = "0.3.9"; src = gh "tonymajestro/reddit-tui" "refs/tags/v0.3.9" "4f5dad492b776e67f9ed94fdc7bbcccabaa921ffdba7eb184619a830d05b5a33";
+    vendorHash = "sha256-6f0d/iXQtyL/YvWXI58YoHEzuXP3cJumO61IxE0/7+I="; subPkgs = ".";
+    check = chk ''"$out/bin/reddittui" --help'' "[Uu]sage"; };
+  # redis-dump-go (MIT): dump Redis keys to a file in RESP format using multiple connections.
+  redis-dump-go = pkg { pname = "redis-dump-go"; version = "0.8.2"; src = gh "yannh/redis-dump-go" "refs/tags/v0.8.2" "104821a5521c22a222433729a42e73a672d9c36e775c0daa84fc35d4cac508fe";
+    vendorHash = null; subPkgs = ". ./utils/generator";
+    check = chk ''"$out/bin/redis-dump-go" --help'' "[Uu]sage"; };
+  # redli (Apache-2.0): humane alternative to the Redis-cli and TLS.
+  redli = pkg { pname = "redli"; version = "0.18.0"; src = gh "IBM-Cloud/redli" "refs/tags/v0.18.0" "a75de85b90466a088e39885b67c38cb3e7ceeee6f1ec82df3d1d88aee5a17a20";
+    vendorHash = "sha256-9GxXySVw5bL2aZw+uacBhKsTRTfCRvio8Lj82j9/pQE="; subPkgs = ".";
+    check = chk ''"$out/bin/redli" --version'' "0\\.18\\.0"; };
 }
