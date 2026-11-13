@@ -26,8 +26,11 @@ in {
     # start-cosmic as NixOS patches it: store paths for cosmic-session and dbus-run-session.
     install = ''
       # and patchShebangs: 1.5.0's #!/bin/bash becomes the store bash (publish-gate B9; a solnix host has no /bin/bash)
-      sed -e "1s|^#!/bin/bash$|#!$tools/bin/bash|" -e "s|/usr/bin/cosmic-session|$out/bin/cosmic-session|" -e "s|/usr/bin/dbus-run-session|${graphics.dbus}/bin/dbus-run-session|" data/start-cosmic > "$out/bin/start-cosmic"
+      # and the session's output goes to a log in the user's state dir (start-cosmic-log.sh), not to a VT nobody reads
+      sed -e "1s|^#!/bin/bash$|#!$tools/bin/bash|" -e "s|/usr/bin/cosmic-session|$out/bin/cosmic-session|" -e "s|/usr/bin/dbus-run-session|${graphics.dbus}/bin/dbus-run-session|" \
+        -e "/^export XDG_CURRENT_DESKTOP=/r ${./start-cosmic-log.sh}" data/start-cosmic > "$out/bin/start-cosmic"
       chmod 0755 "$out/bin/start-cosmic"; grep -q "$out/bin/cosmic-session" "$out/bin/start-cosmic"
+      grep -q "cosmic-session/session-" "$out/bin/start-cosmic" || { echo "FATAL: start-cosmic lacks the session log" >&2; exit 1; }
       [ "$(head -1 "$out/bin/start-cosmic")" != "#!/bin/bash" ] || { echo "FATAL: start-cosmic keeps #!/bin/bash" >&2; exit 1; }
       sed "s|/usr/bin/start-cosmic|$out/bin/start-cosmic|" data/cosmic.desktop > cosmic.desktop
       install -Dm0644 cosmic.desktop "$out/share/wayland-sessions/cosmic.desktop"
