@@ -1303,4 +1303,84 @@ in {
   levant = pkg { pname = "levant"; version = "0.4.0"; src = gh "hashicorp/levant" "v0.4.0" "8d299e890af5a3c6e9048f930b10cd34276656142358c298497ec5d7d8efa263";
     vendorHash = "sha256-KLWChZ9MeP0LnvBuPVHw6Jcz8vvNloI83whUA/xegCU="; subPkgs = ".";
     check = chk ''"$out/bin/levant" --version'' "0\\.4\\.0"; };
+  # parlay (Apache-2.0): enriches SBOMs with data from third party services.
+  parlay = pkg { pname = "parlay"; version = "0.11.0"; src = gh "snyk/parlay" "v0.11.0" "c1f9eaa073b6c958a0722b145fcea9fa3579c9b5552f3359d86f91917441253b";
+    vendorHash = "sha256-mhL6EWMv1Eh4pM0VFKUtzLGmNQ6zYg3zPIm8uYawrSU="; subPkgs = ".";
+    check = chk ''"$out/bin/parlay" --help'' "[Uu]sage"; };
+  # passdetective (Apache-2.0): scans command history to detect mistakenly written passwords, API keys, and secrets.
+  passdetective = pkg { pname = "passdetective"; version = "1.0.7"; src = gh "aydinnyunus/PassDetective" "1.0.7" "0ae261bcb86644f7dc1aae9fa8b054a20a355c354306b7e0519a1995005caba5";
+    vendorHash = "sha256-yZqwi9T9iyP4OMHPPzOEuTUS1ZzM9oxADy9TSWkQAv0="; subPkgs = "."; ldflags = "-s -w -extldflags -static -X=main.build=1.0.7";
+    check = chk ''"$out/bin/PassDetective" --help'' "[Uu]sage"; };
+  # pbgopy (MIT): copy and paste between devices.
+  pbgopy = pkg { pname = "pbgopy"; version = "0.4.0"; src = gh "nakabonne/pbgopy" "v0.4.0" "126ff35e5efbdb20df62594632c3a69190fc3e0f3bd04fa2da9366d6c322b76b";
+    vendorHash = "sha256-ggB+NH8aRsaIaLQfIvqHlw/YuIixLkpFcsWFdX/BS94="; subPkgs = ".";
+    check = chk ''"$out/bin/pbgopy" --help'' "[Uu]sage"; };
+  # pg_flame (Apache-2.0): flamegraph generator for Postgres EXPLAIN ANALYZE output.
+  pg_flame = pkg { pname = "pg_flame"; version = "1.2"; src = gh "mgartner/pg_flame" "v1.2" "913c25aa960b5542f94064ee15b77494e7d39adcddacdde31886f1891bb1a30a";
+    vendorHash = "sha256-73mSob1wGDxM+SXUXLkQWZG8qnOsUwat3kXOXqCAaIk="; subPkgs = ".";
+    check = chk ''"$out/bin/pg_flame" --help'' "[Uu]sage"; };
+  # pget (MIT): fast, resumable file download client.
+  pget = pkg { pname = "pget"; version = "0.2.1"; src = gh "Code-Hex/pget" "v0.2.1" "fa7646bec975dd3995fb45d6b1f190565d6c4fae03c46c4eda34716c83ede03e";
+    vendorHash = "sha256-NOiTXBDpdTMNq9gjlUaxceEAa1JeNDbaA2cFo/l0oBM="; subPkgs = "./cmd/pget"; ldflags = "-w -s -X=main.version=0.2.1";
+    check = chk ''"$out/bin/pget" --version'' "0\\.2\\.1"; };
+  # pgo-client (Apache-2.0): CLI client for Crunchy PostgreSQL Kubernetes Operator.
+  pgo-client = pkg { pname = "pgo-client"; version = "4.7.10"; src = gh "CrunchyData/postgres-operator" "v4.7.10" "2d738b176c1a658841c810f56b1de64be74042f049d1ed9f6e7dc98d477ed29c";
+    vendorHash = "sha256-b6qpUDmR3ORbJztfy+JqcRxK4lJmGxWqG/5rR1xOBnM="; subPkgs = "./cmd/pgo";
+    check = chk ''"$out/bin/pgo" --help'' "[Uu]sage"; };
+  # picoleaf (MIT): A tiny CLI tool for controlling Nanoleaf.
+  picoleaf = pkg { pname = "picoleaf"; version = "1.4.0"; src = gh "tessro/picoleaf" "refs/tags/v1.4.0" "bccb0958fbde632311610e65fa4f1a7d2053b955adff29c6ec4653acce6085a3";
+    vendorHash = "sha256-ggPHSolXDEq2M8s25kZIGaJmcqQ2ZA0y6HnUMiMltAU="; subPkgs = ".";
+    check = chk ''"$out/bin/picoleaf" --help'' "[Uu]sage"; };
+  # pingme (MIT): send messages or alerts to multiple messaging platforms & email.
+  pingme = pkg { pname = "pingme"; version = "0.2.7"; src = gh "kha7iq/pingme" "v0.2.7" "054750be7085c5dfcaae2cea17119b39041beef4577dfdfaf8011804c0836e9d";
+    vendorHash = "sha256-0EdRYR+7sjqMvV+ZwoELIeMQVwDErydI4XUopCmQ6nw="; subPkgs = "."; ldflags = "-s -w -X=main.Version=0.2.7";
+    check = chk ''"$out/bin/pingme" --version'' "0\\.2\\.7"; };
+  # pipet (MIT): scraping and extracting data from online assets.
+  pipet = pkg { pname = "pipet"; version = "0.3.0"; src = gh "bjesus/pipet" "0.3.0" "9fb35bcc4be8b7655a4075c3b2bf7b0368ae7bb97e9e6dbbcf00422c8e18cc6b";
+    vendorHash = "sha256-IXu8Y9GPJlRzzCrEEbJaR0CTBAh5ix4aP52U6mFh9sQ="; subPkgs = "./cmd/pipet"; ldflags = "-s -w -X main.version=0.3.0 -X main.currentSha=0.3.0";
+    check = chk ''"$out/bin/pipet" --version'' "0\\.3\\.0"; };
+  # pj (MIT): fast project directory finder that searches filesystems for git repositories.
+  pj = pkg { pname = "pj"; version = "1.14.0"; src = gh "josephschmitt/pj" "refs/tags/v1.14.0" "7c08277c6cae5c5193400c2fbe2f2b87a68c79502278e088285ec45abe2b1bd5";
+    vendorHash = "sha256-ciVxwn97aMDKHNTpTYPF97Xc87EkXCusSQ6hRz/O9Jo="; subPkgs = "."; ldflags = "-s -X main.version=1.14.0";
+    check = chk ''"$out/bin/pj" --version'' "1\\.14\\.0"; };
+  # pkger (MIT): embed static files in Go binaries (replacement for gobuffalo/packr).
+  pkger = pkg { pname = "pkger"; version = "0.17.1"; src = gh "markbates/pkger" "v0.17.1" "da775b5ec5675f0db75cf295ff07a4a034ba15eb5cc02d278a5767f387fb8273";
+    vendorHash = "sha256-ySB8WsX3HNEjIGZRo4AXWPgZHWYVNZlhSfm+PttWOeQ="; subPkgs = "./cmd/pkger";
+    check = chk ''"$out/bin/pkger" --help'' "[Uu]sage"; };
+  # plan-exporter (MIT): query plan exporter for psql.
+  plan-exporter = pkg { pname = "plan-exporter"; version = "0.0.6"; src = gh "agneum/plan-exporter" "refs/tags/v0.0.6" "f5b30610bd91ef39ed529ac25cf38a672f3808a832ef14c9dafaa0a7dc24bb7f";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/plan-exporter" --help'' "[-]auto-confirm"; };
+  # play (Apache-2.0): TUI playground for programs like grep, sed and awk.
+  play = pkg { pname = "play"; version = "0.4.0"; src = gh "paololazzari/play" "refs/tags/v0.4.0" "7abe1745099e9b4d66e5fc62a1180f2170e8351953d0c6978dfc4719591cd00e";
+    vendorHash = "sha256-3/q5VXxfVU1OUmjy/5XVZB7w42MpByopHT4HfKiuZ2s="; subPkgs = ".";
+    check = chk ''"$out/bin/play" version'' "0\\.4\\.0"; };
+  # pluto (Apache-2.0): find deprecated Kubernetes apiVersions.
+  pluto = pkg { pname = "pluto"; version = "5.24.3"; src = gh "FairwindsOps/pluto" "v5.24.3" "0768ca0d76ecafbda4c810ff52dcb3b2739d9472e3f251c6673626e8773dd1db";
+    vendorHash = "sha256-TnEhJcrZ8B0iKElslVHxoclbJgcmYoQolNWT+s1c3O0="; subPkgs = "./cmd/pluto"; ldflags = "-w -s -X main.version=v5.24.3";
+    check = chk ''"$out/bin/pluto" version'' "5\\.24\\.3"; };
+  # powerline-go (GPL-3.0-or-later): powerline like prompt for Bash, ZSH and Fish.
+  powerline-go = pkg { pname = "powerline-go"; version = "1.26"; src = gh "justjanne/powerline-go" "refs/tags/v1.26" "65aa911d50f3695b37da92a53ed417b6cf263a9e4091552b77921a6057dbb320";
+    vendorHash = "sha256-B0CGHIsICVuE7qusQJD74VKkpxs62+fkMUEgnFyO5ts="; subPkgs = "."; ldflags = "-X github.com/justjanne/powerline-go/powerline.Version=1.26";
+    check = chk ''"$out/bin/powerline-go" --version'' "1\\.26"; };
+  # pphack (MIT): client-Side Prototype Pollution Scanner.
+  pphack = pkg { pname = "pphack"; version = "0.1.6"; src = gh "edoardottt/pphack" "refs/tags/v0.1.6" "cc4da17a45873942a00eb5f499bb8c1c3c1124c084d9eee8d6133c1ba306630d";
+    vendorHash = "sha256-8dvAuUxfnt9oMTyAMRTur+tNKEHJUH+5SQ38mwpC9LY="; subPkgs = "./cmd/pphack"; ldflags = "-s -w";
+    check = chk ''"$out/bin/pphack" version'' "0\\.1\\.6"; };
+  # pql (Apache-2.0): pipelined Query Language.
+  pql = pkg { pname = "pql"; version = "0.2.0"; src = gh "runreveal/pql" "refs/tags/v0.2.0" "0414f0f9ada1bb04c4070a8b10374ffba472933213602d5ba574060cdd3b4615";
+    vendorHash = "sha256-ih+JI5S1frOHqUWsIQA2ggv+m9QZEO+hznhGTljMR3I="; subPkgs = "./cmd/pql"; ldflags = "-s";
+    check = chk ''"$out/bin/pql" --help'' "[Uu]sage"; };
+  # prism (MIT): RTMP stream recaster/splitter.
+  prism = pkg { pname = "prism"; version = "0.1.1"; src = gh "muesli/prism" "refs/tags/v0.1.1" "da0171dcaa0a544bb32d2ec0ab8a2dd15cc9d36e07c83cbfc4241db6f388e7a4";
+    vendorHash = "sha256-4UVhr1zj2pbdxaE7mnV5Mggg8DmJZKF5xw0oIl4gnQY="; subPkgs = ".";
+    check = chk ''"$out/bin/prism" --help'' "[Uu]sage"; };
+  # prom2json (Apache-2.0): tool to scrape a Prometheus client and dump the result as JSON.
+  prom2json = pkg { pname = "prom2json"; version = "1.5.0"; src = gh "prometheus/prom2json" "v1.5.0" "16dfed4e45ed1ee3e31d1c7166bebd803c0bfc4e110e02cad41f7ba7dde8e56f";
+    vendorHash = "sha256-Lpp9MZzcIznGHmlODrBVlE//hAiNvWNAd+4b3DOPOAA="; subPkgs = "./cmd/prom2json";
+    check = chk ''"$out/bin/prom2json" --help'' "[-]-help-long"; };
+  # prometheus-qbittorrent-exporter (MIT): prometheus exporter for qBittorrent.
+  prometheus-qbittorrent-exporter = pkg { pname = "prometheus-qbittorrent-exporter"; version = "2.0.2"; src = gh "martabal/qbittorrent-exporter" "refs/tags/v2.0.2" "5de4c5c681b72a70a303980b3e17995ac787b9d5aacd6d957e63f1f4f1f63293";
+    vendorHash = "sha256-oyKL29cPoPF+/UlQtZR5vZXsTSNEF0o1VPfgDrdR7Fc="; subPkgs = "."; ldflags = "-s -X 'qbit-exp/app.version=v2.0.2'";
+    check = chk ''"$out/bin/qbit-exp" --help'' "[Uu]sage"; };
 }
