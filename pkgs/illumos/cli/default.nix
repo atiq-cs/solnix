@@ -73,7 +73,14 @@ let
   cqd = if gtkMeson == null then { } else import ./c-qdeps.nix (h // { inherit (c5) cmake gnupatch; inherit (c9) libdeflate;
     inherit (c10) lerc; inherit (c7) giflib; inherit gtkMeson; });
   # recipes3: libraries the x86 queue has jobs for (a new file, so no served drv moves)
-  c9 = import ./c-recipes3.nix (h // { inherit (c5) cmake; inherit (c4) perl; });
+  c9 = import ./c-recipes3.nix (h // { inherit (c5) cmake; inherit (c4) perl; }) // cpy;   # cpy: on this line, so the lines other lanes edit stay main's
+  # py1: nixpkgs' Python packaging (../python.nix: the PyPA bootstrap set + buildPythonPackage) and the queue's Python leaves
+  # (./py-leaves.nix). New files, so no served drv moves; x86 only, as c11.
+  python = import ../python.nix { inherit (base) mkSrcPkg hostTools; inherit (c5) python3 gnupatch; inherit chk; };
+  # the bootstrap set under its drv names (nixpkgs': python3.13-<pname>), so generic names (build, wheel) stay free at top level
+  cpy = if gtkMeson == null then { } else builtins.listToAttrs (map (n: { name = "python3.13-${n}"; value = python.${n}; })
+      [ "flit-core" "installer" "packaging" "pyproject-hooks" "build" "wheel" "setuptools" ])
+    // import ./py-leaves.nix { inherit (python) buildPythonApplication setuptools; inherit chk; };
   # recipes4: tools/libraries the x86 queue has jobs for (a new file, so no served drv moves); gtkMeson: x86 only (null drops it)
   c10 = if gtkMeson == null then { } else import ./c-recipes4.nix (h // { inherit (c5) python3; inherit (c5) gnupatch; inherit (c9) libxau libxdmcp libpthread-stubs vulkan-headers libogg check libuv utf8cpp libdeflate libedit popt; inherit (c1) bison; inherit (data) tzdata; inherit (c7) tcl fmt; inherit (c3) bzip2-bin; inherit (c1) gnum4; inherit (c5) cmake; inherit (c4) perl; inherit gtkMeson; });
   # qalias: the queue's nixpkgs variant attrs under their own pnames (a new file, so no served
