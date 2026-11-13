@@ -29,7 +29,7 @@ let
   gtkTools = import ../desktop/gtk/tools.nix { mkSrcPkg = mkCores; inherit (cli) python3 gnupatch; inherit (gtools) samurai; inherit (base) pkgconf gettext;
     inherit (srcPkgs) bash; };
   # tools.path stays ':' (b1's libpng text interpolates it, so its row stays put); mesonBuild sets the meson PATH itself, and the farm has pkg-config
-  gtkBase = import ../desktop/gtk/base.nix { mkSrcPkg = mkCores; inherit zlib; tools = gtkTools // { path = ":"; }; inherit (cli) python3 cmake;
+  gtkBase = import ../desktop/gtk/base.nix { a64Fonts = true; mkSrcPkg = mkCores; inherit zlib; tools = gtkTools // { path = ":"; }; inherit (cli) python3 cmake;
     graphics = glibs; inherit (srcPkgs) nixChain; noto-sans = cosmicData'.noto-sans; };
   # graphics/input.nix's pixman, and desktop/gtk/gfx.nix's cairo/pango/gdk-pixbuf (graphics = pixman only; no mesa/wayland on aarch64)
   gtkGfx = import ../desktop/gtk/gfx.nix { mkSrcPkg = mkCores; tools = gtkTools; inherit zlib; base = gtkBase; inherit (srcPkgs) nixChain;
