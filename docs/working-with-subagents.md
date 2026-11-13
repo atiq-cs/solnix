@@ -143,6 +143,23 @@ These are in `/tmp/briefs/COMMON.md` as a reusable preamble; the durable copy is
 * **A `.patch` with no diff hunks is a trap** — applying it silently no-ops and ships an unpatched
   binary that looks fine. Five such files existed. `scripts/repo-integrity-check.sh` now fails on
   it; prose belongs in `.notes.md`.
+* **Never edit a running shell script in place.** bash reads a script by byte offset as it runs, so
+  an edit under a live process makes it execute the NEW file from the OLD offset. wave8 (2026-11-13):
+  a driver edited 2 min after it started re-ran a whole phase hours later, killed four checks and
+  removed a bank before it was caught (wave7's w7run had the same class on 11-10). Write a new file
+  under a new name and start that.
+* **A machine image must not carry ssh host keys.** wave9's first build-host AMI was snapshotted
+  from a host that had generated its keys, so every instance launched from it shared one host key:
+  one identity for what infra enrols as separate builders. Generate keys at first boot
+  (`ssh-keygen -A`, as NixOS does) and check two instances' fingerprints differ before using an AMI.
+* **A build host must match the publishers' host class.** illumos libc's `iconv_open` loads modules
+  from the HOST's `/usr/lib/iconv` (a compiled-in path), and some programs depend on the kernel's
+  user address layout (userLimit47). Built on a host without them, html2text's tests crashed, mtools
+  found no codepage, and mimalloc refused to build: host state, not recipe bugs. Bake the class into
+  the AMI; until iconv is fixed in the store, it is a real purity gap.
+* **`pgrep -f` over ssh matches the remote shell running it,** so a wait loop on it never ends.
+  Use a bracketed pattern (`pgrep -f '[d]rive3'`) or `ps -eo pid,args`. illumos `ps -ef` cuts
+  arguments at 80 characters; use `ps -eo args` or `pargs`.
 
 ## Budget the run
 
