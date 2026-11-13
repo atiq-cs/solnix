@@ -27,7 +27,13 @@ rec {
       # builddir_name=.: gyp_node.py gives gyp an absolute output dir, so the link ran `-o <W>/.../out/Release/node` and illumos
       # ld named bin/node's STT_FILE symbol (.SUNW_ldynsym) after it (gate B8, measured node6). gyp's own default is relative; its
       # actions still run with builddir := $(abs_builddir). Same class as base.nix freetype's TOP_DIR=.
-      gmake -C out -j''${NIX_BUILD_CORES:-8} BUILDTYPE=Release builddir_name=.
+      # -g0 for the two generated sources: gcc writes a const array's initializer into DWARF (DW_AT_const_value), so
+      # node_javascript.o's .debug_info held all of lib/ and config.gypi, $out included (node_prefix), and split-debug-od.sh
+      # then kept node.debug uncompressed, where libgcc.a's DWARF names the gate proto (closure gate, node6). Their data is
+      # byte arrays: no code to debug. A later -g0 overrides the cc wrapper's -g.
+      # (pattern-specific, so the ./ that builddir_name=. puts in front of the object paths does not matter)
+      printf '%s\n' '%/gen/node_javascript.o: CXXFLAGS.target += -g0' '%/gen/node_snapshot.o: CXXFLAGS.target += -g0' > out/solnix-g0.mk
+      gmake -C out -f Makefile -f solnix-g0.mk -j''${NIX_BUILD_CORES:-8} BUILDTYPE=Release builddir_name=.
       python3 tools/install.py install --dest-dir "" --prefix "$out"
       find "$out/share/doc" -delete 2>/dev/null || true
       "$out/bin/node" -e 'const c = require("crypto"), z = require("zlib");
