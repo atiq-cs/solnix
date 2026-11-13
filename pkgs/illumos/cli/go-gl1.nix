@@ -1035,4 +1035,84 @@ in {
   hcdiag = pkg { pname = "hcdiag"; version = "0.5.13"; src = gh "hashicorp/hcdiag" "refs/tags/v0.5.13" "a22407652f683b9e20009b527c44fb59da659cceef67363270b9cd750ce7a342";
     vendorHash = "sha256-VIhZQ6hQNP1BJcYQvgqQWC7e1NO5SKS7Mjvxq7PgC+Q="; subPkgs = ".";
     check = chk ''"$out/bin/hcdiag" --version'' "0\\.5\\.13"; };
+  # go-landlock (MIT): go library for the Linux Landlock sandboxing feature.
+  go-landlock = pkg { pname = "go-landlock"; version = "0-unstable-2024-02-16"; src = gh "landlock-lsm/go-landlock" "efb66220540a9ef86aa0160d15e55f429d5b94d9" "8cdd3c56e4919d3a83223464740b74dac570713087253a06715df5beb2a74299";
+    vendorHash = "sha256-vXdINia6HHIea4UQcyWG3jhtXpHSOPq+V230lNlohIs="; subPkgs = "./cmd/landlock-restrict-net ./cmd/landlock-restrict";
+    check = chk ''"$out/bin/landlock-restrict-net" --help'' "[Uu]sage"; };
+  # go-licence-detector (Apache-2.0): detect licences in Go projects and generate documentation.
+  go-licence-detector = pkg { pname = "go-licence-detector"; version = "0.11.1"; src = gh "elastic/go-licence-detector" "v0.11.1" "12e7072a1fefb43d42299e72ee89d5b13a84ee0dbabe8a60b89e07fbe8cce1aa";
+    vendorHash = "sha256-K9YlVtWaITIS63yqt3ZMsmUxnuLkbOYlEkWefeAStQQ="; subPkgs = ".";
+    check = chk ''"$out/bin/go-licence-detector" --help'' "[-]-template-value"; };
+  # gocyclo (BSD-3-Clause): calculate cyclomatic complexities of functions in Go source code.
+  gocyclo = pkg { pname = "gocyclo"; version = "0.6.0"; src = gh "fzipp/gocyclo" "v0.6.0" "2cf9b301b6582f11bb41c4fcc24c50b74ea49db21704f1e4ba1f9c1d614f223a";
+    vendorHash = null; subPkgs = "./cmd/gocyclo";
+    check = chk ''"$out/bin/gocyclo" --help'' "[-]avg-short"; };
+  # hcl2json (Apache-2.0): convert hcl2 to json.
+  hcl2json = pkg { pname = "hcl2json"; version = "0.6.9"; src = gh "tmccombs/hcl2json" "v0.6.9" "df7361e4ea5f34de02a81afa06f515bc6379efeb5ab86c154c6a31def6bcb3dc";
+    vendorHash = "sha256-wlBwVQk/kLsbTTr2feKKTjqZAeGGXZSPK+Hqeh7fWR0="; subPkgs = ".";
+    check = chk ''"$out/bin/hcl2json" --help'' "[Uu]sage"; };
+  # hcledit (MIT): command line editor for HCL.
+  hcledit = pkg { pname = "hcledit"; version = "0.2.19"; src = gh "minamijoyo/hcledit" "v0.2.19" "c89c66d480caa4365ba6318580964e551ce89b52087c44c6d73daa8a5d83623b";
+    vendorHash = "sha256-8RB8qu3IWEKWx8G3mwOWvEqPuRo1Ymj9Y4wMGxXsG6o="; subPkgs = ".";
+    check = chk ''"$out/bin/hcledit" version'' "0\\.2\\.19"; };
+  # hclfmt (MPL-2.0): code formatter for the Hashicorp Configuration Language (HCL) format.
+  hclfmt = pkg { pname = "hclfmt"; version = "2.25.0"; src = gh "hashicorp/hcl" "refs/tags/v2.25.0" "a2cc385ada570cea4e623c4e7eae862e1a920482e91fb08d24590fc1c546e8d1";
+    vendorHash = "sha256-wijMtlnruEMAzQ1LWN8C0XbHHByuZzmycbsZuiHrFP4="; subPkgs = "./cmd/hclfmt";
+    check = chk ''"$out/bin/hclfmt" --help'' "[-]require-no-change"; };
+  # helm-docs (GPL-3.0-only): tool for automatically generating markdown documentation for Helm charts.
+  helm-docs = pkg { pname = "helm-docs"; version = "1.14.2"; src = gh "norwoodj/helm-docs" "v1.14.2" "88d1b3401220b2032cd27974264d2dc0da8f9e7b67a8a929a0848505c4e4a0ae";
+    vendorHash = "sha256-GbbMzqQ+DuoWmJbcQ/FI3q5NqKahNLL2Wf9DGQQrx7Q="; subPkgs = "./cmd/helm-docs"; ldflags = "-w -s -X main.version=1.14.2";
+    check = chk ''"$out/bin/helm-docs" --version'' "1\\.14\\.2"; };
+  # helmsman (MIT): helm Charts (k8s applications) as Code tool.
+  helmsman = pkg { pname = "helmsman"; version = "4.0.5"; src = gh "mkubaczyk/helmsman" "v4.0.5" "d7a49bd4322dfc4f1f8136fe0bcce5ef0bbb9aafe895945580178861fd908ac4";
+    vendorHash = "sha256-VjWDeqNpPnIex1A1IT6Lu8azA3jQWFkTtRTADXxWg7w="; subPkgs = "./cmd/helmsman";
+    check = chk ''"$out/bin/helmsman" --help'' "[-]check-for-chart-updates"; };
+  # hexxy (MIT): modern and beautiful alternative to xxd and hexdump.
+  hexxy = pkg { pname = "hexxy"; version = "0.1.1"; src = gh "sweetbbak/hexxy" "refs/tags/v0.1.1" "9ba337fde77a7fa1c79c82eb661dca33901830edf365ad21d5713efc52adcf5f";
+    vendorHash = "sha256-r+au6j8YTd3BZ76thNN084m2JeLki+og6mQk1mSmejQ="; subPkgs = "./cmd/hexxy"; ldflags = "-s -w";
+    check = chk ''"$out/bin/hexxy" --help'' "[-]-no-color"; };
+  # hjson-go (MIT): utility to convert JSON to and from HJSON.
+  hjson-go = pkg { pname = "hjson-go"; version = "4.7.1"; src = gh "hjson/hjson-go" "v4.7.1" "2881c114bcd194860155885e3c3586b6e41832818ea5cbf9c661a6a7990a79b6";
+    vendorHash = null; subPkgs = "./hjson-cli"; ldflags = "-s -w";
+    check = chk ''"$out/bin/hjson-cli" --help'' "[Uu]sage"; };
+  # honeymarker (Apache-2.0): simple CRUD interface for dealing with per-dataset markers on honeycomb.io.
+  honeymarker = pkg { pname = "honeymarker"; version = "0.2.12"; src = gh "honeycombio/honeymarker" "v0.2.12" "4d0e7f491d9040c01958746534be49cfa89ce5bd0d1754f66d90cad1c72cda8a";
+    vendorHash = "sha256-F2unpvBo6nZdRbQq8F+xvTcHQFpR+nEC/ZrdP+nokNo="; subPkgs = ".";
+    check = chk ''"$out/bin/honeymarker" --help'' "[Uu]sage"; };
+  # honeyvent (Apache-2.0): CLI for sending individual events to honeycomb.io.
+  honeyvent = pkg { pname = "honeyvent"; version = "1.1.3"; src = gh "honeycombio/honeyvent" "v1.1.3" "4efb7c383fb78d9062f4af07548253d58c943e0efebfdd58852a016eb20f599f";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/honeyvent" --help'' "[-]-no-tls-verify"; };
+  # horcrux (MIT): split your file into encrypted fragments so that you don't need to remember a passcode.
+  horcrux = pkg { pname = "horcrux"; version = "0.3-unstable-2023-09-19"; src = gh "jesseduffield/horcrux" "5e848abcca49a7ad359f5a24ef4ca7e0eda80889" "8e8951807067b9036a6f417847ba3f8cc2d36144afb43e8868a849b746ff79bb";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/horcrux" --help'' "[Uu]sage"; };
+  # htmltest (MIT): tool to test generated HTML output.
+  htmltest = pkg { pname = "htmltest"; version = "0.17.0"; src = gh "wjdp/htmltest" "v0.17.0" "2c89e56c837f4d715db9816942e007c973ba58de53d249abc80430c4b7e72f88";
+    vendorHash = "sha256-XaFdpWSTdkuCw3WXA/pdf4XI2z4sv4extPFoujNC+gs="; subPkgs = "."; ldflags = "-w -s -X main.version=0.17.0";
+    check = chk ''"$out/bin/htmltest" --version'' "0\\.17\\.0"; };
+  # http-scanner (MIT): HTTP security vulnerability scanner that detects a wide range of web application vulnerabilities.
+  http-scanner = pkg { pname = "http-scanner"; version = "1.0.1"; src = gh "aymaneallaoui/kafka-http-scanner" "refs/tags/1.0.1" "3650013181eb764fd45444b544db68f19da16c42ebe39505bc37a2dfe90c2446";
+    vendorHash = "sha256-LDHNKqoYyzOzS5bu4h6d22BojRpjglXnsfAdpLugOSQ="; subPkgs = "."; ldflags = "-s -w -X=github.com/aymaneallaoui/kafka-http-scanner/pkg/utils.Version=1.0.1";
+    check = chk ''"$out/bin/kafka-http-scanner" --help'' "[Uu]sage"; };
+  # httprobe (MIT): take a list of domains and probe for working HTTP and HTTPS servers.
+  httprobe = pkg { pname = "httprobe"; version = "0.2"; src = gh "tomnomnom/httprobe" "v0.2" "33a460c675487e1bf75d0761d850a98a8777715731b4de930d056abbeb4e4d2f";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/httprobe" --help'' "[-]prefer-https"; };
+  # hydroxide (MIT): third-party, open-source ProtonMail bridge.
+  hydroxide = pkg { pname = "hydroxide"; version = "0.2.32"; src = gh "emersion/hydroxide" "v0.2.32" "14e603ff7f96e86a8f71bd5d5e7970ed9afa61d90d07472168a8e2e4e1349198";
+    vendorHash = "sha256-azrbVyM93n0X6BCBGWtWwPFafbRRAksjuweVLFvWxIA="; subPkgs = "./cmd/hydroxide";
+    check = chk ''"$out/bin/hydroxide" --help'' "[-]api-endpoint"; };
+  # iamy (MIT): cli tool for importing and exporting AWS IAM configuration to YAML files.
+  iamy = pkg { pname = "iamy"; version = "2.4.0"; src = gh "99designs/iamy" "v2.4.0" "13bd9e66afbeb30d386aa132a4af5d2e9a231d2aadf54fe8e5dc325583379359";
+    vendorHash = "sha256-CkoUgvpqjEBGG14OhfnPn5YUJ3LQLyE68yDnMkuKqlc="; subPkgs = "."; ldflags = "-X main.Version=v2.4.0 -s -w";
+    check = chk ''"$out/bin/iamy" --version'' "2\\.4\\.0"; };
+  # iferr (MIT): generate "if err != nil {" block.
+  iferr = pkg { pname = "iferr"; version = "0-unstable-2024-01-22"; src = gh "koron/iferr" "9c3e2fbe4bd19a7f0338e42bb483562ed4cf4d50" "3e405ce41b7b110579620745840a95dc8578dbfbdb5c65098e50c7e2212c7e50";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/iferr" --help'' "[Uu]sage"; };
+  # imgpkg (Apache-2.0): store application configuration files in Docker/OCI registries.
+  imgpkg = pkg { pname = "imgpkg"; version = "0.48.3"; src = gh "carvel-dev/imgpkg" "v0.48.3" "c3a3150e81e5db07e3e1732e7f26a03167ab975bbae0d42526d7848404709033";
+    vendorHash = null; subPkgs = "./cmd/imgpkg"; ldflags = "-X=carvel.dev/imgpkg/pkg/imgpkg/cmd.Version=0.48.3";
+    check = chk ''"$out/bin/imgpkg" --version'' "0\\.48\\.3"; };
 }
