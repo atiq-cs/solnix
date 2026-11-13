@@ -79,17 +79,30 @@ let
   # gate's libzfs/libzpool record `libz.so.1 SUNW_1.1` as a needed version, so an
   # unversioned upstream libz would fail to load there. The mapfile is
   # OpenIndiana's (oi-userland components/library/zlib/mapfile).
-  zlib = mkSrcPkg {
-    pname = "zlib"; version = "1.3.2";
-    src = { url = "https://zlib.net/fossils/zlib-1.3.2.tar.gz";
-            sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"; };
+  # zlib 1.4 (CVE-2026-85091 gzwrite() overflow, CVE-2026-4738 infback9; .asc Mark Adler 5ED46A6721D365587791E2AA783FCD8E58BCAFBA)
+  # for the system instance. The seed instance (buildTools = [ ]) keeps 1.3.2 and its exact build text, so the seed chain and
+  # everything served from it do not move. zlib.map is the same in both releases, and so is the illumos mapfile. The system
+  # instance runs zlib's own `make test` (example + minigzip, static and shared), as nixpkgs' doCheck.
+  zlib = let seed = buildTools == [ ]; v = if seed then "1.3.2" else "1.4"; in mkSrcPkg {
+    pname = "zlib"; version = v;
+    src = if seed then { url = "https://zlib.net/fossils/zlib-1.3.2.tar.gz";
+            sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"; }
+      else { url = "https://zlib.net/fossils/zlib-1.4.tar.gz";
+            sha256 = "02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584"; };
     abis = [ "64" "32" ];
     build = ''
       CFLAGS="-O2 -fPIC" LDSHARED="$CC -shared -Wl,-h,libz.so.1 -Wl,-M,${./patches/zlib-illumos.mapfile}" \
         ./configure --prefix="$out" --libdir="$out/$LIBSUB" --sharedlibdir="$out/$LIBSUB" --includedir="$out/include"
-      gmake -j4 libz.so.1.3.2
+      gmake -j4 libz.so.${v}
       gmake install
-    '';
+    '' + (if seed then "" else ''
+      gmake test > "$TMPDIR/zlib-test.out" 2>&1 || { cat "$TMPDIR/zlib-test.out" >&2; echo "FATAL: zlib make test failed" >&2; exit 1; }
+      for t in "zlib test OK" "zlib shared test OK"; do   # plus "zlib 64-bit test OK" where configure adds test64
+        grep -qF "*** $t ***" "$TMPDIR/zlib-test.out" || { cat "$TMPDIR/zlib-test.out" >&2; echo "FATAL: zlib make test: no '$t'" >&2; exit 1; }
+      done
+      ! grep -q 'test FAILED' "$TMPDIR/zlib-test.out" || { cat "$TMPDIR/zlib-test.out" >&2; echo "FATAL: zlib make test FAILED" >&2; exit 1; }
+      grep -q '^#define ZLIB_VERSION "1\.4"$' "$out/include/zlib.h" || { echo "FATAL: zlib.h is not 1.4" >&2; exit 1; }
+    '');
   };
 
   # libxml2.so.16 (soname 16 first appears in 2.14). The gate's libpool,
