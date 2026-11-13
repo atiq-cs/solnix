@@ -715,4 +715,84 @@ in {
   git-lfs-transfer = pkg { pname = "git-lfs-transfer"; version = "0.1.0-unstable-2026-08-12"; src = gh "charmbracelet/git-lfs-transfer" "971c0284dc33b1ed3f7ed9dde5d4fc0cee62db6b" "92d6720202aa5a059c6683df78f1fa47722c0c48ff1dc4ebfc0bc8137d988702";
     vendorHash = "sha256-Y8C61lmjBVLer5ka6g+5LMur5kICXHlP8h/WMEkNczY="; subPkgs = ".";
     check = chk ''"$out/bin/git-lfs-transfer" --help'' "[Uu]sage"; };
+  # git-releaser (Apache-2.0): tool for creating Git releases based on Semantic Versioning.
+  git-releaser = pkg { pname = "git-releaser"; version = "0.1.7"; src = gh "git-releaser/git-releaser" "refs/tags/v0.1.7" "e00ae3f73cebf54c5011e48e32a063c642b5b4885203cfc3827558f7337bec01";
+    vendorHash = "sha256-0Jn1hH/Y9FRqoINgYaxEAY0NDdEQiVmxtB7/I/+jHPg="; subPkgs = "."; ldflags = "-X main.version=0.1.7";
+    check = chk ''"$out/bin/git-releaser" --help'' "[Uu]sage"; };
+  # git-subtrac (Apache-2.0): keep the content for your git submodules all in one place: the parent repo.
+  git-subtrac = pkg { pname = "git-subtrac"; version = "0.04"; src = gh "apenwarr/git-subtrac" "v0.04" "162baf3614e7ba0c6ccf2838acae4780bbf8e1795e8294d9a32ff32379125e27";
+    vendorHash = "sha256-GV21IcOjCUysXucDPF9jaw8tmlhaTfBRuTFyjerlBH4="; subPkgs = ".";
+    check = chk ''"$out/bin/git-subtrac" --help'' "[-]-auto-exclude"; };
+  # git-who (MIT): git blame for file trees.
+  git-who = pkg { pname = "git-who"; version = "1.3"; src = gh "sinclairtarget/git-who" "v1.3" "7af9950b8786a52e71e80457986f8b961064dc39923de1e330bc9fede42feef4";
+    vendorHash = "sha256-aWkAz9NEhlAy2aNQ5WN5o0hjn4VZokJmGpgmjdKjJRc="; subPkgs = ".";
+    check = chk ''"$out/bin/git-who" --help'' "[Uu]sage"; };
+  # github-markdown-toc-go (MIT): easy TOC creation for GitHub README.md (in go).
+  github-markdown-toc-go = pkg { pname = "github-markdown-toc-go"; version = "2.0.1"; src = gh "ekalinin/github-markdown-toc.go" "v2.0.1" "62f34f003912244c8d6d94cad9a273ddb3f29f6f01133d16fdefd0c017030526";
+    vendorHash = "sha256-YTWLpqoILkDCvr3uaM3i3kh7OO9Y/gGdeRnXdp5Ll3M="; subPkgs = "./cmd/gh-md-toc";
+    check = chk ''"$out/bin/gh-md-toc" --version'' "2\\.0\\.1"; };
+  # github-release (MIT): commandline app to create and edit releases on Github (and upload artifacts).
+  github-release = pkg { pname = "github-release"; version = "0.11.0"; src = gh "github-release/github-release" "refs/tags/v0.11.0" "6e6d3d77ce7d6acf6c4e4e0e005c71641ba7c2eb67d9f1f2e2cf2cc5f5c68086";
+    vendorHash = null; subPkgs = "."; ldflags = "-s";
+    check = chk ''"$out/bin/github-release" --version'' "0\\.11\\.0"; };
+  # gitlab-ci-validate (MIT): command line tool to validate .gitlab-ci.yml files.
+  gitlab-ci-validate = pkg { pname = "gitlab-ci-validate"; version = "0.6.0"; src = gh "Code0x58/gitlab-ci-validate" "refs/tags/v0.6.0" "87ec830bf1a7a5a1d921ff17a3894d5351bb5c835511d23dfd5d6cb3eb5d5194";
+    vendorHash = "sha256-YWxDilcYoOqU+i4KRevy9596W6VsQiET10pCrhGr22o="; subPkgs = "."; ldflags = "-s -w -X=main.version=0.6.0";
+    check = chk ''"$out/bin/gitlab-ci-validate" --help'' "[-]project-id"; };
+  # gitmux (MIT): git in your tmux status bar.
+  gitmux = pkg { pname = "gitmux"; version = "0.11.5"; src = gh "arl/gitmux" "v0.11.5" "c6a01faa5372a8c4ab24bc3a2c9665a9f430c45c79b175c1510388433637ca72";
+    vendorHash = "sha256-+WpzB+KHUkawWj/4Gdpm9CH3nuLvcZ/cXS2D5RbI5DY="; subPkgs = "."; ldflags = "-X main.version=0.11.5";
+    check = chk ''"$out/bin/gitmux" --version'' "0\\.11\\.5"; };
+  # gitsnip (MIT): CLI tool to download specific folders from a git repository.
+  gitsnip = pkg { pname = "gitsnip"; version = "0.1.1"; src = gh "dagimg-dot/gitsnip" "refs/tags/v0.1.1" "d5e3c7d75b1b5145128d92cdb56abe08b623af22d96aa520e2411b18a794e4c6";
+    vendorHash = "sha256-6O64eV+joSdYbPrHRM9X/cFuF1AZzEXEwImdOj6nUrc="; subPkgs = "./cmd/gitsnip"; ldflags = "-s -w -X github.com/dagimg-dot/gitsnip/internal/cli.version=0.1.1 -X github.com/dagimg-dot/gitsnip/internal/cli.commit=refs/tags/v0.1.1 -X github.com/dagimg-dot/gitsnip/internal/cli.builtBy=nixpkgs";
+    check = chk ''"$out/bin/gitsnip" version'' "0\\.1\\.1"; };
+  # gitty (MIT): contextual information about your git projects, right on the command-line.
+  gitty = pkg { pname = "gitty"; version = "0.7.0"; src = gh "muesli/gitty" "v0.7.0" "cea3f7fa92653abd18ce951f24c64321edab8d8da9340f764c25cbfe8eba36ef";
+    vendorHash = "sha256-bkXqVVXO/13NrwxrXw3wfpEfb0oA/i/YI0O2qBtqKzA="; subPkgs = "."; ldflags = "-s -w -X=main.Version=0.7.0";
+    check = chk ''"$out/bin/gitty" --version'' "0\\.7\\.0"; };
+  # gjo (MIT): small utility to create JSON objects.
+  gjo = pkg { pname = "gjo"; version = "1.0.3"; src = gh "skanehira/gjo" "1.0.3" "89c2cb3fcb679a6d9dbfda4db9bde557ed5e1dae8b76f14450eb6e63956229e5";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/gjo" --help'' "[Uu]sage"; };
+  # glance-agent (GPL-3.0-only): lightweight service that exposes system metrics via an HTTP API.
+  glance-agent = pkg { pname = "glance-agent"; version = "0.1.0"; src = gh "glanceapp/agent" "refs/tags/v0.1.0" "a6294a60202b2c893c72e3c583156286936375b68f45d3f7ea563a2ea7b59ade";
+    vendorHash = "sha256-M/L8zU8dwUnfebKZNLWpFJsJbwwcPUg9CFkRayEtmIc="; subPkgs = "."; ldflags = "-s -X github.com/glanceapp/agent/internal/agent.buildVersion=0.1.0";
+    check = chk ''"$out/bin/agent" --version'' "0\\.1\\.0"; };
+  # gnostic (Apache-2.0): compiler for APIs described by the OpenAPI Specification with plugins for code generation and other API support tasks.
+  gnostic = pkg { pname = "gnostic"; version = "0.7.0"; src = gh "google/gnostic" "v0.7.0" "fa324d72ff38c35ed4eddc869f0a240ccac8d16b69cc6398077128c727a1b05b";
+    vendorHash = "sha256-R/BMdYJ193DDUYUWRyXpJ1Xz59pi0anVTTUPf0Ag8i8="; subPkgs = ". ./cmd/disco ./cmd/parse-linter-output ./cmd/petstore-builder ./cmd/protoc-gen-jsonschema ./cmd/protoc-gen-openapi ./cmd/report ./cmd/report-messages ./cmd/vocabulary-operations ./generate-gnostic ./linters/go/gnostic-lint-descriptions ./linters/go/gnostic-lint-paths ./openapiv3/schema-generator ./plugins/gnostic-analyze ./plugins/gnostic-analyze/summarize ./plugins/gnostic-complexity ./plugins/gnostic-linter ./plugins/gnostic-plugin-request ./plugins/gnostic-process-plugin-response ./plugins/gnostic-summary ./plugins/gnostic-vocabulary ./tools/format-schema ./tools/j2y2j";
+    check = chk ''"$out/bin/gnostic" --help'' "[-]-messages-out"; };
+  # go-callvis (MIT): visualize call graph of a Go program using Graphviz.
+  go-callvis = pkg { pname = "go-callvis"; version = "0.7.1"; src = gh "ondrajz/go-callvis" "v0.7.1" "8e78313de9c79c0d9bd215de9591924b29e13f8abb2bd5b524f29998b457b70d";
+    vendorHash = "sha256-lDSKDj7LOeCKkIxB0qCpR0+mX3bzT7QSFlUNaeYKnxc="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/go-callvis" --version'' "0\\.7\\.1"; };
+  # go-cqhttp (AGPL-3.0-only): golang implementation of OneBot based on Mirai and MiraiGo.
+  go-cqhttp = pkg { pname = "go-cqhttp"; version = "1.2.0"; src = gh "Mrs4s/go-cqhttp" "v1.2.0" "2abf0b93c9fdf42a009134c8f8d1637c351a5c985e37432a733c847a834d630b";
+    vendorHash = "sha256-PQBoK11LdpbMBwcSu5HAQ3WJ0dDvk8VEejBx+YcZVKM="; subPkgs = ". ./cmd/api-generator ./winres/gen";
+    check = chk ''"$out/bin/go-cqhttp" --help'' "[-]update-protocol"; };
+  # go-enum (MIT): enum generator for go.
+  go-enum = pkg { pname = "go-enum"; version = "0.9.5"; src = gh "abice/go-enum" "refs/tags/v0.9.5" "70818e5c177493c335124abb5c102038bf31b0a77fb53e546979fd8131378939";
+    vendorHash = "sha256-5ZVlSQmhgLo6u37q3TPdxD6hEy44ZE7F4oRAFKRalrM="; subPkgs = "."; ldflags = "-s -w -X main.version=v0.9.5 -X main.builtBy=nixpkgs";
+    check = chk ''"$out/bin/go-enum" --version'' "0\\.9\\.5"; };
+  # go-grip (MIT): preview Markdown files locally before committing them.
+  go-grip = pkg { pname = "go-grip"; version = "0.10.0"; src = gh "chrishrb/go-grip" "refs/tags/v0.10.0" "15fe41b2c2e6c3d8ace76acb0b53871ec5045f22ab663f4d31ad300cf178cdde";
+    vendorHash = "sha256-N+RfzvZW6TkOKmwcylmM4A5hyDj2+nIsklKHt35ut6c="; subPkgs = ".";
+    check = chk ''"$out/bin/go-grip" --help'' "[-]-bounding-box"; };
+  # go-i18n (MIT): translate your Go program into multiple languages.
+  go-i18n = pkg { pname = "go-i18n"; version = "2.7.0"; src = gh "nicksnyder/go-i18n" "refs/tags/v2.7.0" "1f81e62fe1d0819617ade79cb8c219f873232ae675584e8b0d6f3928b7398965";
+    vendorHash = "sha256-eGcTbsJ5AgLNN9vdOOPBORxoZZXaonps9rszPYBZ6Us="; subPkgs = "./goi18n";
+    check = chk ''"$out/bin/goi18n" --help'' "[Uu]sage"; };
+  # go-import-lint (MIT): golang source code analyzer that checks imports order.
+  go-import-lint = pkg { pname = "go-import-lint"; version = "1.2.0"; src = gh "hedhyw/go-import-lint" "refs/tags/v1.2.0" "0e46246f833a02de40e53dab934441f18c5e9d8fb443ab3fe0af2e04efbb7566";
+    vendorHash = null; subPkgs = "./cmd/go-import-lint";
+    check = chk ''"$out/bin/go-import-lint" --help'' "[Uu]sage"; };
+  # go-jsonnet (Apache-2.0): implementation of Jsonnet in pure Go.
+  go-jsonnet = pkg { pname = "go-jsonnet"; version = "0.22.0"; src = gh "google/go-jsonnet" "refs/tags/v0.22.0" "9c463043a05c1e833c57136521e808ee8df192131f00c636235a2b54823d8c4c";
+    vendorHash = "sha256-Lf+z0gHoGcBn+/zu2EOJL7ZU9wMGmivF5bOxTXQNzqQ="; subPkgs = "./cmd/jsonnet ./cmd/jsonnet-deps ./cmd/jsonnet-lint ./cmd/jsonnetfmt"; ldflags = "-s -w";
+    check = chk ''"$out/bin/jsonnet" --version'' "0\\.22\\.0"; };
+  # go-junit-report (MIT): convert go test output to junit xml.
+  go-junit-report = pkg { pname = "go-junit-report"; version = "2.1.0"; src = gh "jstemmer/go-junit-report" "v2.1.0" "6320a11a2a8c564f5a92a44eeae40950246ae5c70b3c679a1e702e128d6e900b";
+    vendorHash = "sha256-M0UUge3p1GGHzxGjKukmPOc13+/jdnivustfj6c5gAU="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/go-junit-report" --version'' "2\\.1\\.0"; };
 }
