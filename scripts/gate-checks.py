@@ -668,13 +668,15 @@ DZ_SECONDS = float(os.environ.get("GATE_DZ_SECONDS") or 4 * 3600)  # wall time p
 UNREADABLE = b"\0GATE-UNREADABLE-COMPRESSED-SECTION\0"
 
 def elf_compressed_sections(data):
-    """(byte ranges, zlib streams as memoryviews) of an ELF's compressed sections (SHF_COMPRESSED + Elf_Chdr zlib, as gobjcopy
-    --compress-debug-sections=zlib writes them; and GNU .zdebug_* 'ZLIB'+8-byte-size); ([], []) when not an ELF, none, or
-    unparseable. The content scans (S3 S4 B8 B13) read the real text: scanning zlib bytes gives false hits (wave6t: 'lixi' in a seed
+    """(byte ranges, zlib streams as memoryviews, the sizes their headers claim, why some section can't be read) of an ELF's
+    compressed sections (SHF_COMPRESSED + Elf_Chdr zlib, as gobjcopy --compress-debug-sections=zlib writes them, ch_size; and GNU
+    .zdebug_* 'ZLIB'+8-byte BE size); ([], [], [], []) when not an ELF, none, or unparseable. Unreadable: an SHF_COMPRESSED section
+    shorter than its Elf_Chdr (which made the whole file unparseable, so no section was read), or compressed with anything but zlib
+    (ELFCOMPRESS_ZSTD: no zstd in Python 3.13's stdlib), whose bytes would be scanned compressed. The content scans (S3 S4 B8 B13) read the real text: scanning zlib bytes gives false hits (wave6t: 'lixi' in a seed
     binutils .debug) and hides real ones (a host name inside a compressed .debug_str)."""
     import struct
     try:
-        if data[:4] != b"\x7fELF": return [], []
+        if data[:4] != b"\x7fELF": return [], [], [], []
         is64, end = data[4] == 2, "<" if data[5] == 1 else ">"
         if is64:
             shoff = struct.unpack_from(end + "Q", data, 0x28)[0]; shentsize, shnum, shstrndx = struct.unpack_from(end + "HHH", data, 0x3A)
@@ -687,35 +689,41 @@ def elf_compressed_sections(data):
             else: name, typ, flags, _, off, size = struct.unpack_from(end + "IIIIII", data, o)
             secs.append((name, typ, flags, off, size))
         stro = secs[shstrndx][3] if shstrndx < len(secs) else 0
-        mv, zs, rng = memoryview(data), [], []
+        mv, zs, rng, want, odd = memoryview(data), [], [], [], []
         for name, typ, flags, off, size in secs:
             if typ == 8 or size == 0: continue   # SHT_NOBITS
             sec = mv[off:off + size]
             nm = data[stro + name:data.index(b"\0", stro + name)] if stro else b""
             if flags & 0x800:   # SHF_COMPRESSED: Elf64_Chdr (24 bytes) / Elf32_Chdr (12), ch_type 1 = ELFCOMPRESS_ZLIB
                 hl = 24 if is64 else 12
-                if struct.unpack_from(end + "I", sec, 0)[0] == 1: zs.append(sec[hl:]); rng.append((off, off + size))
+                if len(sec) < hl: odd.append(f"an SHF_COMPRESSED section of {len(sec)} bytes, shorter than its {hl}-byte header"); continue
+                ct = struct.unpack_from(end + "I", sec, 0)[0]
+                if ct != 1: odd.append(f"a compressed section of type {ct} ({'zstd' if ct == 2 else 'unknown'}): the gate reads zlib only"); continue
+                if ct == 1:
+                    zs.append(sec[hl:]); rng.append((off, off + size)); want.append(struct.unpack_from(end + ("Q" if is64 else "I"), sec, 8 if is64 else 4)[0])
             elif nm.startswith(b".zdebug") and sec[:4] == b"ZLIB":
-                zs.append(sec[12:]); rng.append((off, off + size))
-        return rng, zs
+                zs.append(sec[12:]); rng.append((off, off + size)); want.append(struct.unpack_from(">Q", sec, 4)[0])
+        return rng, zs, want, odd
     except (struct.error, IndexError, ValueError):
-        return [], []
+        return [], [], [], []
 
 def inflate_stream(z, emit):
-    """Inflate the zlib stream z in DZ_CHUNK pieces of output, each passed to emit; stops at the stream's end (bytes after it are
-    ignored) or when emit returns False (-> False). Raises zlib.error if corrupt. A truncated stream yields what it holds."""
-    d, o, tail = zlib.decompressobj(), 0, b""
+    """Inflate the zlib stream z in DZ_CHUNK pieces of output, each passed to emit; stops at the stream's end or when emit returns
+    False (-> False). Raises zlib.error if corrupt. A truncated stream yields what it holds. -> (bytes out, reached the stream's
+    end, bytes after it)."""
+    d, o, tail, n = zlib.decompressobj(), 0, b"", 0
     while not d.eof:
         if not tail:
             if o >= len(z):   # input done: drain what zlib still holds
                 out = d.decompress(b"", DZ_CHUNK)
                 if not out: break
+                n += len(out)
                 if emit(out) is False: return False
                 continue
             tail = z[o:o + DZ_CHUNK]; o += DZ_CHUNK
-        out = d.decompress(tail, DZ_CHUNK); tail = d.unconsumed_tail
+        out = d.decompress(tail, DZ_CHUNK); tail = d.unconsumed_tail; n += len(out)
         if out and emit(out) is False: return False
-    return True
+    return n, d.eof, len(d.unused_data) + max(0, len(z) - o) if d.eof else 0
 
 class DzBudget:
     """One NAR's budget for the decompressed scans: DZ_BYTES of inflated text, DZ_SECONDS of wall time."""
@@ -729,10 +737,11 @@ class DzBudget:
 class TextScan:
     """The scans that read a file's text, in one pass over windows of it: S3 S4 B8 B13 (compressed sections) B16 (UNREADABLE) B19.
     feed(buf, pos, end, base): buf[pos:end] is the next window and base the text offset of buf[0]; a match belongs to the window
-    it starts in. over: a B16 finding when the text was not read whole (budget, NUL-free run)."""
+    it starts in. over: a B16 finding when the text was not read whole (budget, NUL-free run). zbad: a B16 finding when a section
+    is not exactly its header's size of one whole zlib stream."""
     def __init__(self, rel, data):
         self.rel, self.dlen = rel, len(data)
-        self.marker = self.s3 = self.s4 = self.b8 = self.run_dir = self.b13c = self.over = None
+        self.marker = self.s3 = self.s4 = self.b8 = self.run_dir = self.b13c = self.over = self.zbad = None
         self.b8_stop, self.mapped, self.b19, self.b19_seen = False, 0, [], set()
     def feed(self, buf, pos, end, base):
         if self.marker is None and UNREADABLE in buf: self.marker = True   # a marker spans <= 2 windows: buf holds both parts
@@ -800,14 +809,24 @@ def text_scan(rel, data, budget):
     """-> TextScan of data's text. Pass 1 inflates each compressed section to /dev/null (is it zlib? within the budget?), pass 2
     streams the text through the scans; a section that does not inflate is UNREADABLE in the text, as in the old gate."""
     ts = TextScan(rel, data)
-    rng, zs = elf_compressed_sections(data)
+    rng, zs, want, odd = elf_compressed_sections(data)
+    ts.zbad = odd[0] if odd else None
     if not rng: ts.feed(data, 0, len(data), 0); return ts
     ok = []
-    for z in zs:
+    for z, ch in zip(zs, want):
         if budget.left < 0 or not budget.time_ok(): ts.over = budget.why(); break
+        if ch > budget.left:   # a claim past the budget: not inflated at all (a bomb's header, or a lie: a FAIL either way)
+            ts.over = f"a compressed section's header claims {ch >> 20} MiB, more than is left of the gate's budget ({DZ_BYTES >> 20} MiB of text per NAR): not read"; break
         try:
-            if not inflate_stream(z, budget.spend): ts.over = budget.why(); break
+            r = inflate_stream(z, budget.spend)
+            if not r: ts.over = budget.why(); break
             ok.append(True)
+            # a section is one whole zlib stream of exactly the size its header claims: a truncated stream (the old gate scanned the
+            # part it holds) or bytes after it (never scanned as text) is not what a linker writes
+            n, eof, trail = r
+            ts.zbad = ts.zbad or (None if eof else f"a compressed section's zlib stream is truncated (it ends after {n} bytes of text, before its end)") \
+                or (f"a compressed section has {trail} bytes after its zlib stream" if trail else None) \
+                or (f"a compressed section inflates to {n} bytes, its header claims {ch}" if n != ch else None)
         except zlib.error:
             ok.append(False)
     w = _Windows(ts, budget)
@@ -938,6 +957,7 @@ def check_nar(out, src=None):
         if ts.marker:   # a section that does not inflate: the scans can't read it
             r.append(("FAIL", "B16-compressed", f"{rel}: a compressed section that cannot be decompressed (corrupt)"))
         if ts.over: r.append(("FAIL", "B16-compressed", f"{rel}: {ts.over}"))
+        if ts.zbad: r.append(("FAIL", "B16-compressed", f"{rel}: {ts.zbad}"))
         r.extend(server_checks(rel, data=data, ts=ts))
         r.extend(config_record_findings(rel, data))
         # B18: real private-key / secret material. SECRET_BODY matches only actual material (an openssh/PEM key BODY, an age
@@ -1730,7 +1750,7 @@ def _zrep(block, n, tail=b""):
 def _ref_scan(rel, data):
     """The old in-memory gate's text (the file masked, a NUL, the sections inflated whole and NUL-joined) fed as ONE window:
     what the streaming scan must equal."""
-    rng, zs = elf_compressed_sections(data)
+    rng, zs = elf_compressed_sections(data)[:2]
     ts = TextScan(rel, data)
     if not rng: ts.feed(data, 0, len(data), 0); return ts
     out = []
@@ -1741,6 +1761,12 @@ def _ref_scan(rel, data):
     for lo, hi in rng: b[lo:hi] = bytes(hi - lo)
     t = bytes(b) + b"\0" + b"\0".join(out); ts.feed(t, 0, len(t), 0)
     return ts
+
+def _zsec_short(elf):
+    """elf from mk_elf_zsec with 2 sections: the second cut to 3 bytes (its section header's size field)."""
+    import struct
+    shoff = struct.unpack_from("<Q", elf, 0x28)[0]; o = shoff + 3 * 64 + 32
+    return elf[:o] + struct.pack("<Q", 3) + elf[o + 8:]
 
 def selftest_b16(big=False):
     """B16 streamed: the scans read decompressed sections in windows cut at NULs, and give what one in-memory pass over the whole
@@ -1825,12 +1851,33 @@ def selftest_b16(big=False):
         rc, lines, dt = nar(mk_elf_zsec(b"x", z=_zrep(bytes(1 << 20), 256), ch_size=256 << 20))
         check(f"B16 a bomb (256 MiB from {len(_zrep(bytes(1 << 20), 256)) >> 10} KiB) past the 64 MiB budget: FAIL in {dt:.1f} s",
               rc == 1 and dt < 30 and any(l.startswith("FAIL B16-compressed ") and "budget (64 MiB of text" in l for l in lines), lines)
+        rc, lines, dt = nar(mk_elf_zsec(b"x", z=_zrep(bytes(1 << 20), 256), ch_size=1 << 20))
+        check(f"B16 a bomb whose header claims 1 MiB (256 MiB inside): FAIL on the budget in {dt:.1f} s",
+              rc == 1 and dt < 30 and any(l.startswith("FAIL B16-compressed ") and "budget (64 MiB of text" in l for l in lines), lines)
         rc, lines, _ = nar(mk_elf_zsec([b"/build/a.c\0" * 1000] * 3))
         check("the same budget passes a debug file well under it", rc == 0, lines)
         DZ_BYTES = keep[2]; DZ_SECONDS = 0
         rc, lines, _ = nar(mk_elf_zsec(b"main.c\0" * 1000))
         check("B16 the time budget (0 s here): FAIL", rc == 1 and any(l.startswith("FAIL B16-compressed ") and "budget" in l for l in lines), lines)
         DZ_SECONDS = keep[3]
+        # 5. a section is one whole zlib stream of its header's size: a lie, a truncated stream, trailing bytes each FAIL; a
+        # header claiming 1 TiB FAILs before any inflate
+        P = b"src/main.c\0int\0" * 100; Z = zlib.compress(P)
+        for label, data, want in (
+                ("its header claims more than it inflates to (ch_size + 1)", mk_elf_zsec(P, ch_size=len(P) + 1), f"inflates to {len(P)} bytes, its header claims {len(P) + 1}"),
+                ("its header claims less (ch_size - 1)", mk_elf_zsec(P, ch_size=len(P) - 1), "its header claims"),
+                ("a .zdebug_str whose size field lies", mk_elf_zsec(P, zdebug=True, ch_size=7), "its header claims 7"),
+                ("a truncated zlib stream (the old gate scanned its part)", mk_elf_zsec(P, z=Z[:-9], ch_size=len(P)), "is truncated"),
+                ("an empty zlib stream", mk_elf_zsec(P, z=b"", ch_size=0), "is truncated"),
+                ("5 bytes after the zlib stream", mk_elf_zsec(P, z=Z + b"/usr/", ch_size=len(P)), "has 5 bytes after its zlib stream"),
+                ("a header claiming 1 TiB (tiny stream)", mk_elf_zsec(P, ch_size=1 << 40), "claims 1048576 MiB"),
+                ("ch_type 2 (zstd), which the gate can't read", mk_elf_zsec(P).replace(b"\x01\0\0\0\0\0\0\0" + len(P).to_bytes(8, "little"), b"\x02\0\0\0\0\0\0\0" + len(P).to_bytes(8, "little")), "of type 2 (zstd)"),
+                ("an SHF_COMPRESSED section of 3 bytes beside a real one with /usr/gnu/ (the old gate read neither)",
+                 _zsec_short(mk_elf_zsec([b"/usr/gnu/bin/x\0", b"x"])), "shorter than its 24-byte header")):
+            rc, lines, dt = nar(data)
+            check(f"B16 {label}: FAIL ({dt:.1f} s)", rc == 1 and dt < 10 and any(l.startswith("FAIL B16-compressed ") and want in l for l in lines), lines)
+        rc, lines, _ = nar(mk_elf_zsec(P, ch_size=len(P)))
+        check("... and the same section, true to its header: PASS", rc == 0, lines)
         if big:
             # 5. the real sizes: a 1.1 GiB section (over the old 1 GiB cap) PASSes, read to its end (B8 counts every /build/ in it);
             # a 1.1 GiB NUL-free run FAILs
