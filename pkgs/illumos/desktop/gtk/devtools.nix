@@ -15,6 +15,7 @@ rec {
       patch -p1 < ${./patches/nodejs-24-illumos-madvise.patch}
       patch -p1 < ${./patches/nodejs-24-snapshot-padding.patch}   # upstream c988b7d3: snapshot bytes from heap padding (--check differed)
       patch -p1 < ${./patches/nodejs-24-icu-sort.patch}   # upstream 9365fff7: ICU sources in os.walk (ZFS readdir) order -> link order
+      patch -p1 < ${./patches/nodejs-24-lazy-process-config.patch}   # solnix: config.gypi ($out) out of the V8 snapshot checksum
       # --no-cross-compiling as nixpkgs: a host and a target toolset would both emit libv8_zlib.a ("multiple rules", measured).
       # gyp's make generator, as OI: common.gypi makes every solaris static lib standalone, which the ninja generator puts in
       # out/Release/ while node.gypi's --whole-archive names obj/deps/uv/libuv.a (node_mksnapshot link failed, measured).

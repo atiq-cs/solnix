@@ -1,0 +1,76 @@
+solnix patch (not upstream, 2026-11-12): parse process.config on first access instead of during bootstrap.
+
+config.gypi holds the install prefix (variables.node_prefix = configure --prefix). bootstrap/node.js parsed it into
+process.config while node_mksnapshot built the startup snapshot, so the snapshot held $out as a heap string, under V8's
+snapshot checksum (blob bytes 8..11). When the prefix is rewritten after the build (Nix --check's scratch out, CA
+outputs; nixpkgs sets __contentAddressed = false for "Check failed: VerifyChecksum(blob)"), the string is fixed and the
+checksum is not. Measured: it was the blob's only $out occurrence (v24.18.0, offset 0x129087).
+
+process.config keeps its value, its frozen objects and its final attributes: the getter replaces itself with the same
+data property (enumerable, configurable, read-only) on first access. process.features.typescript reads node_use_amaro
+when it is first asked for. Upstream main (2026-11-12) still parses it during bootstrap.
+
+--- a/lib/internal/bootstrap/node.js	2026-11-12 11:32:59.466608208 -0500
++++ b/lib/internal/bootstrap/node.js	2026-11-12 11:32:59.478729216 -0500
+@@ -129,21 +129,37 @@
+ }
+ process._exiting = false;
+ 
+-// process.config is serialized config.gypi
++// process.config is serialized config.gypi. It is parsed on first access, not
++// here: config.gypi holds the install prefix, and an object made during
++// bootstrap is stored in the startup snapshot, under the snapshot's checksum.
+ const binding = internalBinding('builtins');
+ 
+-const processConfig = JSONParse(binding.config, (_key, value) => {
++let processConfig;
++function getProcessConfig() {
+   // The `reviver` argument of the JSONParse method will visit all the values of
+   // the parsed config, including the "root" object, so there is no need to
+   // explicitly freeze the config outside of this method
+-  return ObjectFreeze(value);
+-});
++  processConfig ??= JSONParse(binding.config, (_key, value) => {
++    return ObjectFreeze(value);
++  });
++  return processConfig;
++}
+ 
++// Replaced by the same data property (read-only) on first access.
+ ObjectDefineProperty(process, 'config', {
+   __proto__: null,
+   enumerable: true,
+   configurable: true,
+-  value: processConfig,
++  get() {
++    const value = getProcessConfig();
++    ObjectDefineProperty(process, 'config', {
++      __proto__: null,
++      enumerable: true,
++      configurable: true,
++      value,
++    });
++    return value;
++  },
+ });
+ 
+ require('internal/worker/js_transferable').setup();
+@@ -326,14 +342,16 @@
+ const { emitWarning, emitWarningSync } = require('internal/process/warning');
+ const { getOptionValue } = require('internal/options');
+ 
+-let kTypeStrippingMode = process.config.variables.node_use_amaro ? null : false;
++let kTypeStrippingMode = null;
+ // This must be a getter, as getOptionValue does not work
+ // before bootstrapping.
+ ObjectDefineProperty(process.features, 'typescript', {
+   __proto__: null,
+   get() {
+     if (kTypeStrippingMode === null) {
+-      if (getOptionValue('--experimental-transform-types')) {
++      if (!getProcessConfig().variables.node_use_amaro) {
++        kTypeStrippingMode = false;
++      } else if (getOptionValue('--experimental-transform-types')) {
+         kTypeStrippingMode = 'transform';
+       } else if (getOptionValue('--strip-types')) {
+         kTypeStrippingMode = 'strip';
