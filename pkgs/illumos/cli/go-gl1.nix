@@ -475,4 +475,84 @@ in {
   nomore403 = pkg { pname = "nomore403"; version = "2.0.1"; src = gh "devploit/nomore403" "refs/tags/v2.0.1" "d020655d1834d78ec8a6bb944d1c43b3600333411bb312d5faeacf082e488242";
     vendorHash = "sha256-Xjaf2OKnIkEXPLzD8aXzcwFODaKub5lcitit0JmfdHE="; subPkgs = "."; ldflags = "-s -w -X=main.Version=2.0.1 -X=main.BuildDate=1970-01-01T00:00:00Z";
     check = chk ''"$out/bin/nomore403" --version'' "2\\.0\\.1"; };
+  # notify (MIT): allows sending the output from any tool to Slack, Discord and Telegram.
+  notify = pkg { pname = "notify"; version = "1.0.7"; src = gh "projectdiscovery/notify" "v1.0.7" "ec9f1e6c48f975b58d30162071d954db0cd771ea3f5dc7168f5ecdc73658c0ad";
+    vendorHash = "sha256-FvyMjUoFRKKo4LFqbzGQMufHhDoIuX089iviCmLp3ow="; subPkgs = "./cmd/notify";
+    check = chk ''"$out/bin/notify" --version'' "1\\.0\\.7"; };
+  # nova (Apache-2.0): find outdated or deprecated Helm charts running in your cluster.
+  nova = pkg { pname = "nova"; version = "3.12.0"; src = gh "FairwindsOps/nova" "v3.12.0" "f2bb6e7b16efd5b6667840174693df0f95510baee1354a39ee3477d9a082732d";
+    vendorHash = "sha256-yko/QlR4fdDNXvykWb6pvrFcUs6JqbCfvxeVcNcpG6c="; subPkgs = "."; ldflags = "-X main.version=3.12.0 -s -w";
+    check = chk ''"$out/bin/nova" version'' "3\\.12\\.0"; };
+  # np (AGPL-3.0-only): tool to parse, deduplicate, and query multiple port scans.
+  np = pkg { pname = "np"; version = "0.11.0"; src = gh "leesoh/np" "refs/tags/v0.11.0" "f13b7b712ecbafd71d4a3857161e2b2f2d8b19c95ce62b739232af3c430654dd";
+    vendorHash = "sha256-GWvxsDzahbunDUVeVnL9ZAR/k0Ih8gsaOv8MFHUvCsw="; subPkgs = "./cmd/np"; ldflags = "-s -w";
+    check = chk ''"$out/bin/np" --help'' "[Uu]sage"; };
+  # nsq (MIT): realtime distributed messaging platform.
+  nsq = pkg { pname = "nsq"; version = "1.3.0"; src = gh "nsqio/nsq" "v1.3.0" "c6289e295aaa40c8d9651de76e66bc9f23e7f5c40b1cc051ea5901965093e1f0";
+    vendorHash = "sha256-pIMIGZ+f++PHOpQtObIDce8XaVJeqdCRM6rSRP0ga70="; subPkgs = "./apps/nsq_stat ./apps/nsq_tail ./apps/nsq_to_file ./apps/nsq_to_http ./apps/nsq_to_nsq ./apps/nsqadmin ./apps/nsqd ./apps/nsqlookupd ./apps/to_nsq"; ldflags = "-s -w";
+    check = chk ''"$out/bin/nsq_stat" --version'' "1\\.3\\.0"; };
+  # nvcat (Apache-2.0): `cat` but with syntax highlighting powered by Neovim.
+  nvcat = pkg { pname = "nvcat"; version = "0.1.5"; src = gh "brianhuster/nvcat" "refs/tags/v0.1.5" "3afe384a17ebf16eb38702c51cfca6faad13eec20b83f0c9a0988d79c0a3f519";
+    vendorHash = "sha256-4k0T0vZD8hueHIH9SYXN55Ps0n8vzQHMAvABQ17j7vY="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/nvcat" --help'' "[Uu]sage"; };
+  # nvdtools (Apache-2.0): tools to work with the feeds (vulnerabilities, CPE dictionary etc.) distributed by National Vulnerability Database.
+  nvdtools = pkg { pname = "nvdtools"; version = "0.1.5"; src = gh "facebookincubator/nvdtools" "refs/tags/v0.1.5" "78265d34f934df76407019dfe242424587b6c87f3bd359141d0ffef7c48172a8";
+    vendorHash = "sha256-mg1NnzY7EUERBVl6UW5Q3bURZJq+lA+rT5P8BHbujnY="; subPkgs = "./cmd/cpe2cve ./cmd/csv2cpe ./cmd/fireeye2nvd ./cmd/flexera2nvd ./cmd/idefense2nvd ./cmd/nvdsync ./cmd/rbs2nvd ./cmd/redhat2nvd ./cmd/redhat_filter ./cmd/redhat_query ./cmd/rpm2cpe ./cmd/rustsec2nvd ./cmd/snyk2nvd ./cmd/vfeed2nvd ./cmd/vulndb ./cmd/wfnconvert ./vulndb/sqlutil/b64schema"; ldflags = "-s -w";
+    check = chk ''"$out/bin/cpe2cve" --help'' "[Uu]sage"; };
+  # oak (MIT): expressive, simple, dynamic programming language.
+  oak = pkg { pname = "oak"; version = "0.3"; src = gh "thesephist/oak" "v0.3" "05bc1c09da8f8d199d169e5a5c5ab2f2923bad6fac624f497f5ea365f378e38a";
+    vendorHash = "sha256-MwUaHkNZbJP0d0GcyTfRs67jGqwgsJBvy1XuI9K1pk8="; subPkgs = ".";
+    check = chk ''"$out/bin/oak" version'' "0\\.3"; };
+  # oauth2l (Apache-2.0): simple CLI for interacting with Google API authentication.
+  oauth2l = pkg { pname = "oauth2l"; version = "1.3.6"; src = gh "google/oauth2l" "v1.3.6" "5e09371bc245946cadecd3c73de7b782c1f933816678f7f5dff0d5632da5ae0a";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/oauth2l" --help'' "[Uu]sage"; };
+  # octoscan (GPL-3.0-only): static vulnerability scanner for GitHub action workflows.
+  octoscan = pkg { pname = "octoscan"; version = "0.1.7"; src = gh "synacktiv/octoscan" "refs/tags/v0.1.7" "8108b8e298333cc10ac47219fe871640ce8de05b86efab6a8f328fb13b5c27f3";
+    vendorHash = "sha256-S4f7eH7sTYvrHGUg01J2hPlWkrEBrYNb3k85t58a+dA="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/octoscan" --help'' "[Uu]sage"; };
+  # oh (MIT): new Unix shell.
+  oh = pkg { pname = "oh"; version = "0.8.3"; src = gh "michaelmacinnis/oh" "v0.8.3" "3ffd50ae66167ef6c7dcd4e1982b8902d34fbfb88d49bda5f6893bf0bcd92da8";
+    vendorHash = "sha256-Dc1FHTskWXQydTK2Jm2AeL4LMkodaq3VLvywjsDeztQ="; subPkgs = ".";
+    check = chk ''"$out/bin/oh" --version'' "0\\.8\\.3"; };
+  # okms-cli (Apache-2.0): command Line Interface to interact with your OVHcloud KMS services.
+  okms-cli = pkg { pname = "okms-cli"; version = "0.5.0"; src = gh "ovh/okms-cli" "refs/tags/v0.5.0" "19fbcf501517fa3e6c0d8f0d15a1d802475c38351f99f646c02697ee4ac43dbd";
+    vendorHash = "sha256-1I8Wp0Iwiz4/h02hYgMRu1Gkh2sUT/6a08XivAo7gAI="; subPkgs = "./cmd/okms"; ldflags = "-s -w -X main.version=0.5.0 -X main.commit=refs/tags/v0.5.0 -X main.date=unknown";
+    check = chk ''"$out/bin/okms" version'' "0\\.5\\.0"; };
+  # okta-aws-cli (Apache-2.0): CLI for having Okta as the IdP for AWS CLI operations.
+  okta-aws-cli = pkg { pname = "okta-aws-cli"; version = "2.6.0"; src = gh "okta/okta-aws-cli" "v2.6.0" "2d68b99fc8b16145169d3f7f780216bd9b4ec73eed48ee609bdecd2b99100f77";
+    vendorHash = "sha256-ULBIqXd4Am9bEdar1TBSuX33RHTwVCGTJ5QWkdfGfTU="; subPkgs = "./cmd/okta-aws-cli"; ldflags = "-s -w";
+    check = chk ''"$out/bin/okta-aws-cli" --version'' "2\\.6\\.0"; };
+  # openrisk (MIT): tool that generates an AI-based risk score.
+  openrisk = pkg { pname = "openrisk"; version = "0.0.1"; src = gh "projectdiscovery/openrisk" "refs/tags/v0.0.1" "d3a9baddfe99c40a4456fa6a87fd088d8a7238504a94b9226407ef088e530431";
+    vendorHash = "sha256-zqvm+wmLL1Zr0YMXuy1/Mii5bs7XA31exr4FV1cQYhs="; subPkgs = "."; ldflags = "-s";
+    check = chk ''"$out/bin/openrisk" --version'' "0\\.0\\.1"; };
+  # osc (MIT): command line tool to access the system clipboard from anywhere using the ANSI OSC52 sequence.
+  osc = pkg { pname = "osc"; version = "0.4.8"; src = gh "theimpostor/osc" "refs/tags/v0.4.8" "cfe4e92c7190e3a0db8131a01ec8f9215334ea78ce9a99d8a2db29217acf094d";
+    vendorHash = "sha256-CO9eYLlYVXP0HEb/VAoB6zQ64kGF36PUtj9A0dew5v4="; subPkgs = ".";
+    check = chk ''"$out/bin/osc" --help'' "[Uu]sage"; };
+  # ossutil (MIT): user friendly command line tool to access Alibaba Cloud OSS.
+  ossutil = pkg { pname = "ossutil"; version = "1.7.18"; src = gh "aliyun/ossutil" "refs/tags/v1.7.18" "54c9531d1c1ff914fb01b31af44c9d8fdf3112f7ea7e091a12efa606c6c8903c";
+    vendorHash = "sha256-VqlIi5aefpjfcgURU02vo8rRB2tmx1SMMXW2I8AJ0HI="; subPkgs = ".";
+    check = chk ''"$out/bin/ossutil" --version'' "1\\.7\\.18"; };
+  # otpauth (ISC): google Authenticator migration decoder.
+  otpauth = pkg { pname = "otpauth"; version = "0.6.1"; src = gh "dim13/otpauth" "v0.6.1" "27c18aa53f6eeb95e1a43a49fdbe6b692d40f7bf6d59125c8ab8bd469504e8c0";
+    vendorHash = "sha256-7SXto1fSTzBRDThr+DUpyDqzYbSlnBhun37bdO/Jr9c="; subPkgs = ".";
+    check = chk ''"$out/bin/otpauth" --help'' "[Uu]sage"; };
+  # ots (Apache-2.0): share end-to-end encrypted secrets with others via a one-time URL.
+  ots = pkg { pname = "ots"; version = "0.3.1"; src = gh "sniptt-official/ots" "v0.3.1" "09f0b0d7ca44ec8414dbf631009df8c00f4750247c0f9ba25a32f0aa270e09cc";
+    vendorHash = "sha256-xtI3gzNBkA8qfwUdX1CEKNE5k8pODQetNmmGrDwvjHg="; subPkgs = "."; ldflags = "-X main.version=0.3.1 -X main.buildSource=nix";
+    check = chk ''"$out/bin/ots" --help'' "[Uu]sage"; };
+  # pacproxy (Apache-2.0): no-frills local HTTP proxy server powered by a proxy auto-config (PAC) file.
+  pacproxy = pkg { pname = "pacproxy"; version = "2.0.6"; src = gh "williambailey/pacproxy" "v2.0.6" "e1b060083e308744bd2b3c1c65c09012fe8b94aa41d0be54313a1d36cc9fcb48";
+    vendorHash = "sha256-+q6fuU5JdfFHVFvit2ZO9Zl8B/lG89bUvaGD5xRfSwQ="; subPkgs = ".";
+    check = chk ''"$out/bin/pacproxy" --version'' "2\\.0\\.6"; };
+  # panicparse (Apache-2.0): crash your app in style (Golang).
+  panicparse = pkg { pname = "panicparse"; version = "2.5.0"; src = gh "maruel/panicparse" "v2.5.0" "93d1158cb9f6ae117cd94b5f95a00ee02282c6f866676e7aa55d6468dadde64a";
+    vendorHash = "sha256-HDmEP9x/skKddZ0lxvQN5gJOxj2HYZn9n9uUE+lBSSQ="; subPkgs = ".";
+    check = chk ''"$out/bin/panicparse" --help'' "[-]force-color"; };
+  # paralus-cli (Apache-2.0): command Line Interface tool for Paralus.
+  paralus-cli = pkg { pname = "paralus-cli"; version = "0.1.5"; src = gh "paralus/cli" "v0.1.5" "df1e05e84c62dca5dc257fca0842965f7c403223315f7c884f473ace6c4ac8d2";
+    vendorHash = "sha256-rsEmSOHYgCKhMAmZL7aTa4tEzjIrqRfc/8Qar1gA49M="; subPkgs = "."; ldflags = "-s -w -X main.version=0.1.5 -X main.buildNum=0.1.5";
+    check = chk ''"$out/bin/cli" version'' "0\\.1\\.5"; };
 }
