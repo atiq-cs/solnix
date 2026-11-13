@@ -6,6 +6,10 @@
 # libc-respin-20261112/: same tree, compiler and flags as OI's build, the one source change; every other member byte-identical).
 # Unlike x86's fetch-tarball.nix (a recursive FOD copying with host cp) the tree is Nix's own builtin:unpack-channel output, so no
 # host tool touches it (drv-gate A1-A4 pass without an exemption).
+# 2026-11-13 (sv9q): the unpacked tree is a FIXED-OUTPUT derivation, as x86's (s7zkx8nx) and aarch64's (4plaq66w) protos are:
+# outputHash is the NAR this unpack gives (measured on lixu, 42340896 B; banked floki /scratch/solnix-bank/sv9q-20261113/). Its path is
+# then content-addressed and infra serves it through the CA lane. As a built path it FAILs publish-gate (its libraries are a sysroot's,
+# NEEDing host libs: sv9q q13), and gcc's out references it (--with-sysroot), so the input-addressed proto made gcc unpublishable.
 # shortcut: until infra hosts the URL, add the banked tarball to the store first (`nix-store --add-fixed sha256 proto-root_sparcv9.tar.gz`
 # gives this FOD's path: a fixed output depends only on name + hash); after that nothing changes.
 { }:
@@ -20,5 +24,7 @@ let
     builder = "builtin:unpack-channel";
     src = tarball;
     channelName = "proto";
+    outputHashMode = "recursive"; outputHashAlgo = "sha256";
+    outputHash = "08x4dg5rllrhk46lpxy47c0jbzwp406zlx9s3zfr6p2hgbnliik4";
   };
 in "${tree}/proto"
