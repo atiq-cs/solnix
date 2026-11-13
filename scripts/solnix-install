@@ -473,7 +473,7 @@ bring_up_network() {
   esac
 
   # 4. STALE DEFAULT ROUTES. A baked-in image can carry a bogus default route
-  #    (seen: 192.168.1.5 from the build host) that wins over the real gateway,
+  #    (seen: a LAN host such as 192.0.2.5, from the build host) that wins over the real gateway,
   #    so internet-bound packets black-hole while the LAN still works. Keep only
   #    the DHCP-provided gateway (the router that answered our lease) and drop any
   #    other default. The DHCP gateway is normally the .1 of our /24, but read it

@@ -26,8 +26,9 @@
 #     nodeadman -> zfs_deadman_enabled=0 at runtime (spa_misc.c:609 checks it per run)
 #     nocpupm   -> cpupm disable via pmconfig (power.conf)
 #     nohalt    -> halt_on_panic=0 at runtime (auto-reboot on panic, the default)
-# Receiver: boot property solnix-x1ediag-url, default http://192.168.1.179:8099
-# (the MilkV lixr on the maintainer's LAN; floki's firewall only admits ssh).
+# Receiver: boot property solnix-x1ediag-url (e.g. http://<receiver host>:8099, the
+# address x1ediag-receiver.py binds). No default: unset, nothing is uploaded and channel 1
+# (the stick) still records everything; the log says so once at start.
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/run/current-system/sw/bin; export PATH
 PERIOD=${SOLNIX_X1EDIAG_PERIOD:-1}
@@ -162,11 +163,13 @@ KNOBLINE="knobs=${KNOBS:-none} halt_on_panic=$(mdbval halt_on_panic) no_deep_c=$
 log "$KNOBLINE"
 
 # --- 2. receiver -------------------------------------------------------------
-URL=$(bootprop solnix-x1ediag-url); URL=${URL:-http://192.168.1.179:8099}
+URL=$(bootprop solnix-x1ediag-url)
+[ -n "$URL" ] && log "receiver $URL" || log "no receiver: boot property solnix-x1ediag-url is unset, LAN upload off (the stick log is unaffected)"
 QUEUE="$DIR/outbox"; mkdir -p "$QUEUE"
 # post KIND FILE -- queue FILE for upload as KIND; flush() sends what it can.
 _seq=0
 post() {
+  [ -n "$URL" ] || return 0   # no receiver: queue nothing (the stick has its own copy)
   _seq=$((_seq + 1))
   cp "$2" "$QUEUE/$(printf '%06d' $_seq).$1" 2>/dev/null
 }
