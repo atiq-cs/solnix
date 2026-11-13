@@ -111,6 +111,37 @@ mkSrcPkg {
     chmod +x "$out/bin/firefox"
     mkdir -p "$out/lib/firefox/distribution"
     printf '{"policies":{"DisableTelemetry":true,"DisableFirefoxStudies":true,"DisableAppUpdate":true}}\n' > "$out/lib/firefox/distribution/policies.json"
+    # The desktop entry and icons, as NixOS's wrapFirefox: COSMIC's dock and app library find an app only through a .desktop
+    # file on XDG_DATA_DIRS (the dock's "firefox" favourite matched none: a placeholder icon, and a click did nothing; lixi,
+    # BE solnix-51). wrapFirefox's makeDesktopItem for firefox-esr (nixpkgs all-packages: wmClass and icon "firefox-esr"), whose
+    # launcher is firefox-esr; here the program is bin/firefox and the app id firefox (MOZ_APP_REMOTINGNAME), the id the dock pins.
+    # Unbranded (no --enable-official-branding: docs/desktop-firefox.md says why), so no Mozilla name or logo: Name is the
+    # build's own brandShortName (the unofficial branding's "Nightly", what its window and About dialog show), read from its
+    # omni.ja, and the icons are the unofficial branding's globe that mach installs as default<N>.png.
+    name=$(python3 -c 'import re, sys, zipfile; t = zipfile.ZipFile(sys.argv[1]).read("chrome/en-US/locale/branding/brand.properties").decode(); print(re.search(r"^brandShortName=(.+)$", t, re.M).group(1).strip())' "$out/lib/firefox/browser/omni.ja")
+    [ -n "$name" ] || { echo "FATAL: no brandShortName in omni.ja" >&2; exit 1; }
+    mkdir -p "$out/share/applications"
+    printf '%s\n' '[Desktop Entry]' 'Actions=new-private-window;new-window;profile-manager-window' 'Categories=Network;WebBrowser' \
+      'Exec=firefox --name firefox %U' 'GenericName=Web Browser' 'Icon=firefox' \
+      'MimeType=text/html;text/xml;application/xhtml+xml;application/vnd.mozilla.xul+xml;x-scheme-handler/http;x-scheme-handler/https' \
+      "Name=$name" 'StartupNotify=true' 'StartupWMClass=firefox' 'Terminal=false' 'Type=Application' 'Version=1.5' "" \
+      '[Desktop Action new-private-window]' 'Exec=firefox --private-window %U' 'Name=New Private Window' "" \
+      '[Desktop Action new-window]' 'Exec=firefox --new-window %U' 'Name=New Window' "" \
+      '[Desktop Action profile-manager-window]' 'Exec=firefox --ProfileManager' 'Name=Profile Manager' > "$out/share/applications/firefox.desktop"
+    # wrapFirefox's icons: lib/firefox's default<N>.png as hicolor <N>x<N>/apps/firefox.png (relative links, inside $out)
+    for n in 16 32 48 64 128; do
+      [ -f "$out/lib/firefox/browser/chrome/icons/default/default$n.png" ] || { echo "FATAL: no default$n.png" >&2; exit 1; }
+      mkdir -p "$out/share/icons/hicolor/''${n}x$n/apps"
+      ln -s "../../../../../lib/firefox/browser/chrome/icons/default/default$n.png" "$out/share/icons/hicolor/''${n}x$n/apps/firefox.png"
+    done
+    # desktop-file-validate's checks a launcher depends on (makeDesktopItem's checkPhase; no desktop-file-utils here yet), plus
+    # what it cannot see: Exec's program is in $out/bin and Icon resolves in $out's hicolor at each size. Negative controls: an
+    # entry naming a program and an icon $out lacks must fail.
+    python3 ${./desktop-entry-check.py} "$out/share/applications/firefox.desktop" "$out/bin" "$out/share/icons/hicolor"
+    sed -e 's/^Exec=firefox --name/Exec=firefox-nosuch --name/' -e 's/^Icon=firefox$/Icon=firefox-nosuch/' \
+      "$out/share/applications/firefox.desktop" > "$TMPDIR/neg.desktop"
+    n=$(python3 ${./desktop-entry-check.py} "$TMPDIR/neg.desktop" "$out/bin" "$out/share/icons/hicolor" 2>&1 | grep -c -e 'not in' -e 'is in no') || true
+    [ "$n" -eq 2 ] || { echo "FATAL: desktop-entry-check negative control found $n of 2 problems" >&2; exit 1; }
     "$out/lib/firefox/firefox" --version | grep -q 'Mozilla Firefox 153.6.0esr' || { echo "FATAL: firefox --version" >&2; exit 1; }
     # every shipped ELF that links libc must carry NODEFLIB (a stray link without the wrapper would reopen the host-lib hole)
     for f in "$out"/lib/firefox/*.so "$out"/lib/firefox/firefox; do
