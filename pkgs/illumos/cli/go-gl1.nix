@@ -555,4 +555,84 @@ in {
   paralus-cli = pkg { pname = "paralus-cli"; version = "0.1.5"; src = gh "paralus/cli" "v0.1.5" "df1e05e84c62dca5dc257fca0842965f7c403223315f7c884f473ace6c4ac8d2";
     vendorHash = "sha256-rsEmSOHYgCKhMAmZL7aTa4tEzjIrqRfc/8Qar1gA49M="; subPkgs = "."; ldflags = "-s -w -X main.version=0.1.5 -X main.buildNum=0.1.5";
     check = chk ''"$out/bin/cli" version'' "0\\.1\\.5"; };
+  # easyjson (MIT): fast JSON serializer for Go.
+  easyjson = pkg { pname = "easyjson"; version = "0.9.2"; src = gh "mailru/easyjson" "v0.9.2" "0a6b7a5175aeb38c52ae794d49373f2a9baa5a5e47b7cf430db2cbb668297689";
+    vendorHash = "sha256-j9AfUrCF6v3Qco8V8NOvJ1kZ36kGGPHwwqwnhdz6Cpg="; subPkgs = "./easyjson";
+    check = chk ''"$out/bin/easyjson" --help'' "[Uu]sage"; };
+  # efm-langserver (MIT): general purpose Language Server.
+  efm-langserver = pkg { pname = "efm-langserver"; version = "0.0.57"; src = gh "mattn/efm-langserver" "v0.0.57" "5a00742ab59c146514f652cc1d8cd34df1b0b1c692706261e4a97131f9cbe935";
+    vendorHash = "sha256-dU0+jqD06n2Ncp+caEKJz6PPFc+bUsKPC0tvzXgDlBQ="; subPkgs = ".";
+    check = chk ''"$out/bin/efm-langserver" --help'' "[Uu]sage"; };
+  # elfinfo (BSD-3-Clause): small utility for showing information about ELF files.
+  elfinfo = pkg { pname = "elfinfo"; version = "1.2.2"; src = gh "xyproto/elfinfo" "1.2.2" "33c9bf9942dfa770fa6530f5a268f15d96abcd4c57aaddf93636cdfcd2dfc540";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/elfinfo" --version'' "1\\.2\\.2"; };
+  # enumer (BSD-2-Clause): go tool to auto generate methods for enums.
+  enumer = pkg { pname = "enumer"; version = "1.7.2"; src = gh "dmarkham/enumer" "refs/tags/v1.7.2" "ef310c9af9061540944b47659500fae4ba493312babe4ed681c8ffead4f86ab6";
+    vendorHash = "sha256-J0etGLycrT2fXOrxyH55fI6oEnxt40ABM1RJ2tuXhFc="; subPkgs = ".";
+    check = chk ''"$out/bin/enumer" --help'' "[Uu]sage"; };
+  # enumerepo (MIT): tool to list all public repositories for (valid) GitHub usernames.
+  enumerepo = pkg { pname = "enumerepo"; version = "1.0.0"; src = gh "trickest/enumerepo" "refs/tags/v1.0.0" "bb4c4019426e7050aa46feb4904ab43a43d7770772001a0be28e9e33ae74390e";
+    vendorHash = "sha256-ijaajmxLAdUdWZnR+zGIkGjTgGc4FbU+hOaCNyT5kM0="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/enumerepo" --help'' "[-]adjust-delay"; };
+  # errcheck (MIT): checks for unchecked errors in go programs.
+  errcheck = pkg { pname = "errcheck"; version = "1.30.0"; src = gh "kisielk/errcheck" "v1.30.0" "0c7b3bfdc9cc659d87c6ed72eb8980e4740e2990a6243a6e67743394ea1c20ff";
+    vendorHash = "sha256-J0MIU9A1oRd3SDiduv93WeCBXlmVnzKn3GSq5Iakcuc="; subPkgs = ".";
+    check = chk ''"$out/bin/errcheck" --help'' "[Uu]sage"; };
+  # exiflooter (Apache-2.0): finds geolocation on all image urls and directories.
+  exiflooter = pkg { pname = "exiflooter"; version = "1.0.0"; src = gh "aydinnyunus/exiflooter" "v1.0.0" "37c41033aec93a3a21de6699db7352bd398fc947033c41ce2513b440a7b9588f";
+    vendorHash = "sha256-TfGCE/T7to7HWQBzFiLarpxbyWCHmBE6JoXsr0XRtFw="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/exifLooter" --help'' "[-]-open-street-map"; };
+  # extrude (MIT): tool to analyse binaries for missing security features.
+  extrude = pkg { pname = "extrude"; version = "0.0.12"; src = gh "liamg/extrude" "v0.0.12" "ec33eb0851fa6111aa9449f7c817e8571f4dbd95d8df9944df31dcd8bf59c5a5";
+    vendorHash = "sha256-qOo4ZwmP2tOlcfKYcy2iW/D2g+nRZfwk2516pLgEDRg="; subPkgs = "./cmd/extrude";
+    check = chk ''"$out/bin/extrude" --help'' "[-]-fail-on-warning"; };
+  # fanbox-dl (MIT): pixiv FANBOX Downloader.
+  fanbox-dl = pkg { pname = "fanbox-dl"; version = "0.29.1"; src = gh "hareku/fanbox-dl" "v0.29.1" "709589e12676ddd636f00d9673883758cb30efa742b36f54324e211067d551f4";
+    vendorHash = "sha256-NG0zE9d6aW/AMFXfLTuP7RgKq6uxilRGfh5k8UReepY="; subPkgs = "./cmd/fanbox-dl";
+    check = chk ''"$out/bin/fanbox-dl" --help'' "[-]-ignore-creator"; };
+  # favirecon (MIT): tool to detect technologies, WAF, exposed panels and known services.
+  favirecon = pkg { pname = "favirecon"; version = "1.1.0"; src = gh "edoardottt/favirecon" "refs/tags/v1.1.0" "3cc64b241fc357cda44ea11ffbe036fbf7160049d0011c45a9963746e6e27bfb";
+    vendorHash = "sha256-K0M1md/C5U80Ltg1J7kL9ftIHZu3jpPEbtwDmw25pvI="; subPkgs = "./cmd/favirecon"; ldflags = "-s";
+    check = chk ''"$out/bin/favirecon" version'' "1\\.1\\.0"; };
+  # feishu-cli (MIT): CLI for Feishu (Lark) Open Platform.
+  feishu-cli = pkg { pname = "feishu-cli"; version = "1.43.0"; src = gh "riba2534/feishu-cli" "refs/tags/v1.43.0" "c6a73861892ec1d85d82c3d16db94bae63d11edb6b395509b9f7f36b9e984855";
+    vendorHash = "sha256-JTCJW/tok36S2lfATuiCNSVxREmyUx407nDdfHhEvB8="; subPkgs = "."; ldflags = "-X main.Version=v1.43.0";
+    check = chk ''"$out/bin/feishu-cli" --version'' "1\\.43\\.0"; };
+  # ffuf (MIT): tool for web fuzzing.
+  ffuf = pkg { pname = "ffuf"; version = "2.3.0"; src = gh "ffuf/ffuf" "refs/tags/v2.3.0" "cdb2e58259f380862850eba587f71a9dc1738fb5edc1ea60414fae30fd0ed4f2";
+    vendorHash = "sha256-M8d0jQS9fXHZiVGyWxjTnhZJ9qanKQNLwZmqIPS9LQo="; subPkgs = "."; ldflags = "-s -X=github.com/ffuf/ffuf/v2/pkg/ffuf.VERSION=2.3.0 -X=github.com/ffuf/ffuf/v2/pkg/ffuf.VERSION_APPENDIX=";
+    check = chk ''"$out/bin/ffuf" --version'' "2\\.3\\.0"; };
+  # figurine (Apache-2.0): print your name in style.
+  figurine = pkg { pname = "figurine"; version = "2.1.1"; src = gh "arsham/figurine" "v2.1.1" "9e799917edb627a6df30bec60898b3583b2c550c087c55efb75b695e91ea60d5";
+    vendorHash = "sha256-MxZI5cuQsQMqG9VVX8JJ5cWP5idTrHZS449DHbT+mkE="; subPkgs = "."; ldflags = "-s -w -X main.version=2.1.1 -X main.currentSha=v2.1.1";
+    check = chk ''"$out/bin/figurine" --version'' "2\\.1\\.1"; };
+  # files-cli (MIT): files.com Command Line App for Windows, Linux, and macOS.
+  files-cli = pkg { pname = "files-cli"; version = "2.15.463"; src = gh "files-com/files-cli" "refs/tags/v2.15.463" "d1f81619f269e991523c824f6352e93d20e250074d895268ea39b3a327e894e9";
+    vendorHash = "sha256-rTQPPTPzCkLyTsUPReX4Dutr7aE5j6aQVPFQ5qFL9rA="; subPkgs = "."; ldflags = "-s -X main.version=2.15.463";
+    check = chk ''"$out/bin/files-cli" --version'' "2\\.15\\.463"; };
+  # flarectl (BSD-3-Clause): CLI application for interacting with a Cloudflare account.
+  flarectl = pkg { pname = "flarectl"; version = "0.116.0"; src = gh "cloudflare/cloudflare-go" "v0.116.0" "d594cdf6730046eae27240324d32a8f43a2affa7f61706459ae912fa9f4d085b";
+    vendorHash = "sha256-HUJDGTdZI1oJj2pvldrp6s3A+2ZZMLwakN83RUnlABs="; subPkgs = "./cmd/flarectl"; ldflags = "-s -w";
+    check = chk ''"$out/bin/flarectl" --help'' "[-]-account-id"; };
+  # fork-cleaner (MIT): quickly clean up unused forks on your GitHub account.
+  fork-cleaner = pkg { pname = "fork-cleaner"; version = "2.4.0"; src = gh "caarlos0/fork-cleaner" "refs/tags/v2.4.0" "28ded4826d8a36d25857b824bea1ae480c76029ff50e8d831f79e18c360ff032";
+    vendorHash = "sha256-ecEONfRAZ1QeMcRUL88SK8QRXcGv24e2g1PPWcCl5H0="; subPkgs = "./cmd/fork-cleaner"; ldflags = "-s -w -X main.version=2.4.0 -X main.builtBy=nixpkgs";
+    check = chk ''"$out/bin/fork-cleaner" --version'' "2\\.4\\.0"; };
+  # frangipanni (MIT): convert lines of text into a tree structure.
+  frangipanni = pkg { pname = "frangipanni"; version = "0.5.0"; src = gh "birchb1024/frangipanni" "v0.5.0" "11a181c582f57c1a3d0f1cc934eacb6a7e18ca458c6575c84efcbb9b4bfcc0e2";
+    vendorHash = "sha256-ExQfeSyYP0WmzlR5n3UnOn/aTosOuwY2yQZ1TaWH5QY="; subPkgs = ".";
+    check = chk ''"$out/bin/frangipanni" --help'' "[-]no-fold"; };
+  # fscan (MIT): intranet comprehensive scanning tool.
+  fscan = pkg { pname = "fscan"; version = "2.2.2"; src = gh "shadow1ng/fscan" "refs/tags/v2.2.2" "4ad616dc215ceb683113ec6d3b96480d13e3321495e0f9657c1bb42aa6d62556";
+    vendorHash = "sha256-LcyCpMdY9ZjhaO/NK8AbR983nAjE9QBxudXD7uts/Vs="; subPkgs = ".";
+    check = chk ''"$out/bin/fscan" version'' "2\\.2\\.2"; };
+  # fsql (MIT): search through your filesystem with SQL-esque queries.
+  fsql = pkg { pname = "fsql"; version = "0.5.2"; src = gh "kashav/fsql" "v0.5.2" "21f12261516bfa2ebc4136b7e7e08a23743809e847dfdace3c1f6ac88023277d";
+    vendorHash = "sha256-l3e7+Rq/tRDbmvFf9Z1YiKT2WJ+6KQ1CpVrp95bJjjA="; subPkgs = "./cmd/fsql"; ldflags = "-s -w";
+    check = chk ''"$out/bin/fsql" --version'' "0\\.5\\.2"; };
+  # galer (MIT): tool to fetch URLs from HTML attributes.
+  galer = pkg { pname = "galer"; version = "0.2.0"; src = gh "dwisiswant0/galer" "refs/tags/v0.2.0" "1752d3062ad8dc39e4e34fb84088e58aa1544d3893147097502c4ec36920210f";
+    vendorHash = "sha256-rjCYCHKRKQfO/AlFjAMRZmyP1wMkhiszv0Tg8HSmaSk="; subPkgs = ".";
+    check = chk ''"$out/bin/galer" --version'' "0\\.2\\.0"; };
 }
