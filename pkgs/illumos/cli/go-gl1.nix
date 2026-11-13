@@ -1195,4 +1195,84 @@ in {
   kanarenshu = pkg { pname = "kanarenshu"; version = "0.1.4"; src = gh "nuixyz/kanarenshu" "refs/tags/v0.1.4" "f34cf25c08e4db141dbbe58fca6c68630d996cea5e2eebae4d9bcfbd99cb6bf0";
     vendorHash = "sha256-3/U/q+7Ij78O9pbZ56hqJi2xp/8x7qo80n2mlTFWzmY="; subPkgs = "./cmd/kanarenshu"; ldflags = "-s -w -X=main.version=0.1.4";
     check = chk ''"$out/bin/kanarenshu" --version'' "0\\.1\\.4"; };
+  # kapowbang (Apache-2.0): expose command-line tools over HTTP.
+  kapowbang = pkg { pname = "kapowbang"; version = "0.7.1"; src = gh "BBVA/kapow" "v0.7.1" "cba2b5891cb8146a9fe3e1fd5f91dba988d488b197fefaae486cacd902cd133b";
+    vendorHash = "sha256-/eb8KmEIswjlvR0jD77Mgpc/y32hJ3D+udGhZN982R0="; subPkgs = ".";
+    check = chk ''"$out/bin/kapow" --help'' "[Uu]sage"; };
+  # kbld (Apache-2.0): seamlessly incorporates image building and image pushing into your development and deployment workflows.
+  kbld = pkg { pname = "kbld"; version = "0.49.2"; src = gh "carvel-dev/kbld" "v0.49.2" "b6e5c4438d37dc0f034e58854948351f397000468b59deb50c00765f0ab1bd3f";
+    vendorHash = null; subPkgs = "./cmd/kbld"; ldflags = "-X=carvel.dev/kbld/pkg/kbld/version.Version=0.49.2";
+    check = chk ''"$out/bin/kbld" --version'' "0\\.49\\.2"; };
+  # kbst (Apache-2.0): kubestack framework CLI.
+  kbst = pkg { pname = "kbst"; version = "0.2.1"; src = gh "kbst/kbst" "refs/tags/v0.2.1" "a02615028a00f4ce1e0121f3c8822dc5245f79e4e34bb85de48cc6ba6b3d5047";
+    vendorHash = "sha256-6HAbNWb4oMN9yUxmvWgvo6PkSRzOVVeRVd1PPqWurd4="; subPkgs = "."; ldflags = "-s -w -X github.com/kbst/kbst.version=0.2.1 -X github.com/kbst/kbst.buildDate=unknown -X github.com/kbst/kbst.gitCommit=refs/tags/v0.2.1 -X github.com/kbst/kbst.gitTag=v0.2.1 -X github.com/kbst/kbst.gitTreeState=clean";
+    check = chk ''"$out/bin/kbst" --help'' "[Uu]sage"; };
+  # ketch (MIT): fast, stateless CLI for web search and scrape. Built for AI agents.
+  ketch = pkg { pname = "ketch"; version = "0.18.1"; src = gh "1broseidon/ketch" "refs/tags/v0.18.1" "dca4d1b126c66e2a8d85f0beb762d6334e6cd0fb10df7ddce0b57884716ad9ce";
+    vendorHash = "sha256-ZfAMk0J55/eOg5D7ioZjIIx5diLKtwXpXdNmqpnoAU8="; subPkgs = ". ./cmd/readtest"; ldflags = "-s -w -X github.com/1broseidon/ketch/cmd.version=0.18.1";
+    check = chk ''"$out/bin/ketch" --version'' "0\\.18\\.1"; };
+  # kfilt (Apache-2.0): command-line tool that filters Kubernetes resources.
+  kfilt = pkg { pname = "kfilt"; version = "1.0.0"; src = gh "ryane/kfilt" "v1.0.0" "eccc3e2c176109b2551f047f098d369a42986a9d9e9c4c99f61d79a3927b0c65";
+    vendorHash = "sha256-3N9SlnsHPp+USPtx7i4bwgRixhJwDLPHsUwiHvRNkbA="; subPkgs = "."; ldflags = "-s -w -X github.com/ryane/kfilt/cmd.Version=1.0.0 -X github.com/ryane/kfilt/cmd.GitCommit=v1.0.0";
+    check = chk ''"$out/bin/kfilt" --version'' "1\\.0\\.0"; };
+  # kin-openapi (MIT): command line tool to validation openapi3 documents.
+  kin-openapi = pkg { pname = "kin-openapi"; version = "0.152.0"; src = gh "getkin/kin-openapi" "refs/tags/v0.152.0" "f42d5d5ab8db4136b93895d3fceb46c85399e369c906433ff37401147294dc29";
+    vendorHash = "sha256-G166SDGUXgyDeSO5LgsQpXspCyaceh2Gtmj63ibXByo="; subPkgs = "./cmd/validate";
+    check = chk ''"$out/bin/validate" --help'' "[Uu]sage"; };
+  # kiterunner (AGPL-3.0-only): contextual content discovery tool.
+  kiterunner = pkg { pname = "kiterunner"; version = "1.0.2"; src = gh "assetnote/kiterunner" "v1.0.2" "d553ed6a063b1a65bc72060be137b89d7c48f4da6ebf4fe46057807a5aa3d069";
+    vendorHash = "sha256-w6A9CjO+0tumCVo+Tn7Eukk8CYxFuKJEIQ1hAsgcl50="; subPkgs = "./cmd/kiterunner"; ldflags = "-s -w -X github.com/assetnote/kiterunner/cmd/kiterunner/cmd.Version=1.0.2";
+    check = chk ''"$out/bin/kiterunner" version'' "1\\.0\\.2"; };
+  # knit (MIT): simple and flexible build tool using Lua, similar to make/mk.
+  knit = pkg { pname = "knit"; version = "1.1.1"; src = gh "zyedidia/knit" "v1.1.1" "f4a073568ef3b44d4cf80f4acff021368c5a2cc4f047ce7b4c6b5bfa57562e2b";
+    vendorHash = "sha256-givrBowtckyooDec6oaO/DW2SFDg4ms2CmNERDvwnQ0="; subPkgs = "./cmd/knit"; ldflags = "-s -w -X github.com/zyedidia/knit/info.Version=1.1.1";
+    check = chk ''"$out/bin/knit" --version'' "1\\.1\\.1"; };
+  # konf (Apache-2.0): lightweight and blazing fast kubeconfig manager which allows to use different kubeconfigs at the same time.
+  konf = pkg { pname = "konf"; version = "0.7.0"; src = gh "SimonTheLeg/konf-go" "v0.7.0" "bb924ff7ead75a34ac6956b58115826ffdb726b65f2635e740c1c3a73ca5d6a8";
+    vendorHash = "sha256-AV+mJkJA9xf3EvjtZog5MYeBGm0Xr/DVGpXpyyzrlR8="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/konf-go" --help'' "[-]-konf-dir"; };
+  # kt (MIT): kafka command line tool.
+  kt = pkg { pname = "kt"; version = "13.1.0"; src = gh "fgeller/kt" "v13.1.0" "20cffe44f0f126ee42c634427cc3cdb6705e33dd4de3647a8c4a84ccec1d25f3";
+    vendorHash = "sha256-/4RUvLwvEt2sc8lteh2zZNY80dVMzYLgNu9uoATgMoo="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/kt" --help'' "[Uu]sage"; };
+  # ktunnel (GPL-3.0-only): cli that exposes your local resources to kubernetes.
+  ktunnel = pkg { pname = "ktunnel"; version = "2.0.2"; src = gh "omrikiei/ktunnel" "v2.0.2" "ceeb56267807affea6abbbfda0906a46e956ffaa39faf2cf82937a310a5f6dcb";
+    vendorHash = "sha256-TuYaKPJ4S7AZzaCkINt2U7ppAOH5t6AZpsoGcokssY8="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/ktunnel" --version'' "2\\.0\\.2"; };
+  # kube-capacity (Apache-2.0): simple CLI that provides an overview of the resource requests, limits, and utilization in a Kubernetes cluster.
+  kube-capacity = pkg { pname = "kube-capacity"; version = "0.8.0"; src = gh "robscott/kube-capacity" "v0.8.0" "71a1e515f88c1dbd8f02a652984f1a83b526bab86b5883bcc012a4dedc139bce";
+    vendorHash = "sha256-GDZmEJJ5vAKcrMtmZZlRf4IFIWqZPiHTwW16N1/3SiI="; subPkgs = ".";
+    check = chk ''"$out/bin/kube-capacity" --help'' "[-]-namespace-labels"; };
+  # kube-review (Apache-2.0): create Kubernetes AdmissionReview requests from Kubernetes resource manifests.
+  kube-review = pkg { pname = "kube-review"; version = "0.5.0"; src = gh "anderseknert/kube-review" "refs/tags/v0.5.0" "516f0cc0a371f4eeaa245ded832db537b2980c72977c310ab43c27a7483405a4";
+    vendorHash = "sha256-NnKMo1a0iCk+y3iu2av0df8NI9Itx07HQKMZR2onKGk="; subPkgs = "."; ldflags = "-X github.com/anderseknert/kube-review/cmd.version=v0.5.0";
+    check = chk ''"$out/bin/kube-review" version'' "0\\.5\\.0"; };
+  # kubeconform (Apache-2.0): FAST Kubernetes manifests validator, with support for Custom Resources.
+  kubeconform = pkg { pname = "kubeconform"; version = "0.8.0"; src = gh "yannh/kubeconform" "v0.8.0" "c345de9c3207f2d24628c64fe3cb9bed55c4248b12c181efe81ee907d6c994f2";
+    vendorHash = null; subPkgs = "./cmd/kubeconform"; ldflags = "-s -w -X main.version=v0.8.0";
+    check = chk ''"$out/bin/kubeconform" --help'' "[-]insecure-skip-tls-verify"; };
+  # kubectl-df-pv (Apache-2.0): df-like utility for persistent volumes on Kubernetes.
+  kubectl-df-pv = pkg { pname = "kubectl-df-pv"; version = "0.5.0"; src = gh "yashbhutwala/kubectl-df-pv" "v0.5.0" "91ca7e0631229fe0f9bb45f7e8868fc9ee9a03dee978989a73d3a4099bc82dbd";
+    vendorHash = "sha256-xTsU8+6kgdkKvBFa1OStYzW+8CsOzQt33uUbaTFEtLg="; subPkgs = "./cmd/df-pv";
+    check = chk ''"$out/bin/df-pv" --help'' "[-]-certificate-authority"; };
+  # kubectl-evict-pod (Apache-2.0): this plugin evicts the given pod and is useful for testing pod disruption budget rules.
+  kubectl-evict-pod = pkg { pname = "kubectl-evict-pod"; version = "0.0.15"; src = gh "rajatjindal/kubectl-evict-pod" "v0.0.15" "cc97ece1cfac60e08cee289effac163caaa63641e865543dcf79665a7e19e008";
+    vendorHash = "sha256-vhk7Ja7jaKypl1Z7z9d2GWiXS06m1gUHCgSG6+B5/gk="; subPkgs = ".";
+    check = chk ''"$out/bin/kubectl-evict-pod" --help'' "[-]-insecure-skip-tls-verify"; };
+  # kubectl-example (Apache-2.0): kubectl plugin for retrieving resource example YAMLs.
+  kubectl-example = pkg { pname = "kubectl-example"; version = "1.2.0"; src = gh "seredot/kubectl-example" "v1.2.0" "74b5b4bcb6ac89bbb28c6f96a900bed7a23532e2841b90e8437917a3a4819645";
+    vendorHash = null; subPkgs = "./cmd/kubectl-example";
+    check = chk ''"$out/bin/kubectl-example" --help'' "[Uu]sage"; };
+  # kubectl-graph (Apache-2.0): kubectl plugin to visualize Kubernetes resources and relationships.
+  kubectl-graph = pkg { pname = "kubectl-graph"; version = "0.7.0"; src = gh "steveteuber/kubectl-graph" "v0.7.0" "14c6051f87c4b82e991745009dd6a0ab8d4edb91d83c31df29cf24d426d057e6";
+    vendorHash = "sha256-iKDVaQ0mzMfR9dKhhAq8mtK0gKsKCJ6Mk4Otk2aXzRk="; subPkgs = "./cmd/kubectl-graph";
+    check = chk ''"$out/bin/kubectl-graph" --help'' "[-]-all-namespaces"; };
+  # kubectl-tree (Apache-2.0): kubectl plugin to browse Kubernetes object hierarchies as a tree.
+  kubectl-tree = pkg { pname = "kubectl-tree"; version = "0.6.0"; src = gh "ahmetb/kubectl-tree" "v0.6.0" "a2c62e887be6bd66c920edb26f9e8ad40d483d4d257e31641fbbef8f0ab1a6ce";
+    vendorHash = "sha256-AAIXHn1pNuyiRQ4DTfn8JipTzwls6Z3HGQGmI6QIP48="; subPkgs = "./cmd/kubectl-tree";
+    check = chk ''"$out/bin/kubectl-tree" --help'' "[-]-certificate-authority"; };
+  # kubefetch (GPL-3.0-or-later): neofetch-like tool to show info about your Kubernetes Cluster.
+  kubefetch = pkg { pname = "kubefetch"; version = "0.8.1"; src = gh "jkulzer/kubefetch" "0.8.1" "05d1fdb6a18f433186c924465dc7dd729ebbd48f89ff947c4b3c8697c97614ac";
+    vendorHash = "sha256-phBkynLrMrQY76UIMwBIl3ModMSJElu+bTPbPuZ1dHw="; subPkgs = ".";
+    check = chk ''"$out/bin/kubefetch" --version'' "0\\.8\\.1"; };
 }
