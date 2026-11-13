@@ -1543,4 +1543,84 @@ in {
   sd-local = pkg { pname = "sd-local"; version = "1.0.59"; src = gh "screwdriver-cd/sd-local" "v1.0.59" "b51d61588893800e716abade6aaaf79efc8c1845a743a245a2c60018723ba525";
     vendorHash = "sha256-lc3mtAtoACHUs1J6+eSnB9J/Q9i3cj0stPGWkgksTdI="; subPkgs = ".";
     check = chk ''"$out/bin/sd-local" --help'' "[Uu]sage"; };
+  # sdlookup (MIT): IP lookups for open ports and vulnerabilities from internetdb.shodan.io.
+  sdlookup = pkg { pname = "sdlookup"; version = "0-unstable-2022-03-10"; src = gh "j3ssie/sdlookup" "8554bfa27284c4764401dbd8da23800d4ae968a2" "c4c0e3c9206766e2c5748fe18f1cb095d0551042409601484532a0fed0cb83b6";
+    vendorHash = "sha256-Z0p4l2U6pEeaMHt4qfLMrikL+bPLZo7R9xgcDE/25mE="; subPkgs = ".";
+    check = chk ''"$out/bin/sdlookup" --help'' "[Uu]sage"; };
+  # secrethound (MIT): CLI tool designed to find secrets in JavaScript files, web pages, and other text sources.
+  secrethound = pkg { pname = "secrethound"; version = "1.3.0"; src = gh "rafabd1/SecretHound" "refs/tags/v1.3.0" "e998f0744ec81380baead0606e195a5ff5cb54bfa64ec5824ced89dce8d76f96";
+    vendorHash = "sha256-u7a+UFQjNcqcL+POS2/m75OFHQLVVfIpayAENH2ZI+Y="; subPkgs = "./cmd/secrethound"; ldflags = "-s -w";
+    check = chk ''"$out/bin/secrethound" version'' "1\\.3\\.0"; };
+  # senv (MIT): friends don't let friends leak secrets on their terminal window.
+  senv = pkg { pname = "senv"; version = "0.7.0"; src = gh "SpectralOps/senv" "v0.7.0" "9bf87f6865ba20a00dcb0c8203b742e9979786e653e96ec90e2bea257bdba187";
+    vendorHash = "sha256-jxW2RsSIHsl8n/hZw6fI+7JvpTAgsmbuFMPTymLYxoo="; subPkgs = ".";
+    check = chk ''"$out/bin/senv" --help'' "[Uu]sage"; };
+  # seqkit (MIT): cross-platform and ultrafast toolkit for FASTA/Q file manipulation.
+  seqkit = pkg { pname = "seqkit"; version = "2.14.0"; src = gh "shenwei356/seqkit" "v2.14.0" "7df95904ce438c1a1a7b1fc06f20479a169e69209ac59abae8e80c60a1e65d60";
+    vendorHash = "sha256-g+joEbyKloo9JLXgK6KjbZbN7J5EdLeIk5UvfTlklXY="; subPkgs = "./benchmark ./seqkit";
+    check = chk ''"$out/bin/seqkit" version'' "2\\.14\\.0"; };
+  # sequin (MIT): human-readable ANSI sequences.
+  sequin = pkg { pname = "sequin"; version = "0.3.1"; src = gh "charmbracelet/sequin" "refs/tags/v0.3.1" "52f4d704a6e019df05dfc0ee3808fdf6c7d3245dcaa6262db8ca33c9de303da9";
+    vendorHash = "sha256-htZnRYDHbBwRNCfTb+IDY6D1tne25dslPjk+44VQTrA="; subPkgs = "."; ldflags = "-X main.Version=0.3.1";
+    check = chk ''"$out/bin/sequin" --version'' "0\\.3\\.1"; };
+  # sessionprobe (MIT): tool for evaluating user privileges in web applications.
+  sessionprobe = pkg { pname = "sessionprobe"; version = "1.0.0"; src = gh "dub-flow/sessionprobe" "refs/tags/v1.0.0" "8385b6784b1f32feb00a777ef6a1d8493eff2f200e277462e6e0043f56439f33";
+    vendorHash = "sha256-rcxY2DzoKctSDYo4bwUZ55llzEfQZYHsI+UTMiAtjhc="; subPkgs = "."; ldflags = "-s -X=main.AppVersion=1.0.0";
+    check = chk ''"$out/bin/sessionprobe" version'' "1\\.0\\.0"; };
+  # sftpgo-plugin-auth (AGPL-3.0-only): LDAP/Active Directory authentication for SFTPGo.
+  sftpgo-plugin-auth = pkg { pname = "sftpgo-plugin-auth"; version = "1.0.17"; src = gh "sftpgo/sftpgo-plugin-auth" "refs/tags/v1.0.17" "8575a5c06dfdb08aa666d64c59afbeb47ae46c07ae1282c1377ffdf8441de238";
+    vendorHash = "sha256-hWsZInzH9Ic7XmSXW7zlg+KLkEynmQ+cT2QL1Bud+1Q="; subPkgs = "."; ldflags = "-s -X github.com/sftpgo/sftpgo-plugin-auth/cmd.commitHash=refs/tags/v1.0.17";
+    check = chk ''"$out/bin/sftpgo-plugin-auth" --version'' "1\\.0\\.17"; };
+  # shadowsocks-v2ray-plugin (MIT): yet another SIP003 plugin for shadowsocks, based on v2ray.
+  shadowsocks-v2ray-plugin = pkg { pname = "shadowsocks-v2ray-plugin"; version = "1.3.2-unstable-2025-09-05"; src = gh "shadowsocks/v2ray-plugin" "e9af1cdd2549d528deb20a4ab8d61c5fbe51f306" "c7470b688492028bda5548607061acbbfc3067960266235eaf837240f5f89718";
+    vendorHash = "sha256-jjuODH6WgXOFb7BRcBlKUR2YQfkEYXgf6g3UwqSvIm8="; subPkgs = ".";
+    check = chk ''"$out/bin/v2ray-plugin" --help'' "[-]fast-open"; };
+  # shellz (GPL-3.0-only): utility to manage your SSH, telnet, kubernetes, winrm, web or any custom shell.
+  shellz = pkg { pname = "shellz"; version = "1.6.0"; src = gh "evilsocket/shellz" "v1.6.0" "3a89e3d573563a0c2ccb1831ff41fc0204c8b4efb011c10108ab98451a309b1c";
+    vendorHash = "sha256-+U98meofmjukS2FlkjIilJ3hk6AQPUIMmmK3uQzyLwo="; subPkgs = "./cmd/shellz"; ldflags = "-s -w";
+    check = chk ''"$out/bin/shellz" --help'' "[-]connection-timeout"; };
+  # shortscan (MIT): IIS short filename enumeration tool.
+  shortscan = pkg { pname = "shortscan"; version = "0.9.2"; src = gh "bitquark/shortscan" "refs/tags/v0.9.2" "8e5018f73e2dc1d4da9efe63c02dcc047662efe2c80058896eff03474396ff3e";
+    vendorHash = "sha256-bhJX7PhTNmmL0Qub3guEu9462L4OjNg8jgxSz5n0On8="; subPkgs = "./cmd/shortscan ./cmd/shortutil"; ldflags = "-s -w";
+    check = chk ''"$out/bin/shortscan" --version'' "0\\.9\\.2"; };
+  # shoutrrr (MIT): notification library for gophers and their furry friends.
+  shoutrrr = pkg { pname = "shoutrrr"; version = "0.8.0"; src = gh "containrrr/shoutrrr" "refs/tags/v0.8.0" "141c233631f51450f1015f32f7acd831d8585f0ebbd53e3b32675f46199d4248";
+    vendorHash = "sha256-q9oFWdsq17H0Jfv95ivw2QWVbU2iCn3kee1wRmfvYi4="; subPkgs = "./shoutrrr";
+    check = chk ''"$out/bin/shoutrrr" --version'' "0\\.8\\.0"; };
+  # shuffledns (GPL-3.0-or-later): massDNS wrapper to bruteforce and resolve the subdomains with wildcard handling support.
+  shuffledns = pkg { pname = "shuffledns"; version = "1.2.1"; src = gh "projectdiscovery/shuffledns" "v1.2.1" "f1a067b81980c57c9c024aab5988c78cb93159312d6fcf5c2ba0fd6b46d6f4e0";
+    vendorHash = "sha256-nc1rnK5VjgRZh+GcOfnUd7vVBS7Y5tk8a03FjMMvyGw="; subPkgs = "./cmd/shuffledns"; ldflags = "-s -w";
+    check = chk ''"$out/bin/shuffledns" --version'' "1\\.2\\.1"; };
+  # sipexer (GPL-3.0-only): modern and flexible SIP CLI tool.
+  sipexer = pkg { pname = "sipexer"; version = "2.0.0"; src = gh "miconda/sipexer" "v2.0.0" "848ad498dd73bc6e223cd9806b4bb675783c7c27d66e105414725f7f118808af";
+    vendorHash = "sha256-hP391sneZY9sh9No8637Bp1KXn6Fcac78IdeTpzdrfk="; subPkgs = ".";
+    check = chk ''"$out/bin/sipexer" --version'' "2\\.0\\.0"; };
+  # smap (AGPL-3.0-only): drop-in replacement for Nmap powered by shodan.io.
+  smap = pkg { pname = "smap"; version = "0.1.12"; src = gh "s0md3v/Smap" "refs/tags/0.1.12" "870838dc01cbf2a018db8bbdee2ac439e4666e131d1f014843fc5b6994c33049";
+    vendorHash = "sha256-dk31IqOoG5yYCXV0kd9HBnCNli07+etnyvD7S7KtMW0="; subPkgs = "./cmd/smap"; ldflags = "-s -w";
+    check = chk ''"$out/bin/smap" -h'' "[Uu]sage"; };
+  # smtprelay (MIT): simple Golang SMTP relay/proxy server.
+  smtprelay = pkg { pname = "smtprelay"; version = "1.14.0"; src = gh "decke/smtprelay" "refs/tags/v1.14.0" "c5a615c7d6391bf3cd2f4f83845ced60c92cd804119e1d6c1f7b2c8511306d76";
+    vendorHash = "sha256-S+dgfoFz78xT4xf8BnE07brKXhIuNKCvHq+5ZusFJLU="; subPkgs = "."; ldflags = "-s -w -X=main.appVersion=v1.14.0";
+    check = chk ''"$out/bin/smtprelay" --version'' "1\\.14\\.0"; };
+  # snowcat (Apache-2.0): tool to audit the istio service mesh.
+  snowcat = pkg { pname = "snowcat"; version = "0.1.3"; src = gh "praetorian-inc/snowcat" "v0.1.3" "ea489cf5e90d51587ab3bd51e0f73787025eb15a417a3fafa8d979c013234ac7";
+    vendorHash = "sha256-41bMlbV3MEU0Ey3wZPPDhj40/mVP8Xssr42cEx5Mqsk="; subPkgs = "./cmd/snowcat"; ldflags = "-s -w";
+    check = chk ''"$out/bin/snowcat" --help'' "[-]-discovery-address"; };
+  # sourcemapper (BSD-3-Clause): extract JavaScript source trees from Sourcemap files.
+  sourcemapper = pkg { pname = "sourcemapper"; version = "0-unstable-2024-03-22"; src = gh "denandz/sourcemapper" "467916e59f9f28f2df3c2fb209db32dabd057c92" "be9be08bcc7205f253df2fd1ff0e8e720ded87e0fb093a98b8dd67289863e569";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/sourcemapper" --help'' "[Uu]sage"; };
+  # speedtest-go (MIT): CLI and Go API to Test Internet Speed using speedtest.net.
+  speedtest-go = pkg { pname = "speedtest-go"; version = "1.8.3"; src = gh "showwin/speedtest-go" "refs/tags/v1.8.3" "48d01137468da9d419a3940a652803dafd8a6820abcd985b85c9d0c86b417ba3";
+    vendorHash = "sha256-WR04n07ONSVgUdlBTgI3gRLQXaDz4zfn1npTswwx7fA="; subPkgs = ".";
+    check = chk ''"$out/bin/speedtest-go" --version'' "1\\.8\\.3"; };
+  # spicy (MIT): nintendo 64 segment assembler.
+  spicy = pkg { pname = "spicy"; version = "0.6.2"; src = gh "trhodeos/spicy" "v0.6.2" "115e53a03949073025196519ae46842da59da23ed9034d84a2c7f25b7279cb62";
+    vendorHash = "sha256-KTyQsUjEndkAy/EmyTkKBNRt5sZ2KVDnFiD8RAIqx7o="; subPkgs = "./cmd/print_elf ./cmd/spicy"; ldflags = "-s -w";
+    check = chk ''"$out/bin/spicy" --help'' "[Uu]sage"; };
+  # ssh-key-confirmer (MIT): test ssh login key acceptance without having the private key.
+  ssh-key-confirmer = pkg { pname = "ssh-key-confirmer"; version = "0.1"; src = gh "benjojo/ssh-key-confirmer" "v0.1" "4cbae943dff900662231cb2c04fd06a8d5cede0c0f2c31b2722e9597cc3a7aff";
+    vendorHash = "sha256-toUU26VZxAtKbi7+m/tf24KzPnQVwW86eqWt0zbd2N0="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/ssh-key-confirmer" --help'' "[Uu]sage"; };
 }
