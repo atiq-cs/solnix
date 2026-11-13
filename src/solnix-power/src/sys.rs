@@ -134,7 +134,7 @@ pub fn set_profile(conf: &str, profile: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // `kstat -p acpi_drv:0` on lixi, 2026-11-10 (ThinkPad X1 Extreme Gen 5, on AC, idle)
+    // `kstat -p acpi_drv:0` on a ThinkPad X1 Extreme Gen 5, 2026-11-10 (on AC, idle)
     const LIXI: &str = "acpi_drv:0:battery BIF0:bif_design_cap\t90090\nacpi_drv:0:battery BIF0:bif_last_cap\t83460\n\
 acpi_drv:0:battery BIF0:bif_model\t5B11B79217\nacpi_drv:0:battery BIF0:bif_oem_info\tSMP\nacpi_drv:0:battery BIF0:bif_serial\t 1868\n\
 acpi_drv:0:battery BIF0:bif_type\tLiP\nacpi_drv:0:battery BIF0:bif_unit\t0\nacpi_drv:0:battery BIF0:bif_voltage\t15520\n\

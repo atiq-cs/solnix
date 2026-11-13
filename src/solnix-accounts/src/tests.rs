@@ -1,5 +1,5 @@
 //! org.freedesktop.Accounts on a private session bus (run under dbus-run-session) over a copy of /etc in a temp dir:
-//! the files are lixi's lines plus test users. The reads go through a zbus proxy built the way accounts_zbus's
+//! the files are a solnix desktop's lines plus test users. The reads go through a zbus proxy built the way accounts_zbus's
 //! UserProxy::from_uid builds it (the path, the interface, the default lazy property cache that asks GetAll first).
 //! The negative control rewrites user_attr without the profile and the same object must answer 0.
 use super::*;
@@ -14,7 +14,7 @@ nixbld1:x:30001:30000:Nix build user 1:/var/empty:/bin/false\n\
 cosmic-greeter:x:30080:30080:COSMIC login greeter user:/var/lib/cosmic-greeter:/usr/bin/false\n";
 const GROUP: &str = "root::0:\nstaff::10:\nsysadmin::14:ops\nseat::30082:cosmic-greeter,alice\n";
 const SHADOW: &str = "root:$5$x:::::::\nalice:$5$y:::::::\nplain:*LK*$5$z:::::::\nops:NP:::::::\n";
-// lixi's /etc/user_attr (comments, the stock lines, root's escaped colon, the desktop user's line as alice's) and the test users
+// a solnix desktop's /etc/user_attr (comments, the stock lines, root's escaped colon, the desktop user's line as alice's) and the test users
 const USER_ATTR: &str = "#\n# /etc/user_attr\n#\nadm::::profiles=Log Management\n\
 netadm::::type=role;project=default;profiles=Network Autoconf Admin,Network Management,Service Management\n\
 root::::auths=solaris.*,solaris.grant;profiles=All;audit_flags=lo\\:no;lock_after_retries=no;min_label=admin_low;clearance=admin_high\n\
@@ -54,7 +54,7 @@ async fn account_type(c: &Connection, d: &str, uid: u32) -> i32 { user(c, d, uid
 #[tokio::test(flavor = "current_thread")]
 async fn admin_follows_rbac() {
     let (_d, c, d) = daemon("rbac").await;
-    assert_eq!(account_type(&c, &d, 1000).await, 1, "alice: Primary Administrator (the desktop user's line on lixi)");
+    assert_eq!(account_type(&c, &d, 1000).await, 1, "alice: Primary Administrator (the desktop user's real line)");
     assert_eq!(account_type(&c, &d, 1001).await, 0, "plain: Basic Solaris User and All are not administration");
     assert_eq!(account_type(&c, &d, 1002).await, 1, "ops: in sysadmin");
     assert_eq!(account_type(&c, &d, 1003).await, 1, "roler: may assume the root role");

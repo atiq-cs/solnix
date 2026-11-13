@@ -233,7 +233,7 @@ pub fn set_hold(link: &str, on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // real lines from lixi (2026-11-10, dladm scan-wifi -p as root)
+    // real lines from a solnix laptop (2026-11-10, dladm scan-wifi -p as root)
     #[test]
     fn scan_lines() {
         let t = "sedgwick:c\\:ea\\:14\\:36\\:14\\:22:wpa:good:g:54Mb\n:12\\:ea\\:14\\:36\\:14\\:22:wpa:good:g:54Mb\nsedgwick:1c\\:6a\\:1b\\:12\\:16\\:f3:wpa:very good:a:54Mb\n";

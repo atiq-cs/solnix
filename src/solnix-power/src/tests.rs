@@ -1,5 +1,5 @@
 //! UPower and PowerProfiles on a private session bus (run under dbus-run-session) with a recorder backend: the kstats
-//! are lixi's, power.conf is a string. Reads must match the kstats; a profile change by a seat member writes the cpupm
+//! are a real laptop's, power.conf is a string. Reads must match the kstats; a profile change by a seat member writes the cpupm
 //! line and applies it once; a plain user's change is refused and nothing is written (the negative control).
 use super::*;
 use std::sync::Mutex as StdMutex;

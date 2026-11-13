@@ -10,7 +10,7 @@ pub const ADMIN_GROUP: &str = "sysadmin";
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pw { pub name: String, pub uid: u32, pub gid: u32, pub gecos: String, pub home: String, pub shell: String }
 
-/// `root` is "/" on a system; the tests and the lixi check point it at a copy.
+/// `root` is "/" on a system; the tests and the on-host check point it at a copy.
 pub struct Etc { pub root: PathBuf }
 
 impl Etc {
@@ -99,7 +99,7 @@ mod t {
     use super::*;
     #[test]
     fn user_attr_escapes() {
-        // root's line on lixi: an escaped colon inside audit_flags must not end the field
+        // root's line on a solnix desktop: an escaped colon inside audit_flags must not end the field
         let l = r"root::::auths=solaris.*,solaris.grant;profiles=All;audit_flags=lo\:no;lock_after_retries=no";
         let f = split_esc(l, ':');
         assert_eq!(f.len(), 5, "{f:?}");
