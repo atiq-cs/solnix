@@ -875,4 +875,84 @@ in {
   gojsontoyaml = pkg { pname = "gojsontoyaml"; version = "0.1.0"; src = gh "brancz/gojsontoyaml" "v0.1.0" "487a5c46d1bdad1348e3297aaf2cd859c943e487dc9592ffd000dc3e364d6700";
     vendorHash = null; subPkgs = ".";
     check = chk ''"$out/bin/gojsontoyaml" --help'' "[Uu]sage"; };
+  # gokart (Apache-2.0): static analysis tool for securing Go code.
+  gokart = pkg { pname = "gokart"; version = "0.5.1"; src = gh "praetorian-inc/gokart" "v0.5.1" "81bf1e26531117de4da9b160ede80aa8f6c4d4984cc1d7dea398083b8e232eb7";
+    vendorHash = "sha256-rb/2EMRfA3KpFcz4d5J9hLh1yWL45zbFKmEGx10PVbI="; subPkgs = ".";
+    check = chk ''"$out/bin/gokart" version'' "0\\.5\\.1"; };
+  # gokey (BSD-3-Clause): vault-less password store.
+  gokey = pkg { pname = "gokey"; version = "0.2.1"; src = gh "cloudflare/gokey" "refs/tags/v0.2.1" "b9f03491efa3b3481fc78246f62c6786ba19e9c9c8c36461cc8b949081f5896d";
+    vendorHash = "sha256-ugPma+v3Afkw8IreBv7t7Cuvr53u7eKtqnMCw34m0yE="; subPkgs = "./cmd/gokey";
+    check = chk ''"$out/bin/gokey" --help'' "[Uu]sage"; };
+  # goldilocks (Apache-2.0): get your resource requests "Just Right".
+  goldilocks = pkg { pname = "goldilocks"; version = "4.15.1"; src = gh "FairwindsOps/goldilocks" "refs/tags/v4.15.1" "0401803e6dd7ed954726ffd67ea15d78319c2d0d28c65a22ebc3cc159cdf7d35";
+    vendorHash = "sha256-bLYCXcDDX0GYDo9Mv6IkNPTQ5pizhgiMlQI9WksV2bM="; subPkgs = "."; ldflags = "-s -w -X main.version=4.15.1";
+    check = chk ''"$out/bin/goldilocks" version'' "4\\.15\\.1"; };
+  # gollama (MIT): go manage your Ollama models.
+  gollama = pkg { pname = "gollama"; version = "2.0.6"; src = gh "sammcj/gollama" "refs/tags/v2.0.6" "dd999558960f63daf36be8fe9fc04c32a15f53216115420c554b81cec6becb69";
+    vendorHash = "sha256-yIRpAb0DQPr7wEFhyWFUfK3nPOwhHnOYLsyc1IXQ3Jg="; subPkgs = "."; ldflags = "-s -w -X main.Version=2.0.6";
+    check = chk ''"$out/bin/gollama" --help'' "[-]no-cleanup"; };
+  # gomatrix (BSD-2-Clause): displays "The Matrix" in a terminal.
+  gomatrix = pkg { pname = "gomatrix"; version = "101.0.0"; src = gh "GeertJohan/gomatrix" "v101.0.0" "4d71d2509ac84f2340537d5e6f0eb9810b4173706f13cd6fe5e5e8ee5a69a50c";
+    vendorHash = "sha256-VZzFtQo4ODojVfX/IyYEO5uj2WVCMfTZtfevAuxvswM="; subPkgs = ".";
+    check = chk ''"$out/bin/gomatrix" --help'' "[Uu]sage"; };
+  # gomodifytags (BSD-3-Clause): go tool to modify struct field tags.
+  gomodifytags = pkg { pname = "gomodifytags"; version = "1.17.0"; src = gh "fatih/gomodifytags" "v1.17.0" "a490786d80c962dc946b8f9804ffec596c1087dbf91b122b9b5903c03b6da6b9";
+    vendorHash = "sha256-CzPmB/lnHK/q5wRUGu2Dw8QkEi3nTDPQMLAi6XJRgKc="; subPkgs = ".";
+    check = chk ''"$out/bin/gomodifytags" --help'' "[-]clear-options"; };
+  # gomtree (BSD-3-Clause): file systems verification utility and library, in likeness of mtree(8).
+  gomtree = pkg { pname = "gomtree"; version = "0.7.0"; src = gh "vbatts/go-mtree" "v0.7.0" "ba4687f1c9d4afc761a3f05af1267754a7e5e88965c9a1d2d8700579f5a6fa12";
+    vendorHash = null; subPkgs = "./cmd/gomtree"; ldflags = "-s -X main.Version=0.7.0";
+    check = chk ''"$out/bin/gomtree" --version'' "0\\.7\\.0"; };
+  # gonzo (MIT): TUI log analysis tool.
+  gonzo = pkg { pname = "gonzo"; version = "0.4.3"; src = gh "control-theory/gonzo" "refs/tags/v0.4.3" "cc9b0c79238f39b18f05ac5076c286166984d55056e8583fd9964b6594f7409f";
+    vendorHash = "sha256-SvAE50fZ3m9IjOcJkYdIj0wcUCIBkX12//TwERpteTQ="; subPkgs = "./cmd/gonzo"; ldflags = "-s -w -X=main.version=0.4.3 -X=main.commit=v0.4.3 -X=main.buildTime=1970-01-01T00:00:00Z -X=main.goVersion=1.27.3";
+    check = chk ''"$out/bin/gonzo" --version'' "0\\.4\\.3"; };
+  # google-cloud-bigtable-tool (Apache-2.0): google Cloud Bigtable Tool.
+  google-cloud-bigtable-tool = pkg { pname = "google-cloud-bigtable-tool"; version = "0.12.0"; src = gh "googleapis/cloud-bigtable-cbt-cli" "v.0.12.0" "884f976eb0b57ed02230b16db4622bcb1ebb128f5750f77cbce926259f06555e";
+    vendorHash = "sha256-WUifvE0p93+PMevhTzzKXIZIX2GgIsnQ+q/fLs3SecA="; subPkgs = ".";
+    check = chk ''"$out/bin/cbt" --help'' "[-]admin-endpoint"; };
+  # goose-lang (MIT): goose converts a small subset of Go to Coq.
+  goose-lang = pkg { pname = "goose-lang"; version = "0.9.2"; src = gh "goose-lang/goose" "v0.9.2" "b3348ad8b91d92e8da7d7fddd509966dd6f038a020f50d9efe70c2977c222f82";
+    vendorHash = "sha256-YRJn1JLuuhm4T0pUOE1kjbmFVFH91Zg4S15Mm/qUlLw="; subPkgs = "./cmd/goose ./cmd/test_gen"; ldflags = "-s -w";
+    check = chk ''"$out/bin/goose" --help'' "[-]skip-interfaces"; };
+  # gopacked (AGPL-3.0-or-later): simple text-based Minecraft modpack manager.
+  gopacked = pkg { pname = "gopacked"; version = "0.4.1"; src = gh "tulir/gopacked" "v0.4.1" "a121e9e297574a5926f34966e82deecf365e66d94a7b8c54fcb1fd8d1bdae44c";
+    vendorHash = "sha256-wCnrOUBNexfdcu7EgC/YsdMDjid7tY9YgqnSxF/ut6Q="; subPkgs = "./cmd/gopacked ./cmd/twitchparse";
+    check = chk ''"$out/bin/gopacked" --version'' "0\\.4\\.1"; };
+  # goplantuml (MIT): plantUML Class Diagram Generator for golang projects.
+  goplantuml = pkg { pname = "goplantuml"; version = "1.6.3"; src = gh "jfeliu007/goplantuml" "refs/tags/v1.6.3" "83a49407045e2236618c21df9a4e1cdc92fe95ede9003b767ccb6d21fe58162b";
+    vendorHash = "sha256-7V9zFzHbeYbJOpJznhqTy2q/7k4LiS9YDrywDxk6Ic4="; subPkgs = "./cmd/goplantuml";
+    check = chk ''"$out/bin/goplantuml" --help'' "[-]aggregate-private-members"; };
+  # gore (MIT): yet another Go REPL that works nicely.
+  gore = pkg { pname = "gore"; version = "0.7.0"; src = gh "x-motemen/gore" "v0.7.0" "88e2f6f52eb5fd4b5359d822f9f3fcb99a0f868eff1e4da19880bebba3143718";
+    vendorHash = "sha256-Y4i4zDTrggFRfoql74RIQzdI5Uihb5y9Dx/jjieN9a4="; subPkgs = "./cmd/gore";
+    check = chk ''"$out/bin/gore" --version'' "0\\.7\\.0"; };
+  # goread (GPL-3.0-or-later): beautiful program to read your RSS/Atom feeds right in the terminal.
+  goread = pkg { pname = "goread"; version = "1.7.3"; src = gh "TypicalAM/goread" "v1.7.3" "9b08cae05593034711c599b6b17605194a11bbfae769b4e7e0076a01ec197c37";
+    vendorHash = "sha256-JmvDiS9RAvLzAilRgrTylxCuafBbZ6RT/QwRTFlc2pw="; subPkgs = ".";
+    check = chk ''"$out/bin/goread" --version'' "1\\.7\\.3"; };
+  # goreman (MIT): foreman clone written in go language.
+  goreman = pkg { pname = "goreman"; version = "0.3.19"; src = gh "mattn/goreman" "refs/tags/v0.3.19" "d5076b8844a4e29815b557927c326d8683ca4a91c8b3ffdad6fd33f238149e43";
+    vendorHash = "sha256-bum7v8x0ffvja5KO4oPbHwJzxnSv2XSMBBkbQT5U/fI="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/goreman" version'' "0\\.3\\.19"; };
+  # gosec (Apache-2.0): golang security checker.
+  gosec = pkg { pname = "gosec"; version = "2.30.0"; src = gh "securego/gosec" "v2.30.0" "58ad3a584453ad31f0b646818bcd1cc005afd20ef507d71cd41821fbba506332";
+    vendorHash = "sha256-Nr7L1rzYzHZyCm7sAl5zyZTetPFf1CIt3qpfmpi44a4="; subPkgs = "./cmd/gosec"; ldflags = "-s -w -X main.Version=2.30.0 -X main.GitTag=v2.30.0 -X main.BuildDate=unknown";
+    check = chk ''"$out/bin/gosec" --version'' "2\\.30\\.0"; };
+  # gosh (MIT): reverse/bind shell generator.
+  gosh = pkg { pname = "gosh"; version = "1.0.0"; src = gh "redcode-labs/GoSH" "refs/tags/v1.0.0" "ebe449450111bee67e96e74cb2345f4c69eaecff4cf373a5337faa9fe94e7c73";
+    vendorHash = "sha256-sKJg2D7847hfaWmIXNgzO38fNKgvg2WECJGje8ZxFMY="; subPkgs = ".";
+    check = chk ''"$out/bin/GoSH" --help'' "[Uu]sage"; };
+  # gosimports (BSD-3-Clause): simpler goimports.
+  gosimports = pkg { pname = "gosimports"; version = "0.3.8"; src = gh "rinchsan/gosimports" "v0.3.8" "f520d482d343b1ed378fa19d0a4bea114c03f868defbf1ada796ac87816f0d94";
+    vendorHash = "sha256-om+sE3RvnaMSzAZBw4wU7L8Q4sxdWp2LE4cv8gffCGI="; subPkgs = "./cmd/gosimports"; ldflags = "-s -w -X main.version=0.3.8";
+    check = chk ''"$out/bin/gosimports" --version'' "0\\.3\\.8"; };
+  # gospider (MIT): fast web spider written in Go.
+  gospider = pkg { pname = "gospider"; version = "1.1.6"; src = gh "jaeles-project/gospider" "v1.1.6" "7cea9840c8a81c4b6be2c5984b25398a13bfe83cfd613332e8092f4c69d6ab5f";
+    vendorHash = "sha256-lnHoIxTOjRpgKhacaMQpw1/HVCkWT5ntwoxFVTjZ3qk="; subPkgs = ".";
+    check = chk ''"$out/bin/gospider" --version'' "1\\.1\\.6"; };
+  # gostatic (ISC): fast static site generator.
+  gostatic = pkg { pname = "gostatic"; version = "2.35"; src = gh "sansolovyov/gostatic" "2.35" "a179a469938c4ea6be7185bfcab42153114e0b95b62006ec266eccf5e73d3ae3";
+    vendorHash = "sha256-AgDJdmDmS76x8PWJqZbsbgn9KoqGFlSGB9qUbrUpryc="; subPkgs = ".";
+    check = chk ''"$out/bin/gostatic" --version'' "2\\.35"; };
 }
