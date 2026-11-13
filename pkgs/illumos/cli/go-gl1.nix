@@ -315,4 +315,84 @@ in {
   e1s = pkg { pname = "e1s"; version = "2.0.0"; src = gh "keidarcy/e1s" "refs/tags/v2.0.0" "d2846602a86b245ca85e0f80d3a02f5cdeb6320d12b87189894f1cfc5531ac28";
     vendorHash = "sha256-j7e4mnxzWbmv+FWy8KvcVz8Yz/CMEnrEhO9Z5yK/534="; subPkgs = "./cmd/e1s";
     check = chk ''"$out/bin/e1s" --version'' "2\\.0\\.0"; };
+  # lexido (AGPL-3.0-only): terminal assistant, powered by Generative AI.
+  lexido = pkg { pname = "lexido"; version = "1.4.3"; src = gh "micr0-dev/lexido" "v1.4.3" "c39cf8f93cce2480773c9099ece1d8a90c1e350cf48cad56eebea96fbc04981f";
+    vendorHash = "sha256-Tf6eePB0+P6jzGuYGELDJ7rvvBO0X+aItYhaA9W8lx0="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/lexido" --version'' "1\\.4\\.3"; };
+  # license-scanner (Apache-2.0): utility that provides an API and CLI to identify licenses and legal terms.
+  license-scanner = pkg { pname = "license-scanner"; version = "0.12.0"; src = gh "CycloneDX/license-scanner" "refs/tags/v0.12.0" "0682560617d2481f7070dc2ed389bafad2ff6a23eb5074a65f49f24c3ad2142c";
+    vendorHash = "sha256-jM4QIOyHMTU6gmFxTjC+SgKNdtqu/6K/c8UfS9BAFFo="; subPkgs = ".";
+    check = chk ''"$out/bin/license-scanner" --help'' "[Uu]sage"; };
+  # lmp (GPL-3.0-only): scanning and validation toolkit for the Log4J vulnerability.
+  lmp = pkg { pname = "lmp"; version = "2.0"; src = gh "0xInfection/LogMePwn" "v2.0" "ab20121e54be694f42ebf2e1c4988b02f333fd8dcafc0a726dbfd725c1cf8f71";
+    vendorHash = "sha256-eGMbSsuF1dXWhXdr2H3/y+jovLYzNdmqE2VYnfeIRVs="; subPkgs = ".";
+    check = chk ''"$out/bin/lmp" --version'' "2\\.0"; };
+  # ls-lint (MIT): extremely fast file and directory name linter.
+  ls-lint = pkg { pname = "ls-lint"; version = "2.3.1"; src = gh "loeffel-io/ls-lint" "v2.3.1" "ea6b53fb2bf13055e1cd5eb4aeeddc883044e859a617adebd1802181cdb44b14";
+    vendorHash = "sha256-B+VQ4dSl2DDkSbvceCX/rzmYAV2lir6ejHEiYnaGObE="; subPkgs = "./cmd/ls_lint";
+    check = chk ''"$out/bin/ls_lint" --help'' "[-]error-output-format"; };
+  # lsh (MIT): command-Line Interface for Latitude.sh.
+  lsh = pkg { pname = "lsh"; version = "1.7.0"; src = gh "latitudesh/cli" "v1.7.0" "cc73c0050b96850654510ba2801b95305b3151b0b03e77923e096d3fe2433984";
+    vendorHash = "sha256-gCcU95ln28jDJTHgD72pO94vGDWpxs5ELzKtzKQp87c="; subPkgs = ".";
+    check = chk ''"$out/bin/lsh" --help'' "[Uu]sage"; };
+  # lwc (MIT): live-updating version of the UNIX wc command.
+  lwc = pkg { pname = "lwc"; version = "0.4.5-unstable-2022-07-26"; src = gh "timdp/lwc" "3330928c9d82200837350f85335f5e6c09f0658b" "03aca8c331295a30ad41cd8fac1f30e08ceeed322235be18e1fc6ebe39d8bab4";
+    vendorHash = "sha256-FKTugB3Jgn19YTRDq5YJC8+BSr1usKGV4GPlhSDmGCQ="; subPkgs = "./cmd/lwc"; ldflags = "-s -X=main.version=3330928c9d82200837350f85335f5e6c09f0658b";
+    check = chk ''"$out/bin/lwc" --help'' "[-]-max-line-length"; };
+  # maildir-rank-addr (MIT): generate a ranked addressbook from a maildir folder.
+  maildir-rank-addr = pkg { pname = "maildir-rank-addr"; version = "1.4.1"; src = gh "ferdinandyb/maildir-rank-addr" "refs/tags/v1.4.1" "5536cbfd0dd1f686dbe0bcf6a45d3c62659e5d7172b5df8ca3d257a6bf66b6cd";
+    vendorHash = "sha256-U5XuY6S22e/tGtI4dIW+UMkmTZRcRUVMCnYHCYSIXoY="; subPkgs = ".";
+    check = chk ''"$out/bin/maildir-rank-addr" --help'' "[-]-addr-book-add-unmatched"; };
+  # mantra (GPL-3.0-only): tool used to hunt down API key leaks in JS files and pages.
+  mantra = pkg { pname = "mantra"; version = "3.1"; src = gh "brosck/Mantra" "refs/tags/v3.1" "379894f36ef04a6b4e57e77112070e23dcc75569d1df98a8f128fe24a8b5e0b1";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/mantra" version'' "3\\.1"; };
+  # marathonctl (MIT): CLI tool for Marathon.
+  marathonctl = pkg { pname = "marathonctl"; version = "0.0.7"; src = gh "shoenig/marathonctl" "v0.0.7" "874d1f2c249184dda3c153940f945068253e590f5989d528a19ba84e116fd909";
+    vendorHash = "sha256-eNo47uUgrQ7y6AtHqpywsFEhkli4ei234U+dTE5vEG0="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/marathonctl" --help'' "[Uu]sage"; };
+  # markscribe (MIT): your personal markdown scribe with template-engine and Git(Hub) & RSS powers.
+  markscribe = pkg { pname = "markscribe"; version = "0.6.0"; src = gh "muesli/markscribe" "v0.6.0" "3f414311426038e27e8b03d8892f4c485f10d068ba96a75bf2fd1cf23f20c22e";
+    vendorHash = "sha256-yY6Ms213qU0tjxiKj/HgjS1lkhgYDDuftxv/lSj5Pec="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/markscribe" --help'' "[Uu]sage"; };
+  # mastotool (MIT): collection of command-line tools to work with your Mastodon account.
+  mastotool = pkg { pname = "mastotool"; version = "0.2.4"; src = gh "muesli/mastotool" "v0.2.4" "df66e3122f1ba0cdd4d682a3751339e56181f0fab94800082e031c620848b23a";
+    vendorHash = "sha256-BDxnVAlgKYF++c8TkAGxuw8wLRMdzG5Od7TTwyuq93o="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/mastotool" --help'' "[Uu]sage"; };
+  # matrix-corporal (AGPL-3.0-only): reconciliator and gateway for a managed Matrix server.
+  matrix-corporal = pkg { pname = "matrix-corporal"; version = "2.2.0"; src = gh "devture/matrix-corporal" "2.2.0" "0aa5eb983e792de6011f52763762ede3322149fadf5e89c496123baee8e95af2";
+    vendorHash = "sha256-orjwfTsJaaZj1jpL+hnn06qDqRWSdZokcN02j7e8Vx4="; subPkgs = "."; ldflags = "-s -w -X main.GitCommit=2.2.0 -X main.GitBranch=2.2.0 -X main.GitState=nixpkgs -X main.GitSummary=2.2.0 -X main.Version=2.2.0";
+    check = chk ''"$out/bin/devture-matrix-corporal" --version'' "2\\.2\\.0"; };
+  # mdschema (MIT): A declarative schema-based Markdown validator that helps maintain consistent documentation structure across projects.
+  mdschema = pkg { pname = "mdschema"; version = "0.15.5"; src = gh "jackchuka/mdschema" "refs/tags/v0.15.5" "0d54eb1abaeb0c23b45d61a1398f0eafea3ba0cfd6e22a6b78cda0b1f5df1526";
+    vendorHash = "sha256-6VRBh84nAy++ZbNn8JPYALXEDRkfnlvMYUGRK60JvZc="; subPkgs = "./cmd/mdschema"; ldflags = "-s -w -X=github.com/jackchuka/mdschema/internal/version.Version=0.15.5 -X=github.com/jackchuka/mdschema/internal/version.Commit=refs/tags/v0.15.5 -X=github.com/jackchuka/mdschema/internal/version.Date=1970-01-01T00:00:00Z";
+    check = chk ''"$out/bin/mdschema" version'' "0\\.15\\.5"; };
+  # meg (MIT): fetch many paths for many hosts without flooding hosts.
+  meg = pkg { pname = "meg"; version = "0.3.0"; src = gh "tomnomnom/meg" "v0.3.0" "55f8928d048f5a8204ff2bc353fbbcb1954daa7b199ef7068217f99310086aa8";
+    vendorHash = "sha256-13Kce9x2yCHBBLFJFP0o6PVVxsdqKhZX7IMeFj0VQCM="; subPkgs = ".";
+    check = chk ''"$out/bin/meg" --help'' "[Uu]sage"; };
+  # melt (MIT): backup and restore Ed25519 SSH keys with seed words.
+  melt = pkg { pname = "melt"; version = "0.6.2"; src = gh "charmbracelet/melt" "v0.6.2" "e6e7d1f3eba506ac7e310bbc497687e7e4e457fa685843dcf1ba00349614bfdc";
+    vendorHash = "sha256-DINZkZc/tsEi1+XiYprx/cyDmafjVBHiBfI5/Hr0U70="; subPkgs = "./cmd/melt"; ldflags = "-s -w -X=main.Version=0.6.2";
+    check = chk ''"$out/bin/melt" --help'' "[Uu]sage"; };
+  # meme-image-generator (MIT): command line utility for creating image macro style memes.
+  meme-image-generator = pkg { pname = "meme-image-generator"; version = "1.0.2"; src = gh "nomad-software/meme" "v1.0.2" "de332ca1827868fabd67f28148d17560d34e9dc103e0fc89875ab4688af550d9";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/meme" --help'' "[Uu]sage"; };
+  # mesos-dns (Apache-2.0): DNS-based service discovery for Mesos.
+  mesos-dns = pkg { pname = "mesos-dns"; version = "0.10.1"; src = gh "m3scluster/mesos-dns" "refs/tags/v0.10.1" "0f61085bf2fdc4e9bea8c60be269517817975299d2f797b7847206abcc26d464";
+    vendorHash = "sha256-QdFdS27n/kY4m3MqT/5p1QSFmuOCsxpeXquVGn51hVw="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/mesos-dns" --help'' "[Uu]sage"; };
+  # metabigor (MIT): tool to perform OSINT tasks.
+  metabigor = pkg { pname = "metabigor"; version = "2.2.0"; src = gh "j3ssie/metabigor" "refs/tags/v2.2.0" "865d5940c157894d707be83cc4eb34f6f18b4e716f460259f823aa322e616407";
+    vendorHash = "sha256-HidEzXuLeV9IcxJX3A/k00JC1mH0NIzJF/nxcsW3sug="; subPkgs = "./cmd/metabigor"; ldflags = "-s";
+    check = chk ''"$out/bin/metabigor" --version'' "2\\.2\\.0"; };
+  # micromdm (MIT): mobile Device Management server for Apple Devices, focused on giving you all the power through an API.
+  micromdm = pkg { pname = "micromdm"; version = "1.13.1"; src = gh "micromdm/micromdm" "v1.13.1" "44212fe9ca0376b9ee5b61b7c5a74c488a746e2952ed238bd0bdad8e9140e4bd";
+    vendorHash = "sha256-98P+JDILj4tIOzkqEx6BBR4MwbwNYLL61rthWxfEVr4="; subPkgs = "./cmd/mdmctl ./cmd/micromdm";
+    check = chk ''"$out/bin/micromdm" --help'' "[Uu]sage"; };
+  # minio-certgen (BSD-3-Clause): simple Minio tool to generate self-signed certificates, and provides SAN certificates with DNS and IP entries.
+  minio-certgen = pkg { pname = "minio-certgen"; version = "1.4.0"; src = gh "minio/certgen" "v1.4.0" "b8465a146d55da55fbe349adfb7939d69acbdf0a9a63062f587b63d687f6ab54";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/certgen" --help'' "[-]common-name"; };
 }
