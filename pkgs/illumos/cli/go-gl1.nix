@@ -795,4 +795,84 @@ in {
   go-junit-report = pkg { pname = "go-junit-report"; version = "2.1.0"; src = gh "jstemmer/go-junit-report" "v2.1.0" "6320a11a2a8c564f5a92a44eeae40950246ae5c70b3c679a1e702e128d6e900b";
     vendorHash = "sha256-M0UUge3p1GGHzxGjKukmPOc13+/jdnivustfj6c5gAU="; subPkgs = "."; ldflags = "-s -w";
     check = chk ''"$out/bin/go-junit-report" --version'' "2\\.1\\.0"; };
+  # go-mod-graph-chart (MIT): tool build chart by go mod graph output with zero dependencies.
+  go-mod-graph-chart = pkg { pname = "go-mod-graph-chart"; version = "0.5.3"; src = gh "PaulXu-cn/go-mod-graph-chart" "v0.5.3" "0822ddb214930662d6c91d28e72cf9960dbeb4b1c4ccc5013032ba11e8d58993";
+    vendorHash = null; subPkgs = "./gmchart";
+    check = chk ''"$out/bin/gmchart" version'' "0\\.5\\.3"; };
+  # go-mod-upgrade (MIT): update outdated Go dependencies interactively.
+  go-mod-upgrade = pkg { pname = "go-mod-upgrade"; version = "0.13.0"; src = gh "oligot/go-mod-upgrade" "refs/tags/v0.13.0" "6d1542421e346b855cbe1f997eb917b47afc0d03845e6f91b604eb7855172fb1";
+    vendorHash = "sha256-kLKxQwvnAGzLML/3n4kb5eZsH8COoTPmTffH/5hLWlg="; subPkgs = "."; ldflags = "-X main.version=0.13.0";
+    check = chk ''"$out/bin/go-mod-upgrade" --version'' "0\\.13\\.0"; };
+  # go-org (MIT): org-mode parser and static site generator in go.
+  go-org = pkg { pname = "go-org"; version = "1.7.0"; src = gh "niklasfasching/go-org" "v1.7.0" "51aaa3c2347e4b4b028cb35559292a5e67680ea282fe595eec7721fc0c017162";
+    vendorHash = "sha256-wMsSbZ1j/4CpKjC1spo2LJIJ+ljnYupbv6wZ3PLTsJc="; subPkgs = ".";
+    check = chk ''"$out/bin/go-org" --help'' "[Uu]sage"; };
+  # go-protobuf (BSD-3-Clause): go bindings for protocol buffer.
+  go-protobuf = pkg { pname = "go-protobuf"; version = "1.5.4"; src = gh "golang/protobuf" "v1.5.4" "d75e6960ecfabaaa83a7261b1b630d24e9c63aca79615fb15bf33e11b62fd019";
+    vendorHash = "sha256-Ffb/M9SqOP7iEQC6izV4kHG7SDG6c+j6QXEFqg/jic4="; subPkgs = "./internal/cmd/generate-alias ./protoc-gen-go";
+    check = chk ''"$out/bin/generate-alias" --help'' "[Uu]sage"; };
+  # go-shadowsocks2 (Apache-2.0): fresh implementation of Shadowsocks in Go.
+  go-shadowsocks2 = pkg { pname = "go-shadowsocks2"; version = "0.1.5"; src = gh "shadowsocks/go-shadowsocks2" "v0.1.5" "7932c11d2315d263c09b5e7775ad2b9adf6cd3c132d59d98962c9598a1300acc";
+    vendorHash = "sha256-McZ8A2Z++ugweOlZY/X6Wjc2J0HH30Oz9CvVALweglM="; subPkgs = ".";
+    check = chk ''"$out/bin/go-shadowsocks2" --help'' "[-]plugin-opts"; };
+  # go-swagger (Apache-2.0): golang implementation of Swagger 2.0, representation of your RESTful API.
+  go-swagger = pkg { pname = "go-swagger"; version = "0.36.6"; src = gh "go-swagger/go-swagger" "refs/tags/v0.36.6" "e74772227718a6e022b12542929e983b419635279666227fdc09fb92b8533594";
+    vendorHash = "sha256-idqwh8au2PC26Fi+Kuot+p/47Jr4XEGx7OKHwN1ybbo="; subPkgs = "./cmd/swagger"; ldflags = "-s -X=github.com/go-swagger/go-swagger/cmd/swagger/commands.Version=0.36.6 -X=github.com/go-swagger/go-swagger/cmd/swagger/commands.Commit=refs/tags/v0.36.6";
+    check = chk ''"$out/bin/swagger" version'' "0\\.36\\.6"; };
+  # go-tools (MIT): collection of tools and libraries for working with Go code, including linters and static analysis.
+  go-tools = pkg { pname = "go-tools"; version = "2026.2.2"; src = gh "dominikh/go-tools" "refs/tags/2026.2.2" "f957eca5ee25bba46711433bfc320e0e900304ebb89641264bde256031926139";
+    vendorHash = "sha256-iZuAy0XnN3+inooz5mh5yuBED1gWZWEH9j0SvA1FPjg="; subPkgs = "./cmd/staticcheck ./cmd/structlayout ./cmd/structlayout-optimize ./cmd/structlayout-pretty ./internal/cmd/ast-to-pattern ./internal/cmd/gogrep ./internal/cmd/irdump ./internal/cmd/unused";
+    check = chk ''"$out/bin/staticcheck" --version'' "2026\\.2\\.2"; };
+  # go-xmlstruct (MIT): generate Go structs from multiple XML documents.
+  go-xmlstruct = pkg { pname = "go-xmlstruct"; version = "1.11.2"; src = gh "twpayne/go-xmlstruct" "refs/tags/v1.11.2" "efdbdfda869acc09c21913a5eef893b44fb954d7500e1e5b87f287c5624e4b75";
+    vendorHash = "sha256-WX4XEAusnc8myuh8lHARKfdYzKF9z5pK8Cbhlw5hOjw="; subPkgs = "./cmd/goxmlstruct";
+    check = chk ''"$out/bin/goxmlstruct" --help'' "[-]-use-pointers-for-optional-fields"; };
+  # goa (MIT): design-based APIs and microservices in Go.
+  goa = pkg { pname = "goa"; version = "3.30.0"; src = gh "goadesign/goa" "v3.30.0" "28ae003f3888e0763484ec91b4650c9df23e670c920450fdae6977c430268362";
+    vendorHash = "sha256-6Z6JVZwn0fUsZq+LDBn98cMsA1r8SzCAzN95YDn+04E="; subPkgs = "./cmd/goa";
+    check = chk ''"$out/bin/goa" version'' "3\\.30\\.0"; };
+  # goat (MIT): go ASCII Tool. Render ASCII art as SVG diagrams.
+  goat = pkg { pname = "goat"; version = "0.5.1"; src = gh "blampe/goat" "v0.5.1" "83ba5f079c8e5464fb8838127af70f477a54eb9eaf979d04abcd5f57c7db4a1c";
+    vendorHash = "sha256-yS7HpJ7SyhydYm4cbZJID+VZgLOjtc930GB2lRYei7E="; subPkgs = "./cmd/goat ./cmd/goldmark ./cmd/tmpl-expand";
+    check = chk ''"$out/bin/goat" --help'' "[-]list-embedded"; };
+  # goblob (MIT): enumeration tool for publicly exposed Azure Storage blobs.
+  goblob = pkg { pname = "goblob"; version = "1.2.2"; src = gh "Macmod/goblob" "refs/tags/v1.2.2" "27371cf514b4a007de8b7e6c01925111243bfdcb7a6b9622f412ab3a9492326e";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/goblob" --help'' "[Uu]sage"; };
+  # gobuster (Apache-2.0): tool used to brute-force URIs, DNS subdomains, Virtual Host names on target web servers.
+  gobuster = pkg { pname = "gobuster"; version = "3.8.2"; src = gh "OJ/gobuster" "refs/tags/v3.8.2" "6919232eafbd0c4bbc9664d7f434b6a8d82133aa09f1400341ef6985ceff208a";
+    vendorHash = "sha256-Or1SsDMaSHvnpFyPA2Xva5X2w4acTJBthJzdHmR3soc="; subPkgs = ". ./vhs"; ldflags = "-s -w";
+    check = chk ''"$out/bin/gobuster" --version'' "3\\.8\\.2"; };
+  # gocovsh (GPL-3.0-only): go Coverage in your terminal: a tool for exploring Go Coverage reports from the command line.
+  gocovsh = pkg { pname = "gocovsh"; version = "0.6.1"; src = gh "orlangure/gocovsh" "refs/tags/v0.6.1" "d0076556bb6762a9bd75ae5f50d99ea6806673e9302b2629bc53eb35abae8cd7";
+    vendorHash = "sha256-gbKoGc+lingQWqy/O2VYvAzMd0gM0IZQE6M4YASlK1U="; subPkgs = "."; ldflags = "-s -X main.version=0.6.1 -X main.commit=v0.6.1 -X main.date=19700101T000000Z";
+    check = chk ''"$out/bin/gocovsh" --version'' "0\\.6\\.1"; };
+  # goda (MIT): go Dependency Analysis toolkit.
+  goda = pkg { pname = "goda"; version = "0.9.4"; src = gh "loov/goda" "v0.9.4" "e277e37c9584575938540a05881674a089bfd35818b28cd05663ecb740267465";
+    vendorHash = "sha256-sW6Tx4fnmzUt+NiSTtVYeP3HPnYRYfdn0UqfcNog/jM="; subPkgs = ".";
+    check = chk ''"$out/bin/goda" --help'' "[Uu]sage"; };
+  # godef (BSD-3-Clause): print where symbols are defined in Go source code.
+  godef = pkg { pname = "godef"; version = "1.2.0"; src = gh "rogpeppe/godef" "v1.2.0" "38cdb91bcec60e38fb4b463e961608a88bc083796fe97230d68d8bc91a12fc79";
+    vendorHash = "sha256-9HdX2Hk/8G6hhP1fEakgqiNrPqnnbddBksvkxpRXPgU="; subPkgs = ".";
+    check = chk ''"$out/bin/godef" --help'' "[-]new-implementation"; };
+  # gofumpt (BSD-3-Clause): stricter gofmt.
+  gofumpt = pkg { pname = "gofumpt"; version = "0.12.0"; src = gh "mvdan/gofumpt" "v0.12.0" "b6d5d14692cad23996da4329bf24d30324af30125dd5261e6d9b0c5bc8b20b28";
+    vendorHash = "sha256-PzIzdvrBkUnUUH2zyBtCFCoXYSHlJFK053D1m2Syu0Y="; subPkgs = "."; ldflags = "-s -X main.version=v0.12.0";
+    check = chk ''"$out/bin/gofumpt" --version'' "0\\.12\\.0"; };
+  # gogogadget (MIT): single binary collection of tools useful for penetration testers and system administrators.
+  gogogadget = pkg { pname = "gogogadget"; version = "0.1.0"; src = gh "VigilantSys/GoGoGadget" "refs/tags/v0.1.0" "5d275f7a9719c3728384761ad9851e005dfcfacb98179794f7231f6f7b5f3642";
+    vendorHash = "sha256-OgkEwhZ2k5hheVp7EfAD/+rQrYozTuYtNqHIt318xlE="; subPkgs = "."; ldflags = "-s";
+    check = chk ''"$out/bin/gogogadget" --help'' "[Uu]sage"; };
+  # goimports-reviser (MIT): right imports sorting & code formatting tool (goimports alternative).
+  goimports-reviser = pkg { pname = "goimports-reviser"; version = "3.13.2"; src = gh "incu6us/goimports-reviser" "v3.13.2" "17c90e414f492cb1d0444845655b45729bf0636d6f421a3b17180702713a3934";
+    vendorHash = "sha256-EqBClSMtz66qQzU2RUTEHyB+u6MYOiRUh7sNky1cgwA="; subPkgs = "."; ldflags = "-s -w -X=main.Tag=v3.13.2";
+    check = chk ''"$out/bin/goimports-reviser" --version'' "3\\.13\\.2"; };
+  # gojo (MIT): yet another Go implementation of jo.
+  gojo = pkg { pname = "gojo"; version = "0.3.3"; src = gh "itchyny/gojo" "refs/tags/v0.3.3" "a80d9949ad29592e93a1dc342c48e6b626f1c9337649786fad941f26c0304ab4";
+    vendorHash = "sha256-no57XWFespOJo1Vbrn1aW6n6Wg9kuANft0AGY/A/Mxw="; subPkgs = "./cmd/gojo";
+    check = chk ''"$out/bin/gojo" --version'' "0\\.3\\.3"; };
+  # gojsontoyaml (MIT): simply tool to convert json to yaml written in Go.
+  gojsontoyaml = pkg { pname = "gojsontoyaml"; version = "0.1.0"; src = gh "brancz/gojsontoyaml" "v0.1.0" "487a5c46d1bdad1348e3297aaf2cd859c943e487dc9592ffd000dc3e364d6700";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/gojsontoyaml" --help'' "[Uu]sage"; };
 }
