@@ -80,4 +80,69 @@ in {
   # colorpanes (LGPL-3.0-only): panes in the 8 bright terminal colours; colp, and the colorpanes link nixpkgs adds.
   colorpanes = pkg { vendorHash = "sha256-oKoFGo3QWNDhDok+jLt/Ry+VXcZtSyC0l+hlMixxxzQ="; pname = "colorpanes"; version = "3.0.1"; src = cb "annaaurora/colorpanes" "v3.0.1" "9e5d37f9a848de7f12738ad857642b0fd2e118fa23836fbcba71857d72c188f0";
     bins = "colp"; man = ''ln -s colp "$out/bin/colorpanes"''; check = chk ''"$out/bin/colorpanes" --version'' "^colorpanes 3\\.0\\.1"; };
+  # --- batch 2
+  # b3sum (CC0-1.0 OR Apache-2.0): the BLAKE3 hash command line.
+  b3sum = pkg { vendorHash = "sha256-xwiZdW95TCMxmOPRQHnQlIugwbxR2mP0HvyF8YJsoLA="; pname = "b3sum"; version = "1.8.7"; src = crate "b3sum" "1.8.7" "d12cbf49ea673482c08f7a2cbede6388e698bdae001e9e1536c314cf2741ea5d";
+    bins = "b3sum"; check = chk ''printf abc | "$out/bin/b3sum" --no-names'' "^6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85$"; };
+  # toml2json (MIT): TOML on stdin to JSON.
+  toml2json = pkg { vendorHash = "sha256-P+KAtBpd6FjHQnum6JCzZJyb4i8eVDFs79BhGFQbtL4="; pname = "toml2json"; version = "1.4.0"; src = crate "toml2json" "1.4.0" "98a71987bd789bb49ebee6336a2c5ca8954b4b8574798525efb5651e436cd186";
+    bins = "toml2json"; check = chk ''printf "a = 1\n" | "$out/bin/toml2json"'' "\"a\": ?1"; };
+  # eva (MIT): a calculator REPL (and one-shot expressions).
+  eva = pkg { vendorHash = "sha256-tdfL7Z9Asp/XdpoHr9Q/zoCpa+EjSeMi8EYv56rVXrg="; pname = "eva"; version = "0.3.1"; src = crate "eva" "0.3.1" "20121fb4994610215aebb9d0b82bb31f7988d0309e7a4272cec96b044bd18c47";
+    bins = "eva"; check = chk ''"$out/bin/eva" "6*7"'' "^42(\\.0+)?$"; };
+  # diskus (MIT OR Apache-2.0): a fast du -sh.
+  diskus = pkg { vendorHash = "sha256-anJdss4D7UnW41WSArNF6zlhKiiFyN3oyBw5LvRcOYg="; pname = "diskus"; version = "0.9.0"; src = gh "sharkdp/diskus" "v0.9.0" "c4c9e4cd3cda25f55172130e3d6a58b389f0113fcefa96c73e4c80565547d1bf";
+    bins = "diskus"; check = chk ''"$out/bin/diskus" --version'' "^diskus 0\\.9\\.0"; };
+  # lscolors (MIT OR Apache-2.0): colourise paths by LS_COLORS (nixpkgs' nu-ansi-term feature, the crate's default).
+  lscolors = pkg { vendorHash = "sha256-JrAvkeQYEyHUcm8IywneBaBaprl7nNbfqOlqTkb/5Cg="; pname = "lscolors"; version = "0.21.0"; src = crate "lscolors" "0.21.0" "d60e266dfb1426eb2d24792602e041131fdc0236bb7007abc0e589acafd60929";
+    bins = "lscolors"; features = "nu-ansi-term"; check = chk ''echo /tmp | LS_COLORS="di=01;34" "$out/bin/lscolors"'' "34m"; };
+  # fst (MIT OR Unlicense): the fst-bin command line for finite-state-transducer sets and maps.
+  fst = pkg { vendorHash = "sha256-RPa9dmLxoO4EvQ3vZAEgixTzSD1cYssS/BapevTL24Q="; pname = "fst"; version = "0.4.3"; src = crate "fst-bin" "0.4.3" "b3bc3f5b1becb288856c43673d440ab680d4c4d7221360247dd97cca00b5a20e";
+    bins = "fst"; check = chk ''cd "$W" && printf "abc,1\nabcd,1\n" > f.csv && "$out/bin/fst" map f.csv f.fst --force && "$out/bin/fst" fuzzy f.fst abc'' "^abc$"; };
+  # csview (MIT OR Apache-2.0): pretty CSV tables in the terminal.
+  csview = pkg { vendorHash = "sha256-iDIEFmQfeNSEzscSm/kqh56CRTHiUcpn4Wak/7Q6HiY="; pname = "csview"; version = "1.3.4"; src = gh "wfxr/csview" "v1.3.4" "91fadcddef511265f4bf39897ce4a65c457ac89ffd8dd742dc209d30bf04d6aa";
+    bins = "csview"; check = chk ''printf "a,b\n1,2\n" | "$out/bin/csview"'' "│ 1 │ 2 │|\\| 1 \\| 2 \\|"; };
+  # json-sort (EUPL-1.2): sort the keys of JSON files.
+  json-sort = pkg { vendorHash = "sha256-jCjWfRTF3dl080+kjs13fWKPwxdiB00/WI83HwgJvbU="; pname = "json-sort"; version = "1.1.6"; src = gh "drupol/json-sort" "refs/tags/1.1.6" "05082a54e4764e0864c0a96bcd919bf16229aa7b569b3eb7458b6854cde92978";
+    bins = "json-sort"; check = chk ''"$out/bin/json-sort" --version'' "^json-sort 1\\.1\\.6"; };
+  # tagref (MIT): cross-references in code (tags and refs) checked.
+  tagref = pkg { vendorHash = "sha256-haywruvet34bNxH8yrdyZR9tpqGURaMFCz0X6MRAerA="; pname = "tagref"; version = "1.14.0"; src = gh "stepchowfun/tagref" "v1.14.0" "a422ed19499436ed126bd9b53c8744cc4ab81832f90b1b6ae8481ecb5ed4b1d8";
+    bins = "tagref"; check = chk ''"$out/bin/tagref" --version'' "^tagref 1\\.14\\.0"; };
+  # ruplacer (BSD-3-Clause): find and replace across a tree.
+  ruplacer = pkg { vendorHash = "sha256-4MwFD6OCpfx7UZvc5mUy/sRC4UJVFE5A//BGX+ULoH8="; pname = "ruplacer"; version = "0.10.0"; src = gh "your-tools/ruplacer" "v0.10.0" "64570d46e9d3587903bc6d553da5f1581be9771a08672fd7a1b08e65ee0e008a";
+    bins = "ruplacer"; check = chk ''"$out/bin/ruplacer" --version'' "^ruplacer 0\\.10\\.0"; };
+  # kondo (MIT): clean build artifacts out of project trees (the CLI; the workspace's GUI is excluded upstream).
+  kondo = pkg { vendorHash = "sha256-6cQBOSkFDJJpEU+nbvNnQo4sCteE0g38qpuX6M4IO4o="; pname = "kondo"; version = "0.9"; src = gh "tbillington/kondo" "v0.9" "188c577f1d21d783cd2b4b43a5cbae5ffe8b085e5773e10846af55968ddd50c4";
+    bins = "kondo"; check = chk ''cd "$W" && mkdir -p kp/target && echo x > kp/target/o && printf '[package]\nname = "k"\n' > kp/Cargo.toml && "$out/bin/kondo" -n kp'' "Projects cleaned: 0/1";   # no --version flag; -n deletes nothing; an empty target/ is skipped
+  };
+  # dupe-krill (MIT): replace duplicate files with hardlinks.
+  dupe-krill = pkg { vendorHash = "sha256-LiU/BS1ddYhyBefFkY4jwTweVlKZpfO/vdaGL2UmIbs="; pname = "dupe-krill"; version = "1.5.0"; src = gh "kornelski/dupe-krill" "v1.5.0" "ef00a7a7517c7c813d881f4724b21c46f28cdd44005d346aa32490ed2d0457dc";
+    bins = "dupe-krill"; check = chk ''cd "$W" && mkdir dk && echo same > dk/a && echo same > dk/b && "$out/bin/dupe-krill" --dry-run dk'' "[Dd]upe|[Hh]ardlink|1 "; };
+  # topfew-rs (GPL-3.0-only): the most frequent field values of a log, fast (tf).
+  topfew-rs = pkg { vendorHash = "sha256-W7XngtNDN4kZLNdSCbKHPd9+OT0aA2iVrjdYacUt53g="; pname = "topfew-rs"; version = "0.2.3"; src = gh "djc/topfew-rs" "refs/tags/0.2.3" "3149ca0c2c3c99c6e8b6cf412c50a164354c7acf8f5423065520888ee87dde0b";
+    bins = "tf"; check = chk ''i=0; while [ $i -lt 200 ]; do echo "a $i"; i=$((i + 1)); done > "$W/t.log"; echo "b 0" >> "$W/t.log"; "$out/bin/tf" -f 1 "$W/t.log"'' "^200 a$"; };   # a file smaller than the CPU count gives chunk size 0 and no output (upstream)
+  # rblake3sum (MIT): a recursive BLAKE3 digest of a directory tree.
+  rblake3sum = pkg { vendorHash = "sha256-65vX/C1BCVVmD2/bjWO35TcZpHjV9bNpHKALBURo8Es="; pname = "rblake3sum"; version = "0.4.0"; src = gh "rustshop/rblake3sum" "6a8e2576ccc05214eacb75b75a9d4cfdf272161c" "b98198821ba975aeca314ded7037db1ce731305b2ca7f735112605ca70c248a5";
+    bins = "rblake3sum"; check = chk ''"$out/bin/rblake3sum" --version'' "^rblake3sum 0\\.4\\.0"; };
+  # rblake2sum (MIT): a recursive BLAKE2 digest of a directory tree.
+  rblake2sum = pkg { vendorHash = "sha256-Won0b2D3ujVrxe+xYK+Eh5XSyjCxBK3j4bf24HuIY3k="; pname = "rblake2sum"; version = "0.3.1"; src = gh "crev-dev/rblake2sum" "cdbaba9f198bd28bfad2fbc17011ce5c8c7ad957" "3eacaa4c87ddcc0c3a9ab99b24c3f215fac2c0e2376f7a736832b02707c792ce";
+    bins = "rblake2sum"; check = chk ''"$out/bin/rblake2sum" --version'' "^rblake2sum 0\\.3\\.1"; };
+  # chars (MIT): what a Unicode character is (names, codepoints).
+  chars = pkg { vendorHash = "sha256-x/H8asHfO+iBOqvUh1gdrJmaS8MgOalMHKeW6tBpJgQ="; pname = "chars"; version = "0.7.0"; src = gh "boinkor-net/chars" "v0.7.0" "2f79843a3b1173870b41ebce491a54812b13a44090d0ae30a6f572caa91f0736";
+    bins = "chars"; pkg = "chars"; check = chk ''"$out/bin/chars" A'' "LATIN CAPITAL LETTER A"; };
+  # cocom (GPL-3.0-only): NTP client.
+  cocom = pkg { vendorHash = "sha256-Xg5MUoWqEIRQk2yZTbg/BD3zdYZhX8/bFw96yiX5RpM="; pname = "cocom"; version = "2.1.0"; src = gh "LamdaLamdaLamda/cocom" "refs/tags/v2.1.0" "1f59917b102212b6ab985e135e388caf096fcbdbbfdb82ef5bce6e4d146b9a6a";
+    bins = "cocom"; check = chk ''"$out/bin/cocom" --version'' "^[Cc]ocom 2\\.1\\.0"; };
+  # tre-command (MIT): tree with git awareness and editor aliases (tre); its man page as nixpkgs.
+  tre-command = pkg { vendorHash = "sha256-RGwmomEE15XQ35Yfgv/RKD/LNyETyAUpTOeN3t0TDEg="; pname = "tre-command"; version = "0.4.0"; src = gh "dduan/tre" "v0.4.0" "280243cfa837661f0c3fff41e4a63c6768631073c9f6ce9982d9ed08e038788a";
+    bins = "tre"; man = ''mkdir -p "$out/share/man/man1" && cp manual/tre.1 "$out/share/man/man1/"''; check = chk ''"$out/bin/tre" --version'' "^tre-command 0\\.4\\.0"; };
+  # mdbook-toc (MPL-2.0): an mdbook preprocessor for a table of contents.
+  mdbook-toc = pkg { vendorHash = "sha256-Av6To0ME8HTRFPC/8gjisMTbMUFLXTOE7NumHYv0enw="; pname = "mdbook-toc"; version = "0.15.4"; src = gh "badboy/mdbook-toc" "refs/tags/0.15.4" "bdac90076df07368f91e8ed7d474ba5be3e887725baed1ef4e9bf3352a70c8cd";
+    bins = "mdbook-toc"; check = chk ''"$out/bin/mdbook-toc" --version'' "^mdbook-toc 0\\.15\\.4"; };
+  # mdbook-footnote (Apache-2.0): an mdbook preprocessor for footnotes.
+  mdbook-footnote = pkg { vendorHash = "sha256-mrfaRQFaY5YODZuKVhGyond9ATWrqbUnNWyPGTS6LgQ="; pname = "mdbook-footnote"; version = "0.2.0"; src = gh "daviddrysdale/mdbook-footnote" "refs/tags/v0.2.0" "f814ea4195734e59701565bb008f0f432628806d28e580af1038774448cbffeb";
+    bins = "mdbook-footnote"; check = chk ''"$out/bin/mdbook-footnote" supports html; echo "rc=$?"'' "^rc=0$"; };
+  # mdbook-pagetoc (MPL-2.0): an mdbook preprocessor for a per-page TOC.
+  mdbook-pagetoc = pkg { vendorHash = "sha256-vCJfV98jA/6PbJ/IaUDX0MjwuRGyYCMzSm5Z6B00VA8="; pname = "mdbook-pagetoc"; version = "0.3.0"; src = gh "slowsage/mdbook-pagetoc" "v0.3.0" "404b72d2d9039fc52b2a1b5e516f96d42f0f80637846947b4b63f25d5261a672";
+    bins = "mdbook-pagetoc"; check = chk ''"$out/bin/mdbook-pagetoc" supports html; echo "rc=$?"'' "^rc=0$"; };
 }
