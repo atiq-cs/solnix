@@ -188,4 +188,32 @@ in {
   # jsonkdl (MIT): JSON to KDL.
   jsonkdl = pkg { vendorHash = "sha256-/h5DiKTC73gE7cOAhsWe9uxB+mopl8GaCG8qvHvMy4I="; pname = "jsonkdl"; version = "1.1.0"; src = crate "jsonkdl" "1.1.0" "f42da80964d293d092c40b3e69ba48cf85079afd557c63a4b5239d8ded55511a";
     bins = "jsonkdl"; check = chk ''cd "$W" && printf '[{"name": "a", "arguments": [1]}]' > j.json && "$out/bin/jsonkdl" j.json j.kdl && cat j.kdl'' "^a 1$"; };   # the JSON form of a KDL document
+  # --- batch 4
+  # efmt (MIT OR Apache-2.0): an Erlang code formatter.
+  efmt = pkg { vendorHash = "sha256-UgvgxKzdOiGQL9Lreq0QLJRiVaksIloQ5S3p06mnr6E="; pname = "efmt"; version = "0.21.0"; src = gh "sile/efmt" "0.21.0" "fe5b0d92a45257542492258c53c90aec83ac62f29df9de2993035f1d96854a2c";
+    bins = "efmt"; check = chk ''"$out/bin/efmt" --version'' "^efmt 0\\.21\\.0"; };
+  # svd2rust-form (MIT OR Apache-2.0): split a single-file Rust crate into modules (svd2rust's form).
+  svd2rust-form = pkg { vendorHash = "sha256-T4+L8+mu+3gL6rAybKuZd0+JJtxJ28RjnrhBuUB3OB4="; pname = "svd2rust-form"; version = "0.13.0"; src = crate "form" "0.13.0" "628e43ce95d8e6c79d12b611e14410edda3b694075d1665bec24c6a182461f7b";
+    bins = "form"; check = chk ''"$out/bin/form" --version'' "0\\.13\\.0"; };
+  # tv (MIT): JSON/CSV as a table in the terminal.
+  tv = pkg { vendorHash = "sha256-qfYwB6JqcQDwCFst3CEnkoIweVroQbs6Dwl5X+sEtq0="; pname = "tv"; version = "0.7.0"; src = gh "uzimaru0000/tv" "v0.7.0" "7b3c70f93cf4f23bd0a9dc1bd90591ce2db3804218ba7820bba3bc2431b4b68c";
+    bins = "tv"; check = chk ''printf "[{\"a\":1,\"b\":2}]" | "$out/bin/tv"'' "\\| *a *\\| *b *\\||│ *a *│"; };
+  # grip-grab (Apache-2.0): a lightweight ripgrep alternative (gg).
+  grip-grab = pkg { vendorHash = "sha256-d88w61FbFesyx7IYkvBAW92kfoxRP7V1FTbAe417h14="; pname = "grip-grab"; version = "0.6.7"; src = gh "alexpasmantier/grip-grab" "refs/tags/v0.6.7" "e8bd66455ed7c05c2100f12dbc6c22f42c1c9fe8a411d1bd3948efb6906e3af3";
+    bins = "gg"; check = chk ''"$out/bin/gg" --version'' "0\\.6\\.7"; };
+  # moxide (GPL-3.0-only): a tmux session manager.
+  moxide = pkg { vendorHash = "sha256-SkwnQDwKK1fpBHIzJ8RYTb+xGrT9J1+a9Qe2/rri8ek="; pname = "moxide"; version = "0.3.0"; src = gh "dlurak/moxide" "refs/tags/v0.3.0" "d0adf9a25b526570f507d33c57b6ea05192d4ab2d36949b05e807a2f93e6830e";
+    bins = "moxide"; check = chk ''"$out/bin/moxide" --version'' "^moxide 0\\.3\\.0"; };
+  # sleek (MIT): a SQL formatter.
+  sleek = pkg { vendorHash = "sha256-iI2rYNq+T8C/RFRlCVeGo1/6uSgHOihNhe1889uHV2A="; pname = "sleek"; version = "0.5.0"; src = gh "nrempel/sleek" "v0.5.0" "fcb589fdc5ece8c050883ff0b56aec6bd25e2e4d6e77a1d52e870535d66fdf67";
+    bins = "sleek"; check = chk ''echo "select a from t" | "$out/bin/sleek"'' "^SELECT"; };
+  # rhai-doc (MIT OR Apache-2.0): HTML documentation from Rhai scripts.
+  rhai-doc = pkg { vendorHash = "sha256-KjcliA1U6IRMdhVRabEb7dMvlFfUIMX5PAzilp7WFMI="; pname = "rhai-doc"; version = "0.2.3"; src = gh "rhaiscript/rhai-doc" "v0.2.3" "5236ef0a352a8c7aa9ad36dcb8be45fffbdc8dc786576c9dd689f03623a55207";
+    bins = "rhai-doc"; check = chk ''"$out/bin/rhai-doc" --version'' "^rhai-doc 0\\.2\\.3"; };
+  # wasm-component-ld (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT): the wasm32-wasip2 linker wrapper.
+  wasm-component-ld = pkg { vendorHash = "sha256-92+oUMLQcz0cCR1V1EBI588oX6g5zhEMtttVW1eI1iQ="; pname = "wasm-component-ld"; version = "0.5.31"; src = gh "bytecodealliance/wasm-component-ld" "refs/tags/v0.5.31" "0ff2469fe15d674a1430d1b851f899c5511bc57f917fd7a5949d8c73f417b7b4";
+    bins = "wasm-component-ld"; check = chk ''"$out/bin/wasm-component-ld" --version'' "0\\.5\\.31"; };
+  # oas2html (MIT): an OpenAPI/Swagger spec to one HTML page.
+  oas2html = pkg { vendorHash = "sha256-m2PUa+PLnHUIrIuTmQYqa5DwaWN03e+5ieP/2KZsXv4="; pname = "oas2html"; version = "0.1.0"; src = gh "affolter-engineering/oas2html" "refs/tags/0.1.0" "8affd6638a010baeab32f8c9a6bcea3fd06709e917597c839addf675c904a82c";
+    bins = "oas2html"; check = chk ''"$out/bin/oas2html" --version'' "0\\.1\\.0"; };
 }
