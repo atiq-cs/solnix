@@ -86,7 +86,8 @@ let
     // import ./rust-rl1.nix { inherit cargoPkg chk; };   # rl1: Rust leaves of the x86 queue (a new file, so no served drv moves)
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
     // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; }
-    // import ./go-recipes3.nix { inherit (goChain) goPkg; inherit chk; };   # recipes3 (a new file: no served drv moves)
+    // import ./go-recipes3.nix { inherit (goChain) goPkg; inherit chk; }   # recipes3 (a new file: no served drv moves)
+    // import ./go-gl1.nix { inherit (goChain) goPkg go_1_27; inherit chk; };   # gl1: Go queue leaves (a new file: no served drv moves)
   # qnew5: idle1's ranked leaves (a new file, so no served drv moves); x86 only, as c11
   c12 = if gtkMeson == null then { } else import ./c-qnew5.nix (h // { inherit (c5) cmake python3 gnupatch; inherit (c4) perl; inherit (ti) texinfo;
     inherit (c10) lzip; inherit (c7) groff; inherit gtkMeson; });
