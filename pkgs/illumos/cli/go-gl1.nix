@@ -1703,4 +1703,84 @@ in {
   tgswitch = pkg { pname = "tgswitch"; version = "0.6.0"; src = gh "warrensbox/tgswitch" "0.6.0" "7a92abe68459b61857fc5f945ceef155d72c64954aa9deb409be47550ccd36e2";
     vendorHash = "sha256-+0r1M1F/kMGMFm+TfRkSJ5YL8W4MuvQx81QH/ztOJms="; subPkgs = "."; ldflags = "-s -w";
     check = chk ''"$out/bin/tgswitch" --help'' "[Uu]sage"; };
+  # timescaledb-parallel-copy (Apache-2.0): bulk, parallel insert of CSV records into PostgreSQL.
+  timescaledb-parallel-copy = pkg { pname = "timescaledb-parallel-copy"; version = "0.9.0"; src = gh "timescale/timescaledb-parallel-copy" "refs/tags/v0.9.0" "d6115d4886ab36fc912341f2cf3aa0735ff617c5289df76a88257cb4ee345a2a";
+    vendorHash = "sha256-JIRb56R1a52yL7K+ihJv9DLzJaT58j3t0bKz1Ux8sIQ="; subPkgs = "./cmd/timescaledb-parallel-copy";
+    check = chk ''"$out/bin/timescaledb-parallel-copy" --version'' "0\\.9\\.0"; };
+  # timescaledb-tune (Apache-2.0): tool for tuning your TimescaleDB for better performance.
+  timescaledb-tune = pkg { pname = "timescaledb-tune"; version = "0.19.0"; src = gh "timescale/timescaledb-tune" "v0.19.0" "de2a89af74127df64dbb21db1aaea764eabfa054239a16b6d341188164de325e";
+    vendorHash = "sha256-EA85FZDVSd/5GChM73tuO5v0SwacGQIziWvTBTbeUGk="; subPkgs = "./cmd/timescaledb-tune"; ldflags = "-s -w";
+    check = chk ''"$out/bin/timescaledb-tune" --version'' "0\\.19\\.0"; };
+  # tint (MIT): command-line tool to recolor images using theme palettes.
+  tint = pkg { pname = "tint"; version = "0.1.7"; src = gh "ashish0kumar/tint" "refs/tags/v0.1.7" "9a72435a598601c32df105b5e9e046ace3314293d434ed2184f684143a2ffbf8";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w -X main.version=0.1.7";
+    check = chk ''"$out/bin/tint" --version'' "0\\.1\\.7"; };
+  # tldx (Apache-2.0): domain availability research tool.
+  tldx = pkg { pname = "tldx"; version = "1.6.0"; src = gh "brandonyoungdev/tldx" "refs/tags/v1.6.0" "dde3467c300872e0bfcafe472419d5c1152a30d29731f1e9ee7a9982f85074e8";
+    vendorHash = "sha256-bUAgM1/tE5eCeRsJxMqIfgLT6KY0V+a2Xdu34DXDWe0="; subPkgs = "."; ldflags = "-s -X=github.com/brandonyoungdev/tldx/cmd.Version=1.6.0";
+    check = chk ''"$out/bin/tldx" --version'' "1\\.6\\.0"; };
+  # tlsanalyzer (MIT): TLS/SSL security analyzer for quantum readiness assessment and CNSA 2.0 compliance.
+  tlsanalyzer = pkg { pname = "tlsanalyzer"; version = "0.4.1"; src = gh "csnp/tls-analyzer" "refs/tags/v0.4.1" "57020020a633c16e19d6f766972cb8b96c27ef3bab8b39a697a74a0d731fbef2";
+    vendorHash = "sha256-xuh/AQo27Opnrpstsdz0dZ2vrEjWcvrSgczNiKQt1I0="; subPkgs = "./cmd/tlsanalyzer"; ldflags = "-s -X=main.version=0.4.1 -X=main.commit=refs/tags/v0.4.1 -X=main.date=1970-01-01T00:00:00Z";
+    check = chk ''"$out/bin/tlsanalyzer" version'' "0\\.4\\.1"; };
+  # tlsrouter (Apache-2.0): TLSRouter is a TLS proxy that routes connections to backends based on the TLS SNI (Server Name Indication) of the TLS handshake.
+  tlsrouter = pkg { pname = "tlsrouter"; version = "0-unstable-2026-05-15"; src = gh "inetaf/tcpproxy" "c159a60511096e475e3489ce13ae57e752c78f99" "4a9b1354c378c26324f73e7aa8bb5f55a66c53737829713e8c33887d1e767052";
+    vendorHash = "sha256-u91bemrvwJAUsDOeIb4vdpi9dbC2XVJ2881rVT3DyXs="; subPkgs = "./cmd/tlsrouter";
+    check = chk ''"$out/bin/tlsrouter" --help'' "[-]hello-timeout"; };
+  # toml-test (MIT): language agnostic test suite for TOML parsers.
+  toml-test = pkg { pname = "toml-test"; version = "2.2.0"; src = gh "toml-lang/toml-test" "refs/tags/v2.2.0" "fdab2779b3902eb08030f389a5d53e95c5b49404149ac6f2eda5227a5363c232";
+    vendorHash = "sha256-d1qCoZQwsRgkq7A8RLe0e1NVB+rMkRnGePOWJWCbiXk="; subPkgs = "./cmd/toml-test"; ldflags = "-s -w -X zgo.at/zli.version=2.2.0";
+    check = chk ''"$out/bin/toml-test" version'' "2\\.2\\.0"; };
+  # toofan (MIT): A minimal, lightning-fast typing TUI for your terminal.
+  toofan = pkg { pname = "toofan"; version = "2.4.2"; src = gh "vyrx-dev/toofan" "refs/tags/v2.4.2" "a6c7db263e3b2239147c1ef66b6f15d170badb8b82605bdc2fa086cb3478b768";
+    vendorHash = "sha256-n9FesrZMfjzbFpIJDNiC2nZZ3/wMyM4gRVWy6h590rI="; subPkgs = "."; ldflags = "-s";
+    check = chk ''"$out/bin/toofan" --help'' "[Uu]sage"; };
+  # tparse (MIT): CLI tool for summarizing go test output. Pipe friendly. CI/CD friendly.
+  tparse = pkg { pname = "tparse"; version = "0.18.0"; src = gh "mfridman/tparse" "v0.18.0" "11e779379e6605202aa1751b2de3e36179ad63c38c478748e8c4e4693845c1b5";
+    vendorHash = "sha256-Pp7iNRoWbDkcFvQjYNrwT5RCY4dHrOMDwBcQ9VaSY88="; subPkgs = "."; ldflags = "-s -w -X main.version=0.18.0";
+    check = chk ''"$out/bin/tparse" --help'' "[-]follow-output"; };
+  # tproxy (MIT): CLI tool to proxy and analyze TCP connections.
+  tproxy = pkg { pname = "tproxy"; version = "0.9.2"; src = gh "kevwan/tproxy" "refs/tags/v0.9.2" "5376816b6f5d7765b401f74d3feb78fbf307cb6b725627b2e953ff9d02e8dc53";
+    vendorHash = "sha256-94nc1x3dC/fIkkHQxumMqWnNSrLTh0QycbwKuKzE0m0="; subPkgs = "."; ldflags = "-w -s";
+    check = chk ''"$out/bin/tproxy" --help'' "[Uu]sage"; };
+  # trzsz-ssh (MIT): SSH client designed as a drop-in replacement for the openssh client.
+  trzsz-ssh = pkg { pname = "trzsz-ssh"; version = "0.1.27"; src = gh "trzsz/trzsz-ssh" "refs/tags/v0.1.27" "8655411ebe865b8d91463bc9ab336c14f8ff3eecf4889c3b2547e26559796b6f";
+    vendorHash = "sha256-L4d7y/p3+JHcnANaXyvnxnCEyR3EcpycxWpFdz6GRUY="; subPkgs = "./cmd/tssh"; ldflags = "-s -w";
+    check = chk ''"$out/bin/tssh" --version'' "0\\.1\\.27"; };
+  # tsshd (MIT): server for `trzsz-ssh`(`tssh`) that supports connection migration for roaming.
+  tsshd = pkg { pname = "tsshd"; version = "0.1.9"; src = gh "trzsz/tsshd" "refs/tags/v0.1.9" "fdf05a2323c8cc4ecef30e5258714d1651d80206f1bc0a5a88a45d716e82bb18";
+    vendorHash = "sha256-FhbIPU1z0D/eYIJ+C90S0hTBYO1tmwVCO1k16yjXxbE="; subPkgs = "./cmd/tsshd"; ldflags = "-s -w";
+    check = chk ''"$out/bin/tsshd" --version'' "0\\.1\\.9"; };
+  # tty-share (MIT): share terminal via browser for remote work or shared sessions.
+  tty-share = pkg { pname = "tty-share"; version = "2.4.1"; src = gh "elisescu/tty-share" "v2.4.1" "abc186307a95f55f1750592a38871d4839d2ff26365880110bdf107675ea264a";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w -X main.version=2.4.1";
+    check = chk ''"$out/bin/tty-share" --version'' "2\\.4\\.1"; };
+  # txtpbfmt (Apache-2.0): formatter for text proto files.
+  txtpbfmt = pkg { pname = "txtpbfmt"; version = "0-unstable-2026-10-13"; src = gh "protocolbuffers/txtpbfmt" "7c8a61a7a736d9960cbc1142c7c0f6f4495dd323" "07cb1934aa9119f3455cfa279c0d77cbe5b0f355eead9c57949c2c8b99536e52";
+    vendorHash = "sha256-gwwcIm3L5pNa+eOUBsGaPUE3Aq5u+sXtP8bonfz1iBE="; subPkgs = "./cmd/txtpbfmt"; ldflags = "-s -w";
+    check = chk ''"$out/bin/txtpbfmt" --help'' "[Uu]sage"; };
+  # tygo (MIT): generate Typescript types from Golang source code.
+  tygo = pkg { pname = "tygo"; version = "0.2.21"; src = gh "gzuidhof/tygo" "v0.2.21" "95cc8af6359e0554db41f7f5258e7e9c6e042e1a99400d399f788105579fd688";
+    vendorHash = "sha256-U2djw/nSPrcxpLMnZaMwr1yJ4fHgTEM2weqrtOMOVe0="; subPkgs = "."; ldflags = "-s -w -extldflags -static";
+    check = chk ''"$out/bin/tygo" --help'' "[Uu]sage"; };
+  # typtea (MIT): terminal-based typing speed test with multi-language support.
+  typtea = pkg { pname = "typtea"; version = "0.1.6"; src = gh "ashish0kumar/typtea" "refs/tags/v0.1.6" "d2c5580b46c39189b28de3fde92ae51a811efc063a1d819bbc2db359a7c34f98";
+    vendorHash = "sha256-EDVaxkgJY0bOTGGA/nfDD2muAk+/THuUztc2reHPBk8="; subPkgs = "."; ldflags = "-s -w -X github.com/ashish0kumar/typtea/cmd.version=0.1.6";
+    check = chk ''"$out/bin/typtea" --version'' "0\\.1\\.6"; };
+  # tz (GPL-3.0-or-later): time zone helper.
+  tz = pkg { pname = "tz"; version = "0.8.0"; src = gh "oz/tz" "v0.8.0" "dfb6829483e7455e6d2038e946243022db15ea5475c096ad18f091eb9f6eb5ad";
+    vendorHash = "sha256-swRSobhs48a2G6OpTOFHGItlnCfsnTh9IVI0ZMiCHhY="; subPkgs = ".";
+    check = chk ''"$out/bin/tz" --help'' "[Uu]sage"; };
+  # udpx (MIT): single-packet UDP scanner.
+  udpx = pkg { pname = "udpx"; version = "1.0.7"; src = gh "nullt3r/udpx" "refs/tags/v1.0.7" "0642f725712381b72de0d052188dd102c665a69acb45dfea8e4d7af878147de9";
+    vendorHash = null; subPkgs = "./cmd/udpx"; ldflags = "-s -w";
+    check = chk ''"$out/bin/udpx" --version'' "1\\.0\\.7"; };
+  # ulid (Apache-2.0): universally Unique Lexicographically Sortable Identifier (ULID) in Go.
+  ulid = pkg { pname = "ulid"; version = "2.1.2"; src = gh "oklog/ulid" "refs/tags/v2.1.2" "0714edcc578c6a09f2cce3ac7afeec92d54b4dd06ce67bb2bc564311abaf6d60";
+    vendorHash = "sha256-oCr36hP6t2S9fiHqkiI3EY8tIIGFTSdASAV5VYGv5ng="; subPkgs = "./cmd/ulid"; ldflags = "-s -w";
+    check = chk ''"$out/bin/ulid" --help'' "[Uu]sage"; };
+  # ultralist (MIT): simple GTD-style todo list for the command line.
+  ultralist = pkg { pname = "ultralist"; version = "1.7.0"; src = gh "gammons/ultralist" "1.7.0" "d4a524c94c1ea4a748711a1187246ed1fd00eaaafd5b8153ad23b42d36485f79";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/ultralist" version'' "1\\.7\\.0"; };
 }
