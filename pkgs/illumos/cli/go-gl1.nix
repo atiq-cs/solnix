@@ -1115,4 +1115,84 @@ in {
   imgpkg = pkg { pname = "imgpkg"; version = "0.48.3"; src = gh "carvel-dev/imgpkg" "v0.48.3" "c3a3150e81e5db07e3e1732e7f26a03167ab975bbae0d42526d7848404709033";
     vendorHash = null; subPkgs = "./cmd/imgpkg"; ldflags = "-X=carvel.dev/imgpkg/pkg/imgpkg/cmd.Version=0.48.3";
     check = chk ''"$out/bin/imgpkg" --version'' "0\\.48\\.3"; };
+  # ineffassign (MIT): detect ineffectual assignments in Go code.
+  ineffassign = pkg { pname = "ineffassign"; version = "0.2.0"; src = gh "gordonklaus/ineffassign" "refs/tags/v0.2.0" "5b0256a4151ec313ce65921f7434c70149aeb3056867a8e502bca4e7a06770a0";
+    vendorHash = "sha256-HLwMMw5/untM3lId7RLQpoXk0bsiWBpSfu3zdkqkBWo="; subPkgs = ".";
+    check = chk ''"$out/bin/ineffassign" --help'' "[-]check-escaping-errors"; };
+  # influxdb2-token-manipulator (MIT): utility program to manipulate influxdb api tokens for declarative setups.
+  influxdb2-token-manipulator = pkg { pname = "influxdb2-token-manipulator"; version = "1.0.0"; src = gh "oddlama/influxdb2-token-manipulator" "v1.0.0" "8cfeb703bebccb02648e0d71735b92e850aaddcd1d5c93cb81a48914cb0f32e3";
+    vendorHash = "sha256-wfATrbk+ksWCkMqDRyZ+PXWbq9nUHj+DS3tm0kyIDU0="; subPkgs = ".";
+    check = chk ''"$out/bin/influxdb2-token-manipulator" --help'' "[Uu]sage"; };
+  # ingress2gateway (Apache-2.0): convert Ingress resources to Gateway API resources.
+  ingress2gateway = pkg { pname = "ingress2gateway"; version = "0.5.0"; src = gh "kubernetes-sigs/ingress2gateway" "v0.5.0" "6afffb36873af934f1499d68ea73d432bb711a3025e8f3f5ab330162798ce871";
+    vendorHash = "sha256-REERzvGPybZYSx3/qBrZ2kx4Jy66tMBitpqvB1kWZA0="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/ingress2gateway" --help'' "[Uu]sage"; };
+  # invoice (MIT): command line invoice generator.
+  invoice = pkg { pname = "invoice"; version = "0.1.0"; src = gh "maaslalani/invoice" "v0.1.0" "f34f20f6491f42c0e94dbde433a578f0dba98938f2e3186018d3e16d050abdaf";
+    vendorHash = "sha256-C0PtDCSa18TswBsmL0TOPzW1ZYYxWHU4m4G1pTKVEh8="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/invoice" --help'' "[Uu]sage"; };
+  # ipfs-upload-client (MIT): minimal CLI tool to upload files and directories to IPFS via Infura's IPFS or another API endpoint.
+  ipfs-upload-client = pkg { pname = "ipfs-upload-client"; version = "0.1.2"; src = gh "infura/ipfs-upload-client" "v0.1.2" "7ef24e2e81998a000bad492f910f8ecb4e37dc6d31e6792067f0f30e132896b3";
+    vendorHash = "sha256-ohXwisYClCdYNK2orTfcbWJzUGuZ8NjVAeQ/FjZg2Bc="; subPkgs = ".";
+    check = chk ''"$out/bin/ipfs-upload-client" --help'' "[Uu]sage"; };
+  # ipinfo (Apache-2.0): command Line Interface for the IPinfo API.
+  ipinfo = pkg { pname = "ipinfo"; version = "3.3.2"; src = gh "ipinfo/cli" "refs/tags/ipinfo-3.3.2" "ad5464068ec370599bd7624cd69f58047ac56d8140ba8e50b468c80e06c438a1";
+    vendorHash = null; subPkgs = "./cidr2ip ./cidr2range ./grepdomain ./grepip ./ipinfo ./matchip ./prips ./randip ./range2cidr ./range2ip ./splitcidr";
+    check = chk ''"$out/bin/ipinfo" --version'' "3\\.3\\.2"; };
+  # irccat (GPL-3.0-only): send events to IRC channels from scripts and other applications.
+  irccat = pkg { pname = "irccat"; version = "0.4.13"; src = gh "irccloud/irccat" "v0.4.13" "0eaeb7ec6b8e8482ee11143cd3cf53fa08fbbfa3ea29904b6a6aa8843f73b04e";
+    vendorHash = "sha256-pGsePUugwR5sI+497aD4gka5MRuUXg3DAu0boFrgnOI="; subPkgs = ".";
+    check = chk ''"$out/bin/irccat" --help'' "[Uu]sage"; };
+  # ircdog (ISC): simple wrapper over the raw IRC protocol that can respond to pings, and interprets formatting codes.
+  ircdog = pkg { pname = "ircdog"; version = "0.5.5"; src = gh "ergochat/ircdog" "refs/tags/v0.5.5" "cc75fc53dfaeca27469b42db3596bc42a26259a6534c3edecf8d91bf6b52a4fe";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/ircdog" --version'' "0\\.5\\.5"; };
+  # issue2md (Apache-2.0): CLI tool to convert GitHub issue into Markdown file.
+  issue2md = pkg { pname = "issue2md"; version = "1.3.1"; src = gh "bigwhite/issue2md" "refs/tags/v1.3.1" "dc2e6178cf8aee52f3d9df190c3999523b64265cbc60e4ca7387aeefe006a6eb";
+    vendorHash = null; subPkgs = ". ./cmd/issue2md"; ldflags = "-s";
+    check = chk ''"$out/bin/issue2md" --help'' "[-]enable-user-links"; };
+  # ivy (BSD-3-Clause): APL-like calculator.
+  ivy = pkg { pname = "ivy"; version = "0.4.0"; src = gh "robpike/ivy" "v0.4.0" "d8a4d79aea6d99db7e3bf867c1f2b8df4e966abbd7623d1a8d5664ea4aa6ff8b";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/ivy" --help'' "[Uu]sage"; };
+  # jp (Apache-2.0): command line interface to the JMESPath expression language for JSON.
+  jp = pkg { pname = "jp"; version = "0.2.1"; src = gh "jmespath/jp" "0.2.1" "e88a49f61fffca8f431f78938f71e14d7792f7304344b7aa7391d06e4113f88b";
+    vendorHash = "sha256-Kta19QcaA6mQafCIkDglvcAwimYw2L6sWsN4pKUdtKQ="; subPkgs = ".";
+    check = chk ''"$out/bin/jp" --version'' "0\\.2\\.1"; };
+  # jq-lsp (MIT): jq language server.
+  jq-lsp = pkg { pname = "jq-lsp"; version = "0.1.19"; src = gh "wader/jq-lsp" "refs/tags/v0.1.19" "a209ea43c2ae6b0c1273a1cac8f6a8e1ac5f7e2d43c18160fda0690ea0656890";
+    vendorHash = "sha256-bMx9fIpTEkapi0+Pxgv2/mdUgPm7mB1suJLRt/SN5y0="; subPkgs = "."; ldflags = "-s -w -X main.version=0.1.19 -X main.commit=refs/tags/v0.1.19 -X main.builtBy=Nix";
+    check = chk ''"$out/bin/jq-lsp" --version'' "0\\.1\\.19"; };
+  # jqfmt (MIT): like gofmt, but for jq.
+  jqfmt = pkg { pname = "jqfmt"; version = "0.1.0"; src = gh "noperator/jqfmt" "refs/tags/v0.1.0" "5435c3166921ea103513d516c4d56ee00755d6b0b798f3edbdabfc06a1d98268";
+    vendorHash = "sha256-q3X5hXrf4NKYQprs50Cvl6BYkHrehkf9RQCvS26VpSM="; subPkgs = "./cmd/jqfmt";
+    check = chk ''"$out/bin/jqfmt" --help'' "[Uu]sage"; };
+  # jqp (MIT): TUI playground to experiment with jq.
+  jqp = pkg { pname = "jqp"; version = "0.8.0"; src = gh "noahgorstein/jqp" "v0.8.0" "c70e83975edb1c1dacb0fb067a0685e9632e21360805ade3dda03e54751e4855";
+    vendorHash = "sha256-3FCsxalJIM2d0Ltj7QCgev0EHP9QFbFjKVu6BwTYfcE="; subPkgs = ".";
+    check = chk ''"$out/bin/jqp" --version'' "0\\.8\\.0"; };
+  # json2hcl (MIT): convert JSON to HCL, and vice versa.
+  json2hcl = pkg { pname = "json2hcl"; version = "0.2.0"; src = gh "kvz/json2hcl" "v0.2.0" "ac10155d2d86a196a97e9cfb98e7a66f0b0505dee8904bbd3e32979370b81f34";
+    vendorHash = "sha256-SHM+VctJyECXIQDwopyxLz3QMeMt6KpF3k9fDUAYTYw="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/json2hcl" --help'' "[Uu]sage"; };
+  # jsonfmt (MIT): formatter for JSON files.
+  jsonfmt = pkg { pname = "jsonfmt"; version = "0.5.2"; src = gh "caarlos0/jsonfmt" "refs/tags/v0.5.2" "07494aaec99d4c8cd7f0cea1bacd32e1d20321e541848aa6aafa64d64d89c9ab";
+    vendorHash = "sha256-7GXwBFTntQoQfAMLsl8ZOrc5Ms3nMP0KQmS0/N11/eQ="; subPkgs = "."; ldflags = "-s -w -X=main.version=0.5.2";
+    check = chk ''"$out/bin/jsonfmt" --version'' "0\\.5\\.2"; };
+  # jsonnet-bundler (Apache-2.0): jsonnet package manager.
+  jsonnet-bundler = pkg { pname = "jsonnet-bundler"; version = "0.6.0"; src = gh "jsonnet-bundler/jsonnet-bundler" "v0.6.0" "116ab7d6e6090d973998f69ace133c247ae36373fbffe5cb3dce668615b31dea";
+    vendorHash = null; subPkgs = "./cmd/jb"; ldflags = "-s -w -X main.Version=0.6.0";
+    check = chk ''"$out/bin/jb" --version'' "0\\.6\\.0"; };
+  # jsonnet-language-server (AGPL-3.0-only): language Server Protocol server for Jsonnet.
+  jsonnet-language-server = pkg { pname = "jsonnet-language-server"; version = "0.17.0"; src = gh "grafana/jsonnet-language-server" "refs/tags/v0.17.0" "7d51fbd633475f449772c95e410ffb498df5e4e2102c7ac49072a76f38a5b98b";
+    vendorHash = "sha256-gZNWIoXuvI7EPp3i7bPwsmD50vflWrHmFDBZkpRyjlM="; subPkgs = "."; ldflags = "-s -w -X 'main.version=0.17.0'";
+    check = chk ''"$out/bin/jsonnet-language-server" --version'' "0\\.17\\.0"; };
+  # kail (MIT): kubernetes log viewer.
+  kail = pkg { pname = "kail"; version = "0.17.4"; src = gh "boz/kail" "v0.17.4" "73ff6cbf4b1fd166ff4122f116112e08ade5639cddb70cd078539efeb96ff030";
+    vendorHash = "sha256-Bn3gyhmmOHyFEhtehTuEo36RTBiAmLQvP3uuc2D9KH0="; subPkgs = "./cmd/kail"; ldflags = "-s -w -X main.version=0.17.4";
+    check = chk ''"$out/bin/kail" version'' "0\\.17\\.4"; };
+  # kanarenshu (MIT): minimal TUI application to practise Japanese from the terminal.
+  kanarenshu = pkg { pname = "kanarenshu"; version = "0.1.4"; src = gh "nuixyz/kanarenshu" "refs/tags/v0.1.4" "f34cf25c08e4db141dbbe58fca6c68630d996cea5e2eebae4d9bcfbd99cb6bf0";
+    vendorHash = "sha256-3/U/q+7Ij78O9pbZ56hqJi2xp/8x7qo80n2mlTFWzmY="; subPkgs = "./cmd/kanarenshu"; ldflags = "-s -w -X=main.version=0.1.4";
+    check = chk ''"$out/bin/kanarenshu" --version'' "0\\.1\\.4"; };
 }
