@@ -1463,4 +1463,84 @@ in {
   redli = pkg { pname = "redli"; version = "0.18.0"; src = gh "IBM-Cloud/redli" "refs/tags/v0.18.0" "a75de85b90466a088e39885b67c38cb3e7ceeee6f1ec82df3d1d88aee5a17a20";
     vendorHash = "sha256-9GxXySVw5bL2aZw+uacBhKsTRTfCRvio8Lj82j9/pQE="; subPkgs = ".";
     check = chk ''"$out/bin/redli" --version'' "0\\.18\\.0"; };
+  # reflex (MIT): small tool to watch a directory and rerun a command when certain files change.
+  reflex = pkg { pname = "reflex"; version = "0.3.2"; src = gh "cespare/reflex" "v0.3.2" "62603db35a51fddf8a3ae9b1f4d9a8372ebec2a4523be16e3261bc8f9cfba3e5";
+    vendorHash = "sha256-ksRXfcNHWg096xB6Fng72h4nQojIMooh7SKUJm3rgxY="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/reflex" --help'' "[-]-inverse-regex"; };
+  # refmt (AGPL-3.0-only): reformat HCL <-> JSON <-> YAML.
+  refmt = pkg { pname = "refmt"; version = "1.6.1"; src = gh "rjeczalik/refmt" "v1.6.1" "2a5950b7a1f624882ebd151d253b1406fe7d60b7646a59b4841361ebe52762be";
+    vendorHash = "sha256-MfULOHGJXIygggKuZ2o15MHWlS+kbslhp9sPxuMtpGM="; subPkgs = ".";
+    check = chk ''"$out/bin/refmt" --help'' "[Uu]sage"; };
+  # reftools (BSD-2-Clause): refactoring tools for Go.
+  reftools = pkg { pname = "reftools"; version = "0-unstable-2021-02-13"; src = gh "davidrjenni/reftools" "40322ffdc2e46fd7920d1f8250051bbd2f3bd34d" "f49f71a2d1be3c2e476162475a43fa6dbe5cac00ccdda7ed8dffc26190edfadb";
+    vendorHash = null; subPkgs = "./cmd/fillstruct ./cmd/fillswitch ./cmd/fixplurals";
+    check = chk ''"$out/bin/fillstruct" --help'' "[Uu]sage"; };
+  # regal (Apache-2.0): linter and language server for Rego.
+  regal = pkg { pname = "regal"; version = "0.43.0"; src = gh "open-policy-agent/regal" "refs/tags/v0.43.0" "0b1d03ef26a0d4282facaba811362d2784c7bc0aed0a5b4df270b413cc0dc6be";
+    vendorHash = "sha256-qGL1RF39SbRA6k54xsKdWvTvaAeCCRllcveMP5flYls="; subPkgs = "."; ldflags = "-s -w -X github.com/open-policy-agent/regal/pkg/version.Version=0.43.0 -X github.com/open-policy-agent/regal/pkg/version.Commit=0.43.0";
+    check = chk ''"$out/bin/regal" version'' "0\\.43\\.0"; };
+  # regolith (MIT): add-on Compiler for the Bedrock Edition of Minecraft.
+  regolith = pkg { pname = "regolith"; version = "1.8.0"; src = gh "Bedrock-OSS/regolith" "refs/tags/1.8.0" "e5eda4c9f6179987ed1a233780d7506c19a193506bb13817fdecec846d6200d0";
+    vendorHash = "sha256-RZrgEhq+7zK6Z2Vib9ZrsoQRTc4r8y5qdH166QzOOlQ="; subPkgs = "."; ldflags = "-X main.buildSource=nix -X main.version=1.8.0";
+    check = chk ''"$out/bin/regolith" --version'' "1\\.8\\.0"; };
+  # resgate (MIT): realtime API Gateway used with NATS to build REST, real time, and RPC APIs.
+  resgate = pkg { pname = "resgate"; version = "1.8.0"; src = gh "resgateio/resgate" "v1.8.0" "22900781b4943173d77ea4e9ded588fd39d74baf7aeb1941eea13977ea5cc2b7";
+    vendorHash = "sha256-7Mo/D3eUtmlfNxB+IQykX6MxNFNAxe0vnPtJCGmkMvA="; subPkgs = ".";
+    check = chk ''"$out/bin/resgate" --version'' "1\\.8\\.0"; };
+  # reviewdog (MIT): automated code review tool integrated with any code analysis tools regardless of programming language.
+  reviewdog = pkg { pname = "reviewdog"; version = "0.21.2"; src = gh "reviewdog/reviewdog" "v0.21.2" "a575127f03b85506f17d55ab1d66ea40df7d5b7d7530fbe2c725263c32ccb0c3";
+    vendorHash = "sha256-PtpHxk9mOdiTpnEx6QSDfLGiBz+OjkegLTEQTuBWisU="; subPkgs = "./cmd/reviewdog"; ldflags = "-s -w -X github.com/reviewdog/reviewdog/commands.Version=0.21.2";
+    check = chk ''"$out/bin/reviewdog" --version'' "0\\.21\\.2"; };
+  # rime-cli (Apache-2.0): command line tool to add customized vocabulary for Rime IME.
+  rime-cli = pkg { pname = "rime-cli"; version = "0.0.3"; src = gh "puddinging/rime-cli" "v0.0.3" "75b866f251ff098d360b070d9dd93faa20cc5e1ad17f254a47e06197b74a9d30";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/rime-cli" --help'' "[Uu]sage"; };
+  # rkmon (MIT): real-time hardware monitor TUI for Rockchip RK3588 SBCs. Like htop, but for the GPU, NPU, VPU, RGA, and thermal zones of your Rock 5B+ / RK3588 board.
+  rkmon = pkg { pname = "rkmon"; version = "0.3.1"; src = gh "isac322/rkmon" "refs/tags/v0.3.1" "5437f3012ac38ef3807d4363999b293b01b74a79d93ae9264a59ee30af359bd1";
+    vendorHash = "sha256-MZ93tPwlFHTlAywu9aFjXIh/XQcPyVp3pxQxjIUhy8k="; subPkgs = "./cmd/rkmon"; ldflags = "-s -w -extldflags -static -X=main.Version=0.3.1 -X=main.GitSHA=refs/tags/v0.3.1";
+    check = chk ''"$out/bin/rkmon" --version'' "0\\.3\\.1"; };
+  # round (MIT): CLI tool for rounding images.
+  round = pkg { pname = "round"; version = "0.0.2"; src = gh "mingrammer/round" "v0.0.2" "95aa622d62a4842a664a5dd67ed9e4a8eb930e6cbd70b06c2903aa07a3cc412f";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/round" --help'' "[Uu]sage"; };
+  # routedns (BSD-3-Clause): DNS stub resolver, proxy and router.
+  routedns = pkg { pname = "routedns"; version = "0.1.237"; src = gh "folbricht/routedns" "v0.1.237" "40b5f13e3924db514e9fac24c50ac36bce104ebfb4add6a9be1511e0f0b934ac";
+    vendorHash = "sha256-Qo0RhT4SuInhdsqx3wA2CITHkoCsvHoBPmTZ/j8nYy8="; subPkgs = "./cmd/routedns"; ldflags = "-s -w";
+    check = chk ''"$out/bin/routedns" --version'' "0\\.1\\.237"; };
+  # run (MIT): easily manage and invoke small scripts and wrappers.
+  run = pkg { pname = "run"; version = "0.11.2"; src = gh "TekWizely/run" "v0.11.2" "942427701caa99a9a3a6458a121b5c80b424752ea8701b26083841de5ae43ff6";
+    vendorHash = "sha256-MN3QkE0Vm/7E14uZ0VCS1LuodupCVQA65GVXhpWzy9o="; subPkgs = ".";
+    check = chk ''"$out/bin/run" version'' "0\\.11\\.2"; };
+  # runitor (0BSD): command runner with healthchecks.io integration.
+  runitor = pkg { pname = "runitor"; version = "1.4.1"; src = gh "bdd/runitor" "refs/tags/v1.4.1" "192665c623bc96ed77f122510510c017197e1673ab92bb84546d652afe4416c0";
+    vendorHash = "sha256-dwQ5V7ZWrgsxX+WLDnv9j37KViM1Z8+f5dNBAanWwrA="; subPkgs = "./cmd/runitor"; ldflags = "-s -X main.Version=v1.4.1";
+    check = chk ''"$out/bin/runitor" --version'' "1\\.4\\.1"; };
+  # rush-parallel (MIT): cross-platform command-line tool for executing jobs in parallel.
+  rush-parallel = pkg { pname = "rush-parallel"; version = "0.9.0"; src = gh "shenwei356/rush" "v0.9.0" "43ccc98c3c53b3995ee98fb1195ae3cdb7615c7fb8e4b2a6410c100733c764dc";
+    vendorHash = "sha256-S2MjBw8KmDcilY9D5jGg4PkcmPNsl8SZwvlU6XRhSbI="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/rush" --version'' "0\\.9\\.0"; };
+  # s3scanner (MIT): scan for misconfigured S3 buckets across S3-compatible APIs.
+  s3scanner = pkg { pname = "s3scanner"; version = "3.1.1"; src = gh "sa7mon/s3scanner" "v3.1.1" "2d333c31909baa21e024d11db1b03647fff3d210d73fa7fa47f598d3d459a20c";
+    vendorHash = "sha256-FPr5+CugtA6dZVNPqdqWzibNZdttb4JWJl9dTccw80s="; subPkgs = ". ./cmd/mqingest ./cmd/regioncheck"; ldflags = "-s -w";
+    check = chk ''"$out/bin/s3scanner" --help'' "[-]bucket-file"; };
+  # sbb-tui (MIT): TUI client for Switzerland's public transport timetables, inspired by SBB/CFF/FFS app.
+  sbb-tui = pkg { pname = "sbb-tui"; version = "1.15.0"; src = gh "Necrom4/sbb-tui" "refs/tags/v1.15.0" "8e4e84f6358c6798e4b69ebb4c079d0c886bc189b839eb818dc31eec0c53b15b";
+    vendorHash = "sha256-dk3x9arqoLq9y7ye/fxnUy+znqu8Xm+ErDx1cAvGbyY="; subPkgs = "."; ldflags = "-s -w -X main.version=1.15.0";
+    check = chk ''"$out/bin/sbb-tui" --version'' "1\\.15\\.0"; };
+  # sbomit (Apache-2.0): tool to generate SBOMs.
+  sbomit = pkg { pname = "sbomit"; version = "0.2.1"; src = gh "SBOMit/sbomit" "refs/tags/v0.2.1" "24e276e0ab57bc297e5f6022bab9b55e6540ca936aa4410dc31dae5af25d93f8";
+    vendorHash = "sha256-z44IXcS1oHq0keG98VDyeQWhRzRFjNfMzI5s/C5MV9M="; subPkgs = "."; ldflags = "-s";
+    check = chk ''"$out/bin/sbomit" --help'' "[Uu]sage"; };
+  # scilla (GPL-3.0-or-later): information gathering tool for DNS, ports and more.
+  scilla = pkg { pname = "scilla"; version = "1.3.4"; src = gh "edoardottt/scilla" "refs/tags/v1.3.4" "f1a738745a2b45aa1dd37e1754a186bc08fb186f01e241257c7ae5a176eb7d44";
+    vendorHash = "sha256-n3+FWntPQNwL5WytdRyOe3kGrFLMvDXqt7TehpkMqnc="; subPkgs = "./cmd/scilla"; ldflags = "-w -s";
+    check = chk ''"$out/bin/scilla" --version'' "1\\.3\\.4"; };
+  # scout (Unlicense): lightweight URL fuzzer and spider: Discover a web server's undisclosed files, directories and VHOSTs.
+  scout = pkg { pname = "scout"; version = "0.15.1"; src = gh "liamg/scout" "v0.15.1" "3e28f860754e8bf3cdf1733e64a622349eee01f1453a11f9505b9ea31a5d7e16";
+    vendorHash = "sha256-LLjc8xgQfkyi8LkxJdZVQzAAxuZwczKjNXaPEpQveS4="; subPkgs = "./cmd/scout";
+    check = chk ''"$out/bin/scout" --help'' "[-]-skip-ssl-verify"; };
+  # sd-local (BSD-3-Clause): screwdriver.cd local mode.
+  sd-local = pkg { pname = "sd-local"; version = "1.0.59"; src = gh "screwdriver-cd/sd-local" "v1.0.59" "b51d61588893800e716abade6aaaf79efc8c1845a743a245a2c60018723ba525";
+    vendorHash = "sha256-lc3mtAtoACHUs1J6+eSnB9J/Q9i3cj0stPGWkgksTdI="; subPkgs = ".";
+    check = chk ''"$out/bin/sd-local" --help'' "[Uu]sage"; };
 }
