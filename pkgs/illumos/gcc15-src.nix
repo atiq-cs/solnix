@@ -233,6 +233,22 @@ let
       grep -rlaF "$h" "$out" "$lib" 2>/dev/null | while read -r f; do chmod u+w "$f"; LC_ALL=C sed -i "s/$h/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/g" "$f"; done
       ! grep -rlaF "$h" "$out" "$lib" >/dev/null 2>&1 || { echo "FATAL: $out/$lib still names stage0 ($h)" >&2; exit 1; }
     done
+    # No debug info in any shipped ELF or archive, as NixOS (gcc/common/strip-attributes.nix: stripDebugList = bin libexec
+    # lib/*.{a,o,so*} plugin, stripDebugListTarget lib/gcc/<target>/*/*.{a,o,so*}; strip.sh runs `strip -S -p`, then ranlib).
+    # The target libraries build with -g, so the served ccdwkwqh named the gate proto and /var/tmp/gccsrc-<key> in 22 archives
+    # (libgcc.a 12x/312x, libstdc++.a 128x/1452x) and its bin/libexec/lib .so (stage0's static libstdc++). Every link takes
+    # libgcc.a/libgcc_eh.a, so those units reach each program's DWARF (wave8 T1: 27 -debug outs name gccsrc, 4 the proto, e.g.
+    # openssl's unwind-dw2.c units), and a .debug that split-debug-od.sh keeps uncompressed then names the proto (node6 HANDOFF
+    # 2). -D: the store binutils is not configured --enable-deterministic-archives, so a rewritten member would take the build
+    # user's uid and the date. The granlib -D loop below restores the archive index. Before the checksum steps (they read nm).
+    find "$out" "$lib" -type f | while read -r f; do
+      case "$f" in *.a) ;; *) [ "$(od -An -tx1 -N4 "$f" | tr -d ' \n')" = 7f454c46 ] || continue;; esac
+      chmod u+w "$f"; gstrip -S -D "$f"
+    done
+    rc=0; grep -rlaF /var/tmp/gccsrc- "$out" "$lib" > "$W/hits" || rc=$?   # 1 = none; 0 = hits and 2 = error both FATAL
+    [ "$rc" = 1 ] || { echo "FATAL: gcc's build dir is still named after the strip (grep rc $rc):" >&2; head "$W/hits" >&2; exit 1; }
+    rc=0; find "$out" "$lib" -name '*.[ao]' -type f -exec grep -laF "$gate" {} + > "$W/hits" || rc=$?
+    [ "$rc" = 1 ] || { echo "FATAL: a static archive or crt object still names the gate proto (rc $rc):" >&2; head "$W/hits" >&2; exit 1; }
     # every shipped archive's armap without a date, whatever wrote it (strip -D would strip the symbols too)
     find "$out" "$lib" -name '*.a' -type f | while read -r f; do chmod u+w "$f"; granlib -D "$f"; done
     # cc1/cc1plus executable_checksum (gcc's PCH validity stamp) is genchecksum's md5 over objects that embed $out. An
