@@ -58,7 +58,11 @@ let
   # recipes2: tools/libraries solnix lacked (a new file, so no served drv moves)
   c7 = import ./c-recipes2.nix (h // { inherit (c1) readline gnum4; inherit (c4) perl; inherit (c5) cmake python3; inherit (c3) libgpg-error libassuan bzip2-bin; });
   # libdb 2026.10.7.2 (+ the berkeleydb alias): Oracle Berkeley DB 5.3.28's replacement (libdb1, security)
-  c8 = import ./c-libdb.nix (h // { inherit (c5) python3; tcl = c7.tcl.unfixed; }) // cqd;   # c-recipes2.nix says why; cqd: on this line, so the `in` line other lanes edit stays main's
+  c8 = import ./c-libdb.nix (h // { inherit (c5) python3; tcl = c7.tcl.unfixed; }) // cqd // c13;   # c-recipes2.nix says why; cqd, c13: on this line, so the `in` line other lanes edit stays main's
+  # qnew6: idle1's ranked leaves #21-#40 (a new file, so no served drv moves); x86 only, as c11
+  c13 = if gtkMeson == null then { } else import ./c-qnew6.nix (h // { inherit (c5) cmake python3 gnupatch; inherit (c4) perl libtool;
+    inherit (c1) flex bison autoconf-archive; inherit (c9) libogg check gtest; inherit (c10) uthash netsurf-buildsystem libparserutils libzen;
+    inherit gtkMeson; });
   # qdeps: the shared image/messaging/XSLT/Lua leaves the x86 queue's names wait on (a new file, so no served drv moves); x86 only, as c10
   cqd = if gtkMeson == null then { } else import ./c-qdeps.nix (h // { inherit (c5) cmake gnupatch; inherit (c9) libdeflate;
     inherit (c10) lerc; inherit (c7) giflib; inherit gtkMeson; });
