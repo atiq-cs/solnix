@@ -1069,7 +1069,9 @@ def check_nar(out, src=None):
 #     solnix-builder-build
 #  S4 host names, case-sensitive, not inside a longer word: dixi dixa dixr lixi floki
 INTERP_OK = re.compile(r"^(/nix/store/.*|(/lib|/usr/lib)/(64/|amd64/|sparcv9/|aarch64/)?ld\.so\.1|\$ORIGIN.*|/\.SUNWnative/usr/lib/.*|)$")
-BUILDHOST_RE = re.compile(rb"compute\.internal|ec2\.internal|solnix-builder-build", re.I)
+# DNS label boundaries: no letter, digit or - on either side of the domain, so `rec2.internalFuncName`, a JavaScript
+# property access in V8's tick processor (inside node's bin/node), is not a host (node6 2026-11-12).
+BUILDHOST_RE = re.compile(rb"(?<![A-Za-z0-9-])(?:compute|ec2)\.internal(?![A-Za-z0-9-])|solnix-builder-build", re.I)
 HOSTNAME_RE = re.compile(rb"(?<![A-Za-z0-9_])(dixi|dixa|dixr|lixi|floki)(?![A-Za-z0-9_])")
 
 def elf_dynamic(data):
@@ -1984,6 +1986,11 @@ def selftest_out():
         ("S3 solnix-builder-build in a DOF record", mut("lib/libz2.so", R(b"\x7fELF\0SunOS\0solnix-builder-build\0")), False, "FAIL S3-buildhost"),
         ("S3 ip-10-0-1-23.EC2.Internal (case-insensitive)", mut("BUILDINFO", R(b"host=ip-10-0-1-23.EC2.Internal")), False, "FAIL S3-buildhost"),
         ("S3 a symlink target naming compute.internal", mut("lib/hl", L("/nix/store/" + "8" * 32 + "-x/ip-1.compute.internal")), False, "FAIL S3-buildhost"),
+        ("S3 ip-10-0-0-1.ec2.internal in a text file", mut("etc/hostinfo", R(b"built on ip-10-0-0-1.ec2.internal\n")), False, "FAIL S3-buildhost"),
+        ("S3 us-west-2.compute.internal as a resolv.conf search domain", mut("etc/r", R(b"search us-west-2.compute.internal\n")), False, "FAIL S3-buildhost"),
+        ("S3 not hit: V8's tick processor JS rec2.internalFuncName (node bin/node)", mut("lib/node/tickprocessor.mjs", R(b"      (rec2.internalFuncName < rec1.internalFuncName ? -1 : 1));\n")), True, None),
+        ("S3 not hit: a word that ends in ec2.internals", mut("share/doc/t", R(b"see spec2.internals.md\n")), True, None),
+        ("S3 not hit: rec2.internal as a JS property at the end of an expression", mut("share/x.js", R(b"return rec2.internal;\n")), True, None),
         ("S4 host name dixi as a word", mut("etc/conf", R(b"built on dixi by gburd")), False, "FAIL S4-hostname"),
         # compressed debug sections are scanned DECOMPRESSED, and their zlib bytes are not (wave6t: 'lixi' in a seed binutils .debug)
         ("S4 a host name inside a zlib-compressed .debug_str (SHF_COMPRESSED)", mut("lib/debug/a.debug", R(mk_elf_zsec(b"src\0/home/x on dixi build\0"))), False, "FAIL S4-hostname"),
