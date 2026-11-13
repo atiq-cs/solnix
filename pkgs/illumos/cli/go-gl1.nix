@@ -239,4 +239,80 @@ in {
   dcrd = pkg { pname = "dcrd"; version = "2.1.5"; src = gh "decred/dcrd" "refs/tags/release-v2.1.5" "9723576d4fe163e684877b794eee0ce6642fdb5ba53f2ea43ec53d54e3062152";
     vendorHash = "sha256-OHb03k7Gl2DpFnziY/h5vQMTyf8YBEY2IR/DVAOC+1s="; subPkgs = ". ./cmd/promptsecret";
     check = chk ''"$out/bin/dcrd" --version'' "2\\.1\\.5"; };
+  # dcrwallet (ISC): secure Decred wallet daemon written in Go (golang).
+  dcrwallet = pkg { pname = "dcrwallet"; version = "2.1.7"; src = gh "decred/dcrwallet" "release-v2.1.7" "30d4d49420c33242a0ea11e71802d02c467c6c4ee4c8dd7206e4ae5d9c13b633";
+    vendorHash = "sha256-/3Jodzmc8t4t/WzGfzh0wclHvdeWA9pG4MQy36gCdso="; subPkgs = ".";
+    check = chk ''"$out/bin/dcrwallet" --version'' "2\\.1\\.7"; };
+  # ddns-go (MIT): simple and easy to use DDNS.
+  ddns-go = pkg { pname = "ddns-go"; version = "6.17.7"; src = gh "jeessy2/ddns-go" "v6.17.7" "f7001004e092d9641aad5a94158e0b4cae4a53a7f5c7d96d5c6af3d246c56fcc";
+    vendorHash = "sha256-jYwaltjaSgS6AmtodeVVFCP7ErkosguP0tTNMTnDT98="; subPkgs = "."; ldflags = "-X main.version=6.17.7";
+    check = chk ''"$out/bin/ddns-go" --help'' "[Uu]sage"; };
+  # der-ascii (Apache-2.0): small human-editable language to emit DER or BER encodings of ASN.1 structures and malformed variants of them.
+  der-ascii = pkg { pname = "der-ascii"; version = "0.8.0"; src = gh "google/der-ascii" "v0.8.0" "1ab23597139a6e006efc38e1105b81bf8ca2486c3fab42be7a9ccabb8a1aef2a";
+    vendorHash = null; subPkgs = "./cmd/ascii2der ./cmd/der2ascii"; ldflags = "-s -w";
+    check = chk ''"$out/bin/ascii2der" --help'' "[Uu]sage"; };
+  # deterministic-zip (GPL-3.0-only): simple (almost drop-in) replacement for zip that produces deterministic files.
+  deterministic-zip = pkg { pname = "deterministic-zip"; version = "6.1.0"; src = gh "timo-reymann/deterministic-zip" "refs/tags/6.1.0" "1062573b4e5857f181e71c329ff1933aca20d1875620b901884ab6068ccd7982";
+    vendorHash = "sha256-WyqhMIDRnuZz7v9evL+YSOHr7sXGFvzuMYDcOLu1ig4="; subPkgs = "."; ldflags = "-s -X github.com/timo-reymann/deterministic-zip/pkg/buildinfo.GitSha=refs/tags/6.1.0 -X github.com/timo-reymann/deterministic-zip/pkg/buildinfo.Version=6.1.0";
+    check = chk ''"$out/bin/deterministic-zip" --version'' "6\\.1\\.0"; };
+  # diskbloom (Apache-2.0): A pastel treemap TUI that shows what's eating your disk.
+  diskbloom = pkg { pname = "diskbloom"; version = "0.1.0"; src = gh "Zingzy/diskbloom" "refs/tags/v0.1.0" "b0fa7c67c17251423b7e89fecf4c4d1f3722537a0049ba2771d90e24d0c8ebad";
+    vendorHash = "sha256-P+HVCvcyp3yIOHpGo2ZwyoBUt0Ia35SjKn8fn9ZGw6M="; subPkgs = "."; ldflags = "-s -w -X main.version=0.1.0";
+    check = chk ''"$out/bin/diskbloom" --version'' "0\\.1\\.0"; };
+  # dismap (GPL-3.0-only): asset discovery and identification tools.
+  dismap = pkg { pname = "dismap"; version = "0.4"; src = gh "zhzyker/dismap" "v0.4" "c381f4974a3cc9a4a748e5829c8d811eedf117f5a03563e33ed796d337652626";
+    vendorHash = "sha256-oOxMS93tBRFP1E4pXj1ky7Xp2Daj/8s0ejts+qVNCM0="; subPkgs = "./cmd/dismap";
+    check = chk ''"$out/bin/dismap" --version'' "0\\.4"; };
+  # dismember (MIT): tool to scan memory for secrets.
+  dismember = pkg { pname = "dismember"; version = "0.0.1"; src = gh "liamg/dismember" "refs/tags/v0.0.1" "7f78d5f986b97ee81f7b74f678e7bd6e4c48e83057778ee6d6e09d154ce5a45d";
+    vendorHash = "sha256-Rkj/KRnCRXgIJm9YE/NCDchQw1/x+3vG/p4qjWtccHI="; subPkgs = ".";
+    check = chk ''"$out/bin/dismember" --help'' "[Uu]sage"; };
+  # dli (MIT): CLI based tool for managing DNS records.
+  dli = pkg { pname = "dli"; version = "0-unstable-2025-09-06"; src = gh "haylinmoore/dli" "176302f80cf771a7a15d9df58c3296a979f18e28" "9d5b81f18d5c936a1819a7fbe8e48aeb5221b3e31af003038a0c02997c532c05";
+    vendorHash = "sha256-Gc2LKv6lbNtAJPR4c4f2Ollf474Gl583EMLWc7WN15I="; subPkgs = ".";
+    check = chk ''"$out/bin/dli" --help'' "[Uu]sage"; };
+  # dns-over-https (MIT): high performance DNS over HTTPS client & server.
+  dns-over-https = pkg { pname = "dns-over-https"; version = "2.3.10"; src = gh "m13253/dns-over-https" "refs/tags/v2.3.10" "9df05f730099ca1a7bae506a1532a3876a74c87e74a0e7a19c97d2363cbdfefb";
+    vendorHash = "sha256-TD9GDGsCTBOd+tDrk5sPGZWWcAruKF7dwkasfdulN54="; subPkgs = "./doh-client ./doh-server"; ldflags = "-w -s";
+    check = chk ''"$out/bin/doh-client" --version'' "2\\.3\\.10"; };
+  # dnss (Apache-2.0): daemon for using DNS over HTTPS.
+  dnss = pkg { pname = "dnss"; version = "0-unstable-2024-03-17"; src = gh "albertito/dnss" "da8986dd432870f5710e3e8652c92c95f34b830b" "ef914bd61a2f425adc39c03f40bb6968d39917f94150ff2356ea79efb1cad816";
+    vendorHash = "sha256-bVD7gMNvbzdKcX0FxqgjprZiKHRtJr97wZ0AclWYiEM="; subPkgs = ".";
+    check = chk ''"$out/bin/dnss" --help'' "[Uu]sage"; };
+  # dnstake (MIT): tool to check missing hosted DNS zones.
+  dnstake = pkg { pname = "dnstake"; version = "0.1.1"; src = gh "pwnesia/dnstake" "refs/tags/v0.1.1" "23e30d180026ae2713504172322f4140082718510a91c985e53b0b98c030fcd4";
+    vendorHash = "sha256-Axlhv0G7nfRvCpPBUlJtO5jaK/xfjub3i44q5/ucg4s="; subPkgs = "./cmd/dnstake";
+    check = chk ''"$out/bin/dnstake" --version'' "0\\.1\\.1"; };
+  # doc2go (Apache-2.0 / BSD-3-Clause): your Go project's documentation, to-go.
+  doc2go = pkg { pname = "doc2go"; version = "0.12.1"; src = gh "abhinav/doc2go" "v0.12.1" "600437b096b8b51190c679f63340a75a8507210666ee6285c267c132e6e02515";
+    vendorHash = "sha256-2ZXIxNBb+NCyTudSMsXP7SbvcrozctP47/NjYq6xsIA="; subPkgs = "."; ldflags = "-s -w -X main._version=0.12.1";
+    check = chk ''"$out/bin/doc2go" --version'' "0\\.12\\.1"; };
+  # docker-credential-env (MIT): environment-driven docker credential helper.
+  docker-credential-env = pkg { pname = "docker-credential-env"; version = "1.7.0"; src = gh "isometry/docker-credential-env" "refs/tags/v1.7.0" "96745058f2979ee954cdd9cc37ab59c975502b2886f652988539f1b2cda9b21c";
+    vendorHash = "sha256-TEc5P3jU9zRFa9pBuE2gaqGby1g/o/AFZMF4B9batWA="; subPkgs = "."; ldflags = "-s -X=github.com/docker/docker-credential-helpers/credentials.Name=docker-credential-env -X=github.com/docker/docker-credential-helpers/credentials.Package=github.com/isometry/docker-credential-env -X=github.com/docker/docker-credential-helpers/credentials.Version=1.7.0 -X=github.com/docker/docker-credential-helpers/credentials.Revision=v1.7.0";
+    check = chk ''"$out/bin/docker-credential-env" --version'' "1\\.7\\.0"; };
+  # dockfmt (MIT): dockerfile format.
+  dockfmt = pkg { pname = "dockfmt"; version = "0.3.3-unstable-2020-09-17"; src = gh "jessfraz/dockfmt" "1455059b8bb53ab4723ef41946c43160583a8333" "21fe11c47ab7d3612a7bed1881d3e404e65df6991629b4fd84c7c5d87c20327d";
+    vendorHash = null; subPkgs = "."; ldflags = "-w -s -X github.com/jessfraz/dockfmt/version.VERSION=0.3.3-unstable-2020-09-17";
+    check = chk ''"$out/bin/dockfmt" version'' "0\\.3\\.3-unstable-2020-09-17"; };
+  # dorkscout (Apache-2.0): tool to automate the work with Google dorks.
+  dorkscout = pkg { pname = "dorkscout"; version = "1.0"; src = gh "R4yGM/dorkscout" "1.0" "ac3c7813d84e90818bf93fbefb4176386681ce8bbe021b0b2d44362290786d00";
+    vendorHash = "sha256-sf50xikjTuH61+kBZJjWbNCW5Xu5StGj8yKDbzDLIes="; subPkgs = ".";
+    check = chk ''"$out/bin/dorkscout" --help'' "[Uu]sage"; };
+  # drift (MIT): terminal screensaver that turns idle time into ambient art.
+  drift = pkg { pname = "drift"; version = "1.3.0"; src = gh "phlx0/drift" "refs/tags/v1.3.0" "6c8545a667ff3ede2093a042c21f6dd0034916ed43d5c37180ec9ebca3d7a350";
+    vendorHash = "sha256-axQsrGooz7Zk774/5GQmXBFD3he0tlEZhNoHyVv62vM="; subPkgs = "."; ldflags = "-s -X=main.version=1.3.0 -X=main.commit=v1.3.0 -X=main.date=1970-01-01T00:00:00Z";
+    check = chk ''"$out/bin/drift" version'' "1\\.3\\.0"; };
+  # dstp (MIT): run common networking tests against your site.
+  dstp = pkg { pname = "dstp"; version = "0.4.23"; src = gh "ycd/dstp" "v0.4.23" "1ab45012204cd68129fd05723dd768ea4a9ce08e2f6c2fa6468c2c88ab65c877";
+    vendorHash = "sha256-/R89n5B3jIk9M7B+WYMLxyT3avGbRhTTBlaYlf+kNCM="; subPkgs = "./cmd/dstp";
+    check = chk ''"$out/bin/dstp" --help'' "[Uu]sage"; };
+  # duckling-proxy (MIT): gemini proxy to access the Small Web.
+  duckling-proxy = pkg { pname = "duckling-proxy"; version = "0.2.1-unstable-2021-07-23"; src = gh "LukeEmmet/duckling-proxy" "e2bfd73a60d7afa43f13a9d420d514131fee8fd1" "91857d77dfcd15785add8e62b4efe37a9d31e56f956ca3f84e3ce548ae9097d4";
+    vendorHash = "sha256-DRDAbNdoqhJON1P7t/5d8SLwbUGk3eecQM5saBfyiNA="; subPkgs = ".";
+    check = chk ''"$out/bin/duckling-proxy" --help'' "[Uu]sage"; };
+  # e1s (MIT): easily Manage AWS ECS Resources in Terminal.
+  e1s = pkg { pname = "e1s"; version = "2.0.0"; src = gh "keidarcy/e1s" "refs/tags/v2.0.0" "d2846602a86b245ca85e0f80d3a02f5cdeb6320d12b87189894f1cfc5531ac28";
+    vendorHash = "sha256-j7e4mnxzWbmv+FWy8KvcVz8Yz/CMEnrEhO9Z5yK/534="; subPkgs = "./cmd/e1s";
+    check = chk ''"$out/bin/e1s" --version'' "2\\.0\\.0"; };
 }
