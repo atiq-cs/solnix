@@ -42,7 +42,7 @@ TPROG
   '';
   # fail unless <file> holds exactly <n> lines matching <fixed string> (an anchor for a sed edit)
   anchor = file: n: s: ''[ "$(grep -cF -- '${s}' ${file})" = ${toString n} ] || { echo 'FATAL: anchor ${file}: ${s}' >&2; exit 1; }'';
-in {
+in rec {   # rec: batch B (the dependents) builds on the leaves above
   # dns-root-data (GPL-3.0-or-later per nixpkgs; the data is IANA's): the DNS root hints and the DNSSEC root trust anchor (key + DS), as
   # nixpkgs' buildCommand: root.hints from the knot-resolver tree it pins (codeload's tarball of that commit: its etc/root.hints is
   # nixpkgs' fetchurl hash, measured), root.key and root.ds nixpkgs' own files. No ELF; the check matches the KSK-2017 DS digest.
@@ -472,6 +472,131 @@ int main(void){ ecc_25519_work_t p, q; ecc_int256_t one = {{ 1 }}; ecc_25519_sca
 printf("ok %d %d\n", ecc_25519_is_identity(&p), ecc_25519_is_identity(&q)); return 0; }'' "-I$out/include/libuecc-7 -luecc"}
       ${chk ''"$W/t"'' "^ok 1 0$"}
       grep -qx "libdir=\''${exec_prefix}/lib/amd64" "$out/lib/amd64/pkgconfig/libuecc.pc" || { echo "FATAL: libuecc.pc libdir" >&2; cat "$out/lib/amd64/pkgconfig/libuecc.pc" >&2; exit 1; }
+    '';
+  };
+
+  # ---- qnew6 batch B: the leaves' queue dependents (RANKING.md's last column), each on a leaf above ----------------------------------
+  # libtomcrypt (Unlicense / public domain, nixpkgs: publicDomain wtfpl): the LibTom cryptographic toolkit on libtommath, its libtool
+  # makefile.shared, as nixpkgs: the CVE-2019-17362 fix (upstream PR 508, pinned by its own sha256: nixpkgs' fetchpatch hashes the
+  # normalised diff), -DUSE_LTM -DLTM_DESC -DLTC_PTHREAD and -ltommath. Its self-test suite runs against the installed library.
+  libtomcrypt = mkSrcPkg {
+    pname = "libtomcrypt"; version = "1.18.2";
+    src = { url = "https://github.com/libtom/libtomcrypt/releases/download/v1.18.2/crypt-1.18.2.tar.xz";
+            sha256 = "96ad4c3b8336050993c5bc2cf6c057484f2b0f9f763448151567fbab5e767b84"; };
+    deps = [ world libtommath ]; nativeTools = [ gnupatch libtool pkgconf ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/libtom/libtomcrypt/pull/508/commits/25c26a3b7a9ad8192ccc923e15cf62bf0108ef94.patch" "50a20210e18a766a2d278787353fbbef255a71119f9529ce78d43f8c815dd84f"}
+      M="-f makefile.shared PREFIX=$out LIBPATH=$out/lib/amd64 CC=$CC LIBTOOL=libtool EXTRALIBS=-ltommath INSTALL_GROUP=$(id -g) INSTALL_USER=$(id -u)"
+      gmake -j8 $M CFLAGS="-DUSE_LTM -DLTM_DESC -DLTC_PTHREAD"; gmake $M CFLAGS="-DUSE_LTM -DLTM_DESC -DLTC_PTHREAD" install
+      # the self-test suite (tests/, as makefile.shared's `test` target links it) against the installed library: its tests open the
+      # bundled tests/*.key/.der by relative path, so it runs from the source tree
+      # with its makefile's -DLTC_SOURCE (the tests use the library's internal mp_* macros and tables)
+      "$CC" -DUSE_LTM -DLTM_DESC -DLTC_PTHREAD -DLTC_SOURCE -Isrc/headers -Itests tests/*.c -L"$out/lib/amd64" -ltomcrypt -ltommath \
+        -Wl,-R,"$out/lib/amd64:${libtommath}/lib/amd64" -o "$W/ltctest"
+      "$W/ltctest" > "$W/test.log" 2>&1 || { tail -30 "$W/test.log" >&2; exit 1; }
+      grep -E "^SUCCESS: passed=[0-9]+ failed=0 " "$W/test.log" >&2 || { echo "FATAL: libtomcrypt tests" >&2; tail -30 "$W/test.log" >&2; exit 1; }
+      ${tprog ''#include <tomcrypt.h>
+#include <stdio.h>
+int main(void){ unsigned char h[32]; unsigned long n = 32; register_hash(&sha256_desc); int i = find_hash("sha256");
+if (hash_memory(i, (const unsigned char *)"abc", 3, h, &n) != CRYPT_OK) return 1; printf("ok "); for (unsigned k = 0; k < n; k++) printf("%02x", h[k]); printf("\n"); return 0; }'' "-ltomcrypt -ltommath -Wl,-R,${libtommath}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad$"}
+    '';
+  };
+
+  # pigz (Zlib licence): parallel gzip, its Makefile on the store zlib, as nixpkgs (pigz, unpigz, its man page; the PDF too, nixpkgs'
+  # doc output, here in share/doc). Its `make tests` runs (nixpkgs runs it on Linux only; here it passes), with ncompress for the .Z
+  # tests (nixpkgs' check input).
+  pigz = mkSrcPkg {
+    pname = "pigz"; version = "2.8";
+    src = { url = "https://codeload.github.com/madler/pigz/tar.gz/refs/tags/v2.8";
+            sha256 = "2f7f6a6986996d21cb8658535fff95f1c7107ddce22b5324f4b41890e2904706"; };
+    deps = [ world zlib ]; nativeTools = [ ncompress ] ++ hostTools;
+    build = ''
+      gmake -j8 CC="$CC"
+      install -Dm755 pigz "$out/bin/pigz"; ln -s pigz "$out/bin/unpigz"
+      install -Dm644 pigz.1 "$out/share/man/man1/pigz.1"; ln -s pigz.1 "$out/share/man/man1/unpigz.1"
+      install -Dm644 pigz.pdf "$out/share/doc/pigz/pigz.pdf"
+      head -c 400000 "$out/bin/pigz" > "$W/x"; "$out/bin/pigz" -p4 -c "$W/x" > "$W/x.gz"
+      ${chk ''od -An -tx1 -N2 "$W/x.gz"; "$out/bin/unpigz" -c "$W/x.gz" | cmp - "$W/x" && echo same'' "same"}
+    '';
+  };
+
+  # mathic (LGPL-2.0-or-later): Macaulay2's data structures for Groebner basis computation, autotools from the tag, as nixpkgs: on the
+  # memtailor above, gtest for `make check`. The check compiles a mathic program against the installed library.
+  mathic = mkSrcPkg {
+    pname = "mathic"; version = "1.5";
+    src = { url = "https://codeload.github.com/Macaulay2/mathic/tar.gz/refs/tags/v1.5";
+            sha256 = "6bd2fd41d95efb0bf599aa5c6bc406f0d6fff803fccfe854db4835041c6267ee"; };
+    deps = [ world memtailor gtest ]; nativeTools = autoreconfTools ++ [ pkgconf ] ++ hostTools;
+    build = ''
+      ${autoreconf}
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --with-gtest LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake check; gmake install
+      ${tprogxx ''#include <mathic.h>
+#include <cstdio>
+int main(){ mathic::ColumnPrinter p; p.addColumn(); p[0] << "solnix"; std::printf("ok %d\n", (int)p.getColumnCount()); return 0; }''
+        "-I${memtailor}/include -L$out/lib/amd64 -lmathic -L${memtailor}/lib/amd64 -lmemtailor -Wl,-R,$out/lib/amd64:${memtailor}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok 1$"}
+    '';
+  };
+
+  # libthai (LGPL-2.1-or-later): Thai language support (word breaking, character classes), autotools from the release, as nixpkgs: on
+  # the libdatrie above (its trietool builds the dictionary trie), its man pages. `make check` runs. The check breaks a Thai phrase.
+  libthai = mkSrcPkg {
+    pname = "libthai"; version = "0.1.30";
+    src = { url = "https://github.com/tlwg/libthai/releases/download/v0.1.30/libthai-0.1.30.tar.xz";
+            sha256 = "ddba8b53dfe584c3253766030218a88825488a51a7deef041d096e715af64bdd"; };
+    deps = [ world libdatrie ]; nativeTools = [ libdatrie pkgconf ] ++ hostTools;
+    build = ''
+      "$BASH" ${../version-script-mapfile.sh} wrap
+      # tests/test_thbrk.c passes char ** to iconv, whose GNU libiconv prototype (the one libdatrie links) takes const char ** here
+      CFLAGS="-g -O2 -Wno-error=incompatible-pointer-types" ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-doxygen-doc
+      gmake -j8; gmake check; gmake install
+      ls "$out/share/libthai/thbrk.tri" > /dev/null
+      ${tprog ''#include <thai/thbrk.h>
+#include <stdio.h>
+int main(void){ const unsigned char s[] = { 0xca, 0xc7, 0xd1, 0xca, 0xb4, 0xd5, 0xa4, 0xc3, 0xd1, 0xba, 0 };  /* TIS-620 "sawasdee khrap" */
+int pos[8]; ThBrk *b = th_brk_new(NULL); if (!b) return 1; int n = th_brk_find_breaks(b, s, pos, 8); printf("ok %d %d\n", n, n > 0 ? pos[0] : -1);
+th_brk_delete(b); return 0; }'' "-lthai -L${libdatrie}/lib/amd64 -ldatrie -Wl,-R,${libdatrie}/lib/amd64"}
+      ${chk ''"$W/t"'' "^ok 1 6$"}
+    '';
+  };
+
+  # mediainfo (BSD-2-Clause): MediaArea's command-line media metadata tool, autotools in Project/GNU/CLI, as nixpkgs: on the
+  # libmediainfo above and the served libzen. The check reads a WAV it writes.
+  mediainfo = mkSrcPkg {
+    pname = "mediainfo"; version = "26.05";
+    src = { url = "https://mediaarea.net/download/source/mediainfo/26.05/mediainfo_26.05.tar.xz";
+            sha256 = "f852093f9050022d699606eeabb38b24da5523d0212fab64dc4e4d3e46b56de1"; };
+    deps = [ world zlib libmediainfo libzen ]; linkDeps = [ curl openssl ]; nativeTools = autoreconfTools ++ [ pkgconf ] ++ hostTools;
+    build = ''
+      cd Project/GNU/CLI
+      ${autoreconf}
+      ./configure --prefix="$out" --with-libmediainfo=${libmediainfo} LDFLAGS="-L$gccLib/amd64"
+      gmake -j8; gmake install
+      { printf 'RIFF\x4c\x1f\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x40\x1f\x00\x00\x01\x00\x08\x00data\x40\x1f\x00\x00'; head -c 8000 /dev/zero; } > "$W/t.wav"
+      ${chk ''"$out/bin/mediainfo" --Inform="Audio;%Format% %SamplingRate%" "$W/t.wav"'' "^PCM 8000$"}
+    '';
+  };
+
+  # ecdsautils (MIT, BSD-2-Clause): ECDSA keys, signatures and verification on the libuecc above (ecdsautil and libecdsautil), cmake,
+  # as nixpkgs: its CMake 4 backport; no doxygen docs (nixpkgs' doxygen input builds none it installs). The check signs a file and
+  # verifies it with the derived public key.
+  ecdsautils = mkSrcPkg {
+    pname = "ecdsautils"; version = "0.4.2";
+    src = { url = "https://codeload.github.com/freifunk-gluon/ecdsautils/tar.gz/v0.4.2";
+            sha256 = "8880e5a506555a06d7a866de8a76c28bb4c7472abbf0d3fb396100d16c447174"; };
+    deps = [ world libuecc ]; nativeTools = [ cmake gnupatch pkgconf ] ++ hostTools;
+    build = ''
+      patch -p1 < ${fetch "https://github.com/freifunk-gluon/ecdsautils/commit/19f096f9c10264f4efe4b926fe83126e85642cba.patch" "439e08d3f311cc1692644937c0b05a33ef38e575af92e41894b1823af1ea966f"}
+      # its -std=c99 hides getopt in illumos <unistd.h> (glibc's <getopt.h>, which it includes, declares it anyway): __EXTENSIONS__
+      ${cmakeB "-DLIB_SUFFIX=/amd64 -DCMAKE_C_FLAGS=-D__EXTENSIONS__"}
+      E="$out/bin/ecdsautil"
+      ${chk ''"$E" help'' "^ecdsautils 0\\.4\\.2$"}
+      "$E" generate-key > "$W/sec"; "$E" show-key < "$W/sec" > "$W/pub"; printf 'solnix\n' > "$W/f"
+      "$E" sign "$W/f" < "$W/sec" > "$W/sig"
+      ${chk ''"$E" verify -s "$(cat "$W/sig")" -p "$(cat "$W/pub")" "$W/f" && echo verified'' "^verified$"}
+      printf 'other\n' > "$W/g"; ! "$E" verify -s "$(cat "$W/sig")" -p "$(cat "$W/pub")" "$W/g" || { echo "FATAL: ecdsautil verified a wrong file" >&2; exit 1; }
     '';
   };
 }
