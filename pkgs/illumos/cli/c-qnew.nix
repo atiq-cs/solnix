@@ -2,7 +2,7 @@
 # are the queue job's (pname, target), so the builders' eval match (solnix-builder.sh eplan) turns the job into a build. A new file, so
 # no served drv moves. Store-only builds (nativeTools), each with an in-build check that runs it on real input. Every source is the one
 # nixpkgs f4a03c0 fetches (same tree or file hash), pinned by sha256.
-{ base, mkSrcPkg, world, chk, hostTools, cmake, python3, flex, bison, gnum4, fmt, spdlog, sqlite, gtkMeson, ... }:
+{ base, mkSrcPkg, world, chk, dropDocs, hostTools, cmake, python3, bison, gnum4, fmt, spdlog, sqlite, gtkMeson, ... }:
 let
   inherit (base) zlib;
   inherit (gtkMeson) gperf;
@@ -21,6 +21,21 @@ ${src}
 TPROG
     "$CC" -I"$out/include" "$W/t.c" -L"$out/lib/amd64" ${libs} -Wl,-R,"$out/lib/amd64" -o "$W/t"
   '';
+  # flex 2.6.4 for doxygen only, as nixpkgs (7f81d69 and master build doxygen 1.17.0 with their flex, 2.6.4). main's flex 2.6.5 writes
+  # doxygen's big scanners with an int16 yy_base that C++ rejects as narrowing (westes/flex#816, open) and drops yy_flex_debug and
+  # yy_at_bol (back in 2.6.9). main 871b296's recipe: the tarball ships its generated scan.c/parse.c, so no flex or bison builds it.
+  flex264 = mkSrcPkg {
+    pname = "flex"; version = "2.6.4";
+    src = { url = "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz";
+            sha256 = "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995"; };
+    deps = [ world ]; nativeTools = [ gnum4 ] ++ hostTools;   # GNU m4 (-P): the world's m4 is SVR4 ('bad option: -P')
+    build = ''
+      MAKEINFO=true HELP2MAN=true ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --disable-nls
+      gmake -j8 MAKEINFO=true HELP2MAN=true; gmake install MAKEINFO=true HELP2MAN=true
+      ${dropDocs}
+      ${chk ''"$out/bin/flex" --version'' "^flex 2\\.6\\.4"}
+    '';
+  };
 in {
   # libid3tag (GPL-2.0-or-later): ID3 tag reading and writing (mad, audacity, sox), Tenacity's cmake fork, shared, on zlib (compressed
   # frames) and gperf at build time, as nixpkgs. Source: the 0.16.4 release asset (nixpkgs' codeberg archive plus .github: same tree
@@ -108,7 +123,7 @@ TPROG
     '';
   };
 
-  # doxygen (GPL-2.0-only): the source documentation generator, cmake, on main's spdlog, fmt and sqlite (use_sys_*), flex, bison and the
+  # doxygen (GPL-2.0-only): the source documentation generator, cmake, on main's spdlog, fmt and sqlite (use_sys_*), flex 2.6.4, bison and the
   # store python3 at build time, as nixpkgs (with its C++20 / char8_t JavaCC switch; no GUI, no examples output). TZ=UTC: the man page's
   # date is cmake's string(TIMESTAMP) of SOURCE_DATE_EPOCH in local time, and illumos takes the zone from the host's /etc/default/init
   # when TZ is unset (WAVE7-NOTES "A build's local time zone"). The check documents a C header and reads the XML doxygen writes.
@@ -117,7 +132,7 @@ TPROG
     src = { url = "https://codeload.github.com/doxygen/doxygen/tar.gz/refs/tags/Release_1_17_0";
             sha256 = "28199ea88989fc56e302c927ef979596fe9247dd231e767ba6edcdbaa49f78aa"; };
     # gnum4: flex execs m4 from PATH (-P), and the world's is SVR4 ("bad option: -P", measured); nixpkgs' flex propagates GNU m4
-    deps = [ world spdlog fmt sqlite ]; nativeTools = [ cmake python3 flex bison gnum4 ] ++ hostTools;
+    deps = [ world spdlog fmt sqlite ]; nativeTools = [ cmake python3 flex264 bison gnum4 ] ++ hostTools;
     build = ''
       export TZ=UTC
       grep -qF 'JAVACC_CHAR_TYPE=\"unsigned char\"' CMakeLists.txt && grep -q 'CMAKE_CXX_STANDARD 17' CMakeLists.txt || { echo "FATAL: doxygen C++ std anchors" >&2; exit 1; }
@@ -129,7 +144,7 @@ TPROG
       ${cmakeB "-Duse_sys_spdlog=ON -Duse_sys_fmt=ON -Duse_sys_sqlite3=ON -DGIT_EXECUTABLE=/nonexistent/git -DCMAKE_C_FLAGS=-Wno-error=incompatible-pointer-types"}
       grep -q "^Iconv_IS_BUILT_IN:INTERNAL=1$" _b/CMakeCache.txt || { echo "FATAL: doxygen: iconv is not libc's" >&2; grep Iconv _b/CMakeCache.txt >&2; exit 1; }
       grep -q "^spdlog_DIR:PATH=${spdlog}/" _b/CMakeCache.txt && grep -q "^fmt_DIR:PATH=${fmt}/" _b/CMakeCache.txt && grep -Eq "^SQLite3_LIBRARY(_RELEASE)?:FILEPATH=${sqlite}/" _b/CMakeCache.txt \
-        && grep -q "^FLEX_EXECUTABLE:FILEPATH=${flex}/bin/flex$" _b/CMakeCache.txt && grep -q "^BISON_EXECUTABLE:FILEPATH=${bison}/bin/bison$" _b/CMakeCache.txt \
+        && grep -q "^FLEX_EXECUTABLE:FILEPATH=${flex264}/bin/flex$" _b/CMakeCache.txt && grep -q "^BISON_EXECUTABLE:FILEPATH=${bison}/bin/bison$" _b/CMakeCache.txt \
         || { echo "FATAL: doxygen: a dep not from the store" >&2; grep -E '^(spdlog_DIR|fmt_DIR|SQLite3_|FLEX_EXE|BISON_EXE)' _b/CMakeCache.txt >&2; exit 1; }
       ${chk ''"$out/bin/doxygen" --version'' "^1\\.17\\.0$"}
       grep -q '^\.TH DOXYGEN "1" "01-01-1980" "doxygen 1\.17\.0"' "$out/share/man/man1/doxygen.1" || { echo "FATAL: doxygen man date" >&2; head -1 "$out/share/man/man1/doxygen.1" >&2; exit 1; }

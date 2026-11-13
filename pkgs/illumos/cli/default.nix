@@ -74,7 +74,7 @@ let
   # drv moves; aarch64 gets them too, unused there)
   cqa = import ./c-qalias.nix (h // { inherit (c5) cmake gnupatch; inherit (c7) gmp6; inherit (c3) bzip2-bin; nasm = if gtkMeson == null then null else gtkMeson.nasm; });
   # qnew: new recipes for top-level x86 queue names (a new file, so no served drv moves); x86 only, as c10
-  c11 = if gtkMeson == null then { } else import ./c-qnew.nix (h // { inherit (c5) cmake python3; inherit (c1) flex bison gnum4; inherit (c7) fmt;
+  c11 = if gtkMeson == null then { } else import ./c-qnew.nix (h // { inherit (c5) cmake python3; inherit (c1) bison gnum4; inherit (c7) fmt;
     inherit (c10) spdlog; inherit (c2) sqlite; inherit gtkMeson; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; };
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
