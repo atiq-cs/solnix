@@ -24,7 +24,10 @@ rec {
         --shared-zlib --shared-zlib-includes=${zlib}/include --shared-zlib-libpath=${zlib}/lib/amd64 \
         --shared-openssl --shared-openssl-includes=${openssl}/include --shared-openssl-libpath=${openssl}/lib/amd64 \
         --shared-brotli --shared-brotli-includes=${nixChain.brotli}/include --shared-brotli-libpath=${nixChain.brotli}/lib/amd64
-      gmake -C out -j''${NIX_BUILD_CORES:-8} BUILDTYPE=Release
+      # builddir_name=.: gyp_node.py gives gyp an absolute output dir, so the link ran `-o <W>/.../out/Release/node` and illumos
+      # ld named bin/node's STT_FILE symbol (.SUNW_ldynsym) after it (gate B8, measured node6). gyp's own default is relative; its
+      # actions still run with builddir := $(abs_builddir). Same class as base.nix freetype's TOP_DIR=.
+      gmake -C out -j''${NIX_BUILD_CORES:-8} BUILDTYPE=Release builddir_name=.
       python3 tools/install.py install --dest-dir "" --prefix "$out"
       find "$out/share/doc" -delete 2>/dev/null || true
       "$out/bin/node" -e 'const c = require("crypto"), z = require("zlib");
