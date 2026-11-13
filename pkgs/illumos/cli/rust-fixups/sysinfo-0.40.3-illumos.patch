@@ -1,0 +1,3290 @@
+sysinfo 0.40.3: the illumos backend of sysinfo PR #1741 (https://github.com/GuillaumeGomez/sysinfo/pull/1741,
+notpeter/sysinfo dfcd8a2c, MIT; its src/ hunks less one doc comment), ported to the 0.40.3 API: the Network link speed
+(the link kstat's ifspeed), read_sockaddr without sa_len, no md_doc/is_supported.md. Applied by
+pkgs/illumos/cli/rust-extra.nix (bottom). Drop it when a sysinfo release has an illumos backend.
+
+diff -ruN a/src/common/component.rs b/src/common/component.rs
+--- a/src/common/component.rs
++++ b/src/common/component.rs
+@@ -146,6 +146,11 @@
+     ///
+     /// Returns `f32::NAN` if it failed to retrieve it.
+     ///
++    /// ## illumos
++    ///
++    /// Reads kernel sensors under `/dev/sensors/temperature` and converts supported units to
++    /// Celsius.
++    ///
+     /// ```no_run
+     /// use sysinfo::Components;
+     ///
+@@ -171,6 +176,10 @@
+     /// May be computed by `sysinfo` from kernel.
+     /// Returns `f32::NAN` if it failed to retrieve it.
+     ///
++    /// ## illumos
++    ///
++    /// Computed by `sysinfo` from the time the component is first discovered.
++    ///
+     /// ```no_run
+     /// use sysinfo::Components;
+     ///
+@@ -192,6 +201,10 @@
+     ///
+     /// Critical threshold defined by chip or kernel.
+     ///
++    /// ## illumos
++    ///
++    /// Always returns `None` because the kernel sensor ABI does not expose critical thresholds.
++    ///
+     /// ```no_run
+     /// use sysinfo::Components;
+     ///
+@@ -222,6 +235,12 @@
+     /// | ✓    | ✗    | ✓  | ✓ | `"{name} {device_model}"` |
+     /// | ✓    | ✗    | ✗  | ✓ | `"{name} temp{id}"` |
+     ///
++    /// ## illumos
++    ///
++    /// CPU core sensors under `/dev/sensors/temperature/cpu/core.N` use one-based labels,
++    /// such as `CPU 1` for `core.0`.
++    /// Other sensors use their path relative to `/dev/sensors/temperature`.
++    ///
+     /// ```no_run
+     /// use sysinfo::Components;
+     ///
+@@ -237,7 +256,7 @@
+ 
+     /// Returns the identifier of the component.
+     ///
+-    /// Note: The identifier should be reasonably unique but is provided by the kernel.
++    /// Note: The identifier should be reasonably unique and is derived from kernel sensor data.
+     /// It could change if the hardware changes or after a reboot.
+     ///
+     /// | OS | Computed ID by `sysinfo` | Example |
+@@ -245,6 +264,7 @@
+     /// | Linux/hwmon | hwmon file concatenated with the temp index. | ` hwmon0_1` if the temperature data comes from the `hwmon0/temp1_input` file. |
+     /// | Linux/thermal | thermal file name | `thermal_zone0` |
+     /// | FreeBSD | `cpu_` concatenated with the core index. | `cpu_1` for the first core. |
++    /// | illumos | `cpu_` plus the one-based core number for `cpu/core.N` sensors; otherwise the path relative to `/dev/sensors/temperature`. | `cpu_1` for `cpu/core.0` |
+     /// | macOS/arm | Serial ID reported by the HID driver. | |
+     /// | macOS/x86 | Technical ID sent to the OS (see below) | `TXCX` |
+     /// | Windows | `Computer` (same as the label) | `Computer` |
+diff -ruN a/src/common/disk.rs b/src/common/disk.rs
+--- a/src/common/disk.rs
++++ b/src/common/disk.rs
+@@ -196,6 +196,9 @@
+ 
+     /// Returns number of bytes read and written by the disk
+     ///
++    /// On illumos, I/O counters are not reported for ZFS datasets, so all fields are zero.
++    /// Pool-wide counters are not attributed to individual datasets.
++    ///
+     /// ```no_run
+     /// use sysinfo::Disks;
+     ///
+diff -ruN a/src/common/system.rs b/src/common/system.rs
+--- a/src/common/system.rs
++++ b/src/common/system.rs
+@@ -2469,6 +2469,7 @@
+             target_os = "android",
+             target_os = "macos",
+             target_os = "ios",
++            target_os = "illumos",
+         )
+     ) => {
+         use libc::pid_t;
+@@ -2965,6 +2966,7 @@
+             target_os = "android",
+             target_os = "macos",
+             target_os = "ios",
++            target_os = "illumos",
+         ) => {
+             fn inner() -> Result<Pid, Error> {
+                 unsafe { Ok(Pid(libc::getpid())) }
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -48,7 +48,8 @@
+     any(
+         target_os = "macos", target_os = "ios",
+         target_os = "linux", target_os = "android",
+-        target_os = "freebsd", target_os = "netbsd") =>
++        target_os = "freebsd", target_os = "netbsd",
++        target_os = "illumos") =>
+     {
+         mod unix;
+         #[allow(unused_imports)]
+diff -ruN a/src/unix/illumos/component.rs b/src/unix/illumos/component.rs
+--- a/src/unix/illumos/component.rs
++++ b/src/unix/illumos/component.rs
+@@ -0,0 +1,252 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use std::fs::{File, read_dir};
++use std::os::fd::AsRawFd;
++use std::path::{Path, PathBuf};
++
++use crate::{Component, Error};
++
++const SENSOR_ROOT: &str = "/dev/sensors/temperature";
++
++// Definitions from <sys/sensors.h>. They are not currently exposed by libc.
++const SENSOR_KIND_TEMPERATURE: u64 = 0x01;
++
++const SENSOR_UNIT_CELSIUS: u32 = 0x01;
++const SENSOR_UNIT_FAHRENHEIT: u32 = 0x02;
++const SENSOR_UNIT_KELVIN: u32 = 0x03;
++
++const SENSOR_IOCTL: i32 = ('s' as i32) << 24 | ('e' as i32) << 16 | ('n' as i32) << 8;
++const SENSOR_IOCTL_KIND: i32 = SENSOR_IOCTL | 0x01;
++const SENSOR_IOCTL_SCALAR: i32 = SENSOR_IOCTL | 0x02;
++
++#[repr(C)]
++#[derive(Default)]
++struct SensorIoctlKind {
++    kind: u64,
++    derive: u64,
++}
++
++#[repr(C)]
++#[derive(Default)]
++struct SensorIoctlScalar {
++    unit: u32,
++    granularity: i32,
++    precision: u32,
++    padding: u32,
++    value: i64,
++}
++
++const _: [(); 16] = [(); std::mem::size_of::<SensorIoctlKind>()];
++const _: [(); 24] = [(); std::mem::size_of::<SensorIoctlScalar>()];
++
++pub(crate) struct ComponentInner {
++    path: PathBuf,
++    id: String,
++    label: String,
++    temperature: Option<f32>,
++    max: Option<f32>,
++    pub(crate) updated: bool,
++}
++
++impl ComponentInner {
++    fn new(path: PathBuf, root: &Path) -> Option<Self> {
++        let temperature = read_temperature(&path)?;
++        let (id, label) = component_names(&path, root);
++        Some(Self {
++            path,
++            label,
++            id,
++            temperature: Some(temperature),
++            max: Some(temperature),
++            updated: true,
++        })
++    }
++
++    pub(crate) fn temperature(&self) -> Option<f32> {
++        self.temperature
++    }
++
++    pub(crate) fn max(&self) -> Option<f32> {
++        self.max
++    }
++
++    pub(crate) fn critical(&self) -> Option<f32> {
++        None
++    }
++
++    pub(crate) fn label(&self) -> &str {
++        &self.label
++    }
++
++    pub(crate) fn id(&self) -> Option<&str> {
++        Some(&self.id)
++    }
++
++    pub(crate) fn refresh(&mut self) {
++        self.temperature = read_temperature(&self.path);
++        if let Some(temperature) = self.temperature {
++            self.max = Some(self.max.map_or(temperature, |max| max.max(temperature)));
++        }
++    }
++}
++
++pub(crate) struct ComponentsInner {
++    pub(crate) components: Vec<Component>,
++}
++
++impl ComponentsInner {
++    pub(crate) fn new() -> Result<Self, Error> {
++        Ok(Self {
++            components: Vec::new(),
++        })
++    }
++
++    pub(crate) fn list(&self) -> &[Component] {
++        &self.components
++    }
++
++    pub(crate) fn list_mut(&mut self) -> &mut [Component] {
++        &mut self.components
++    }
++
++    pub(crate) fn refresh(&mut self) {
++        let root = Path::new(SENSOR_ROOT);
++        let mut paths = Vec::new();
++        sensor_paths(root, &mut paths);
++        paths.sort_unstable();
++
++        for path in paths {
++            if let Some(component) = self
++                .components
++                .iter_mut()
++                .find(|component| component.inner.path == path)
++            {
++                component.refresh();
++                component.inner.updated = true;
++            } else if let Some(inner) = ComponentInner::new(path, root) {
++                self.components.push(Component { inner });
++            }
++        }
++    }
++}
++
++fn component_names(path: &Path, root: &Path) -> (String, String) {
++    let id = path
++        .strip_prefix(root)
++        .unwrap_or(path)
++        .to_string_lossy()
++        .into_owned();
++    if let Some(core_name) = id.strip_prefix("cpu/core.")
++        && let Ok(core) = core_name.parse::<usize>()
++        && core_name == core.to_string()
++        && let Some(number) = core.checked_add(1)
++    {
++        return (format!("cpu_{number}"), format!("CPU {number}"));
++    }
++    (id.clone(), id)
++}
++
++fn sensor_paths(directory: &Path, paths: &mut Vec<PathBuf>) {
++    let Ok(entries) = read_dir(directory) else {
++        return;
++    };
++    for entry in entries.flatten() {
++        let path = entry.path();
++        match entry.file_type() {
++            Ok(file_type) if file_type.is_dir() => sensor_paths(&path, paths),
++            Ok(_) => paths.push(path),
++            Err(_) => {}
++        }
++    }
++}
++
++fn read_temperature(path: &Path) -> Option<f32> {
++    let file = File::open(path).ok()?;
++    let mut kind = SensorIoctlKind::default();
++    // SAFETY: The file descriptor is valid for the duration of the call and `kind` has the exact
++    // layout expected by SENSOR_IOCTL_KIND.
++    if unsafe { libc::ioctl(file.as_raw_fd(), SENSOR_IOCTL_KIND, &mut kind) } != 0
++        || kind.kind != SENSOR_KIND_TEMPERATURE
++    {
++        return None;
++    }
++
++    let mut scalar = SensorIoctlScalar::default();
++    // SAFETY: The file descriptor is valid for the duration of the call and `scalar` has the exact
++    // layout expected by SENSOR_IOCTL_SCALAR.
++    if unsafe { libc::ioctl(file.as_raw_fd(), SENSOR_IOCTL_SCALAR, &mut scalar) } != 0 {
++        return None;
++    }
++    temperature_from_scalar(&scalar)
++}
++
++fn temperature_from_scalar(scalar: &SensorIoctlScalar) -> Option<f32> {
++    let mut value = scalar.value as f64;
++    if scalar.granularity > 1 {
++        value /= f64::from(scalar.granularity);
++    } else if scalar.granularity < -1 {
++        value *= f64::from(scalar.granularity).abs();
++    }
++
++    let celsius = match scalar.unit {
++        SENSOR_UNIT_CELSIUS => value,
++        SENSOR_UNIT_FAHRENHEIT => (value - 32.0) * 5.0 / 9.0,
++        SENSOR_UNIT_KELVIN => value - 273.15,
++        _ => return None,
++    };
++    let celsius = celsius as f32;
++    celsius.is_finite().then_some(celsius)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn scalar(unit: u32, granularity: i32, value: i64) -> SensorIoctlScalar {
++        SensorIoctlScalar {
++            unit,
++            granularity,
++            value,
++            ..SensorIoctlScalar::default()
++        }
++    }
++
++    #[test]
++    fn converts_sensor_scalars_to_celsius() {
++        assert_eq!(
++            temperature_from_scalar(&scalar(SENSOR_UNIT_CELSIUS, 10, 425)),
++            Some(42.5)
++        );
++        assert_eq!(
++            temperature_from_scalar(&scalar(SENSOR_UNIT_CELSIUS, -2, 21)),
++            Some(42.0)
++        );
++        assert_eq!(
++            temperature_from_scalar(&scalar(SENSOR_UNIT_FAHRENHEIT, 1, 212)),
++            Some(100.0)
++        );
++        assert_eq!(
++            temperature_from_scalar(&scalar(SENSOR_UNIT_KELVIN, 100, 27315)),
++            Some(0.0)
++        );
++        assert_eq!(temperature_from_scalar(&scalar(0, 1, 42)), None);
++    }
++
++    #[test]
++    fn refreshes_component_list() {
++        let mut components = crate::Components::new_with_refreshed_list().unwrap();
++        assert!(has_unique_ids(&components));
++
++        components.refresh(true);
++        assert!(has_unique_ids(&components));
++    }
++
++    fn has_unique_ids(components: &[Component]) -> bool {
++        components.iter().enumerate().all(|(index, component)| {
++            component.id().is_some()
++                && !components[..index]
++                    .iter()
++                    .any(|other| other.id() == component.id())
++        })
++    }
++}
+diff -ruN a/src/unix/illumos/cpu.rs b/src/unix/illumos/cpu.rs
+--- a/src/unix/illumos/cpu.rs
++++ b/src/unix/illumos/cpu.rs
+@@ -0,0 +1,186 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use std::ffi::CStr;
++use std::ops::RangeInclusive;
++
++use crate::{Cpu, CpuRefreshKind};
++
++use super::kstat::KstatReader;
++
++const CPU_MODULE: &CStr = c"cpu";
++const CPU_INFO_MODULE: &CStr = c"cpu_info";
++const CPU_SYS_NAME: &CStr = c"sys";
++
++pub(super) fn possible_cpu_ids() -> RangeInclusive<i32> {
++    let max_id =
++        unsafe { libc::sysconf(libc::_SC_CPUID_MAX) }.clamp(-1, i32::MAX as libc::c_long) as i32;
++    0..=max_id
++}
++
++pub(crate) struct CpusWrapper {
++    pub(crate) global_cpu_usage: f32,
++    pub(crate) cpus: Vec<Cpu>,
++    cpu_ids: Vec<i32>,
++    old_times: Vec<CpuTimes>,
++    got_frequency: bool,
++}
++
++#[derive(Clone, Copy, Default)]
++struct CpuTimes {
++    user: u64,
++    kernel: u64,
++    wait: u64,
++    idle: u64,
++}
++
++impl CpuTimes {
++    fn usage_since(self, old: Self) -> f32 {
++        let user = self.user.saturating_sub(old.user);
++        let kernel = self.kernel.saturating_sub(old.kernel);
++        let wait = self.wait.saturating_sub(old.wait);
++        let idle = self.idle.saturating_sub(old.idle);
++        let total = user
++            .saturating_add(kernel)
++            .saturating_add(wait)
++            .saturating_add(idle);
++        if total == 0 {
++            0.
++        } else {
++            (user.saturating_add(kernel) as f32 * 100.) / total as f32
++        }
++    }
++
++    fn add(&mut self, other: Self) {
++        self.user = self.user.saturating_add(other.user);
++        self.kernel = self.kernel.saturating_add(other.kernel);
++        self.wait = self.wait.saturating_add(other.wait);
++        self.idle = self.idle.saturating_add(other.idle);
++    }
++}
++
++impl CpusWrapper {
++    pub(crate) fn new() -> Self {
++        Self {
++            global_cpu_usage: 0.,
++            cpus: Vec::new(),
++            cpu_ids: Vec::new(),
++            old_times: Vec::new(),
++            got_frequency: false,
++        }
++    }
++
++    pub(crate) fn refresh(&mut self, refresh_kind: CpuRefreshKind) {
++        let Some(kstat) = KstatReader::new() else {
++            sysinfo_debug!("failed to open libkstat");
++            return;
++        };
++
++        if self.cpus.is_empty() {
++            self.populate(&kstat, refresh_kind.frequency());
++        } else if refresh_kind.frequency() && !self.got_frequency {
++            self.refresh_frequencies(&kstat);
++        }
++
++        if refresh_kind.usage() {
++            self.refresh_usage(&kstat);
++        }
++    }
++
++    fn populate(&mut self, kstat: &KstatReader, include_frequency: bool) {
++        for id in possible_cpu_ids() {
++            let Some(info) = kstat.lookup(Some(CPU_INFO_MODULE), id, None) else {
++                continue;
++            };
++            let vendor_id = info
++                .string("vendor_id")
++                .unwrap_or_else(|| "unknown".to_owned());
++            let brand = info
++                .string("brand")
++                .or_else(|| info.string("implementation"))
++                .unwrap_or_else(|| "unknown".to_owned());
++            let frequency = if include_frequency {
++                info.integer("clock_MHz").unwrap_or(0)
++            } else {
++                0
++            };
++            self.cpu_ids.push(id);
++            self.old_times.push(CpuTimes::default());
++            self.cpus.push(Cpu {
++                inner: CpuInner {
++                    cpu_usage: 0.,
++                    name: format!("cpu{id}"),
++                    vendor_id,
++                    brand,
++                    frequency,
++                },
++            });
++        }
++        self.got_frequency = include_frequency;
++    }
++
++    fn refresh_frequencies(&mut self, kstat: &KstatReader) {
++        for (&id, cpu) in self.cpu_ids.iter().zip(&mut self.cpus) {
++            if let Some(info) = kstat.lookup(Some(CPU_INFO_MODULE), id, None) {
++                cpu.inner.frequency = info.integer("clock_MHz").unwrap_or(0);
++            }
++        }
++        self.got_frequency = true;
++    }
++
++    fn refresh_usage(&mut self, kstat: &KstatReader) {
++        let mut global_new = CpuTimes::default();
++        let mut global_old = CpuTimes::default();
++
++        for ((&id, old), cpu) in self
++            .cpu_ids
++            .iter()
++            .zip(&mut self.old_times)
++            .zip(&mut self.cpus)
++        {
++            let Some(stat) = kstat.lookup(Some(CPU_MODULE), id, Some(CPU_SYS_NAME)) else {
++                continue;
++            };
++            let new = CpuTimes {
++                user: stat.integer("cpu_ticks_user").unwrap_or(0),
++                kernel: stat.integer("cpu_ticks_kernel").unwrap_or(0),
++                wait: stat.integer("cpu_ticks_wait").unwrap_or(0),
++                idle: stat.integer("cpu_ticks_idle").unwrap_or(0),
++            };
++            cpu.inner.cpu_usage = new.usage_since(*old);
++            global_new.add(new);
++            global_old.add(*old);
++            *old = new;
++        }
++        self.global_cpu_usage = global_new.usage_since(global_old);
++    }
++}
++
++pub(crate) struct CpuInner {
++    pub(crate) cpu_usage: f32,
++    name: String,
++    pub(crate) vendor_id: String,
++    pub(crate) brand: String,
++    pub(crate) frequency: u64,
++}
++
++impl CpuInner {
++    pub(crate) fn cpu_usage(&self) -> f32 {
++        self.cpu_usage
++    }
++
++    pub(crate) fn name(&self) -> &str {
++        &self.name
++    }
++
++    pub(crate) fn frequency(&self) -> u64 {
++        self.frequency
++    }
++
++    pub(crate) fn vendor_id(&self) -> &str {
++        &self.vendor_id
++    }
++
++    pub(crate) fn brand(&self) -> &str {
++        &self.brand
++    }
++}
+diff -ruN a/src/unix/illumos/disk.rs b/src/unix/illumos/disk.rs
+--- a/src/unix/illumos/disk.rs
++++ b/src/unix/illumos/disk.rs
+@@ -0,0 +1,425 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use std::ffi::{CStr, CString, OsStr, OsString};
++use std::io::{BufRead, BufReader};
++use std::os::unix::ffi::{OsStrExt, OsStringExt};
++use std::os::unix::fs::MetadataExt;
++use std::path::{Path, PathBuf};
++
++use crate::{Disk, DiskKind, DiskRefreshKind, DiskUsage, DisksInner, Error};
++
++use super::{ffi, kstat::KstatReader};
++
++const PSEUDO_FILE_SYSTEMS: &[&str] = &[
++    "autofs", "bootfs", "ctfs", "dev", "devfs", "fd", "lofs", "mntfs", "objfs", "proc", "sharefs",
++    "tmpfs",
++];
++const SOLID_STATE_PROPERTY: &CStr = c"device-solid-state";
++const ROTATIONAL_PROPERTY: &CStr = c"device-rotational";
++const REMOVABLE_PROPERTY: &CStr = c"removable-media";
++
++#[derive(Debug)]
++struct IoSource {
++    module: CString,
++    instance: i32,
++    name: CString,
++}
++
++#[derive(Debug)]
++struct DeviceInfo {
++    io_source: IoSource,
++    kind: DiskKind,
++    is_removable: bool,
++}
++
++struct DevInfoNode {
++    node: *mut ffi::DevInfoNode,
++}
++
++impl DevInfoNode {
++    fn new(path: &CStr) -> Option<Self> {
++        // SAFETY: `path` is NUL-terminated and the returned snapshot handle is checked before use.
++        let node = unsafe { ffi::di_init(path.as_ptr(), ffi::DINFO_PROP) };
++        (!node.is_null()).then_some(Self { node })
++    }
++
++    fn driver_name(&self) -> Option<&CStr> {
++        // SAFETY: `node` remains valid for this snapshot's lifetime. libdevinfo owns the returned
++        // NUL-terminated string.
++        let driver = unsafe { ffi::di_driver_name(self.node) };
++        (!driver.is_null()).then(|| unsafe { CStr::from_ptr(driver) })
++    }
++
++    fn instance(&self) -> i32 {
++        // SAFETY: `node` remains valid for this snapshot's lifetime.
++        unsafe { ffi::di_instance(self.node) }
++    }
++
++    fn integer_property(&self, name: &CStr) -> Option<i32> {
++        let mut value = std::ptr::null_mut();
++        // SAFETY: The node and property name are valid, and `value` points to writable storage.
++        let count = unsafe {
++            ffi::di_prop_lookup_ints(ffi::DDI_DEV_T_ANY, self.node, name.as_ptr(), &mut value)
++        };
++        if count < 1 || value.is_null() {
++            None
++        } else {
++            // SAFETY: A positive count means libdevinfo returned at least one integer. The data is
++            // owned by the snapshot and remains valid for its lifetime.
++            Some(unsafe { *value })
++        }
++    }
++
++    fn has_property(&self, name: &CStr) -> bool {
++        let mut value = std::ptr::null_mut();
++        // Boolean properties return zero entries when present and -1 when absent.
++        // SAFETY: The node and property name are valid, and `value` points to writable storage.
++        unsafe {
++            ffi::di_prop_lookup_ints(ffi::DDI_DEV_T_ANY, self.node, name.as_ptr(), &mut value) >= 0
++        }
++    }
++}
++
++impl Drop for DevInfoNode {
++    fn drop(&mut self) {
++        // SAFETY: `node` was returned by `di_init` and is finalized exactly once here.
++        unsafe { ffi::di_fini(self.node) };
++    }
++}
++
++#[derive(Debug)]
++pub(crate) struct DiskInner {
++    type_: DiskKind,
++    name: OsString,
++    c_mount_point: Vec<libc::c_char>,
++    device_id: Option<u64>,
++    mount_point: PathBuf,
++    total_space: u64,
++    available_space: u64,
++    pub(crate) file_system: OsString,
++    is_removable: bool,
++    is_read_only: bool,
++    io_source: Option<IoSource>,
++    read_bytes: u64,
++    old_read_bytes: u64,
++    written_bytes: u64,
++    old_written_bytes: u64,
++    updated: bool,
++}
++
++#[cfg(test)]
++impl Default for DiskInner {
++    fn default() -> Self {
++        Self {
++            type_: DiskKind::Unknown(-1),
++            name: OsString::new(),
++            c_mount_point: Vec::new(),
++            device_id: None,
++            mount_point: PathBuf::new(),
++            total_space: 0,
++            available_space: 0,
++            file_system: OsString::new(),
++            is_removable: false,
++            is_read_only: false,
++            io_source: None,
++            read_bytes: 0,
++            old_read_bytes: 0,
++            written_bytes: 0,
++            old_written_bytes: 0,
++            updated: false,
++        }
++    }
++}
++
++impl DiskInner {
++    pub(crate) fn kind(&self) -> DiskKind {
++        self.type_
++    }
++
++    pub(crate) fn name(&self) -> &OsStr {
++        &self.name
++    }
++
++    pub(crate) fn id(&self) -> Option<u64> {
++        self.device_id
++    }
++
++    pub(crate) fn file_system(&self) -> &OsStr {
++        &self.file_system
++    }
++
++    pub(crate) fn mount_point(&self) -> &Path {
++        &self.mount_point
++    }
++
++    pub(crate) fn total_space(&self) -> u64 {
++        self.total_space
++    }
++
++    pub(crate) fn available_space(&self) -> u64 {
++        self.available_space
++    }
++
++    pub(crate) fn is_removable(&self) -> bool {
++        self.is_removable
++    }
++
++    pub(crate) fn is_read_only(&self) -> bool {
++        self.is_read_only
++    }
++
++    pub(crate) fn refresh_specifics(&mut self, refresh_kind: DiskRefreshKind) -> bool {
++        // ZFS kstats describe an entire pool, while each `Disk` represents a mounted dataset.
++        // Associating pool counters with every dataset would duplicate and mislabel the I/O.
++        let is_zfs = self.file_system.as_bytes() == b"zfs";
++        let needs_io_source = refresh_kind.io_usage() && self.io_source.is_none() && !is_zfs;
++        let needs_kind = refresh_kind.kind() && self.type_ == DiskKind::Unknown(-1) && !is_zfs;
++        if (needs_io_source || needs_kind)
++            && let Some(info) = device_info(&self.name)
++        {
++            if needs_io_source {
++                self.io_source = Some(info.io_source);
++            }
++            if needs_kind {
++                self.type_ = info.kind;
++                self.is_removable = info.is_removable;
++            }
++        }
++        if refresh_kind.storage() {
++            self.refresh_storage();
++        }
++        if refresh_kind.io_usage() {
++            self.refresh_io_usage();
++        }
++        true
++    }
++
++    pub(crate) fn usage(&self) -> DiskUsage {
++        DiskUsage {
++            read_bytes: self.read_bytes.saturating_sub(self.old_read_bytes),
++            total_read_bytes: self.read_bytes,
++            written_bytes: self.written_bytes.saturating_sub(self.old_written_bytes),
++            total_written_bytes: self.written_bytes,
++        }
++    }
++
++    fn refresh_storage(&mut self) {
++        let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
++        if unsafe { libc::statvfs(self.c_mount_point.as_ptr(), stat.as_mut_ptr()) } != 0 {
++            return;
++        }
++        let stat = unsafe { stat.assume_init() };
++        let block_size = stat.f_frsize;
++        self.total_space = stat.f_blocks.saturating_mul(block_size);
++        self.available_space = stat.f_bavail.saturating_mul(block_size);
++        self.is_read_only = stat.f_flag & libc::ST_RDONLY != 0;
++    }
++
++    fn refresh_io_usage(&mut self) {
++        self.old_read_bytes = self.read_bytes;
++        self.old_written_bytes = self.written_bytes;
++        let Some(source) = self.io_source.as_ref() else {
++            return;
++        };
++        let Some(io) = KstatReader::new().and_then(|kstat| {
++            kstat.read_io(Some(&source.module), source.instance, Some(&source.name))
++        }) else {
++            return;
++        };
++        self.read_bytes = io.nread;
++        self.written_bytes = io.nwritten;
++    }
++}
++
++impl DisksInner {
++    pub(crate) fn new() -> Result<Self, Error> {
++        Ok(Self {
++            disks: Vec::with_capacity(8),
++        })
++    }
++
++    pub(crate) fn refresh_specifics(
++        &mut self,
++        remove_not_listed_disks: bool,
++        refresh_kind: DiskRefreshKind,
++    ) {
++        for disk in &mut self.disks {
++            disk.inner.updated = false;
++        }
++
++        let Ok(mnttab) = std::fs::File::open("/etc/mnttab") else {
++            return;
++        };
++        for line in BufReader::new(mnttab).lines().map_while(Result::ok) {
++            let mut fields = line.split_whitespace();
++            let (Some(name), Some(mount_point), Some(file_system), Some(options)) =
++                (fields.next(), fields.next(), fields.next(), fields.next())
++            else {
++                continue;
++            };
++            if PSEUDO_FILE_SYSTEMS.contains(&file_system) {
++                continue;
++            }
++
++            let name = unescape_mnttab(name);
++            let mount_point = PathBuf::from(OsString::from_vec(unescape_mnttab(mount_point)));
++            let file_system = OsString::from(file_system);
++            if let Some(disk) = self
++                .disks
++                .iter_mut()
++                .find(|disk| disk.inner.mount_point == mount_point)
++            {
++                let device_changed = disk.inner.name.as_bytes() != name
++                    || disk.inner.file_system.as_bytes() != file_system.as_bytes();
++                disk.inner.updated = true;
++                disk.inner.name = OsString::from_vec(name);
++                disk.inner.file_system = file_system;
++                if device_changed {
++                    disk.inner.io_source = None;
++                    disk.inner.type_ = DiskKind::Unknown(-1);
++                    disk.inner.is_removable = false;
++                }
++                disk.inner.is_read_only = options.split(',').any(|option| option == "ro");
++                disk.inner.refresh_specifics(refresh_kind);
++                continue;
++            }
++
++            let mut c_mount_point = mount_point.as_os_str().as_encoded_bytes().to_vec();
++            if c_mount_point.contains(&0) {
++                continue;
++            }
++            c_mount_point.push(0);
++            let mut inner = DiskInner {
++                type_: DiskKind::Unknown(-1),
++                name: OsString::from_vec(name),
++                c_mount_point: c_mount_point
++                    .into_iter()
++                    .map(|byte| byte as libc::c_char)
++                    .collect(),
++                device_id: std::fs::metadata(&mount_point).ok().map(|meta| meta.dev()),
++                mount_point,
++                total_space: 0,
++                available_space: 0,
++                file_system,
++                is_removable: false,
++                is_read_only: options.split(',').any(|option| option == "ro"),
++                io_source: None,
++                read_bytes: 0,
++                old_read_bytes: 0,
++                written_bytes: 0,
++                old_written_bytes: 0,
++                updated: true,
++            };
++            inner.refresh_specifics(refresh_kind);
++            self.disks.push(Disk { inner });
++        }
++
++        if remove_not_listed_disks {
++            self.disks.retain(|disk| disk.inner.updated);
++        }
++    }
++
++    pub(crate) fn list(&self) -> &[Disk] {
++        &self.disks
++    }
++
++    pub(crate) fn list_mut(&mut self) -> &mut [Disk] {
++        &mut self.disks
++    }
++}
++
++fn device_info(name: &OsStr) -> Option<DeviceInfo> {
++    let canonical = std::fs::canonicalize(Path::new(name)).ok()?;
++    let devfs_path = devfs_path(canonical.as_os_str().as_bytes())?;
++    let node = DevInfoNode::new(&devfs_path)?;
++    let driver = node.driver_name()?;
++    let instance = node.instance();
++    if instance < 0 {
++        return None;
++    }
++
++    let mut kstat_name = driver.to_bytes().to_vec();
++    kstat_name.extend_from_slice(instance.to_string().as_bytes());
++    let kind = match (
++        node.integer_property(SOLID_STATE_PROPERTY),
++        node.integer_property(ROTATIONAL_PROPERTY),
++    ) {
++        (Some(value), _) if value != 0 => DiskKind::SSD,
++        (_, Some(value)) if value != 0 => DiskKind::HDD,
++        _ => DiskKind::Unknown(-1),
++    };
++
++    Some(DeviceInfo {
++        io_source: IoSource {
++            module: driver.to_owned(),
++            instance,
++            name: CString::new(kstat_name).ok()?,
++        },
++        kind,
++        is_removable: node.has_property(REMOVABLE_PROPERTY),
++    })
++}
++
++fn devfs_path(path: &[u8]) -> Option<CString> {
++    let path = path.strip_prefix(b"/devices")?;
++    let minor = path.iter().rposition(|byte| *byte == b':')?;
++    CString::new(&path[..minor]).ok()
++}
++
++fn unescape_mnttab(value: &str) -> Vec<u8> {
++    let bytes = value.as_bytes();
++    let mut output = Vec::with_capacity(bytes.len());
++    let mut index = 0;
++    while index < bytes.len() {
++        if bytes[index] == b'\\'
++            && index + 3 < bytes.len()
++            && bytes[index + 1..=index + 3].iter().all(u8::is_ascii_digit)
++        {
++            let value =
++                (bytes[index + 1] - b'0') * 64 + (bytes[index + 2] - b'0') * 8 + bytes[index + 3]
++                    - b'0';
++            output.push(value);
++            index += 4;
++        } else {
++            output.push(bytes[index]);
++            index += 1;
++        }
++    }
++    output
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{DiskInner, PSEUDO_FILE_SYSTEMS, devfs_path};
++    use crate::{DiskRefreshKind, DiskUsage};
++
++    #[test]
++    fn tmpfs_is_not_a_disk() {
++        assert!(PSEUDO_FILE_SYSTEMS.contains(&"tmpfs"));
++    }
++
++    #[test]
++    fn zfs_dataset_does_not_report_pool_io() {
++        let mut disk = DiskInner {
++            name: "rpool/example".into(),
++            file_system: "zfs".into(),
++            ..DiskInner::default()
++        };
++
++        disk.refresh_specifics(DiskRefreshKind::nothing().with_io_usage());
++
++        assert!(disk.io_source.is_none());
++        assert_eq!(disk.usage(), DiskUsage::default());
++    }
++
++    #[test]
++    fn extracts_devfs_node_path() {
++        assert_eq!(
++            devfs_path(b"/devices/pci@0,0/pci1af4,2@3/blkdev@0,0:a")
++                .as_deref()
++                .map(|path| path.to_bytes()),
++            Some(b"/pci@0,0/pci1af4,2@3/blkdev@0,0".as_slice()),
++        );
++        assert!(devfs_path(b"/dev/dsk/c1t0d0s0").is_none());
++    }
++}
+diff -ruN a/src/unix/illumos/ffi.rs b/src/unix/illumos/ffi.rs
+--- a/src/unix/illumos/ffi.rs
++++ b/src/unix/illumos/ffi.rs
+@@ -0,0 +1,173 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++#[cfg(any(feature = "disk", feature = "network", feature = "system"))]
++use libc::c_void;
++use libc::{c_char, c_int};
++
++#[cfg(feature = "system")]
++pub(crate) const SC_LIST: c_int = 2;
++#[cfg(feature = "system")]
++pub(crate) const SC_GETNSWP: c_int = 4;
++#[cfg(feature = "system")]
++pub(crate) const ST_INDEL: c_int = 0x01;
++
++#[repr(C)]
++#[cfg(feature = "system")]
++pub(crate) struct SwapEntry {
++    pub(crate) path: *mut c_char,
++    pub(crate) start: libc::off_t,
++    pub(crate) length: libc::off_t,
++    pub(crate) pages: libc::c_long,
++    pub(crate) free: libc::c_long,
++    pub(crate) flags: c_int,
++}
++
++#[repr(C)]
++#[cfg(feature = "system")]
++pub(crate) struct SwapTable {
++    pub(crate) count: c_int,
++    pub(crate) entries: [SwapEntry; 0],
++}
++
++#[cfg(feature = "system")]
++const _: [(); 48] = [(); std::mem::size_of::<SwapEntry>()];
++#[cfg(feature = "system")]
++const _: [(); 8] = [(); std::mem::size_of::<SwapTable>()];
++
++#[repr(C)]
++#[cfg(any(feature = "disk", feature = "network", feature = "system"))]
++pub(crate) struct KstatCtl {
++    _private: [u8; 0],
++}
++
++#[repr(C)]
++#[cfg(any(feature = "disk", feature = "network", feature = "system"))]
++pub(crate) struct Kstat {
++    _private: [u8; 0],
++}
++
++#[repr(C)]
++#[cfg(any(feature = "disk", feature = "gpu"))]
++pub(crate) struct DevInfoNode {
++    _private: [u8; 0],
++}
++
++#[cfg(any(feature = "disk", feature = "gpu"))]
++pub(crate) const DINFO_PROP: u32 = 0xdf04;
++
++#[cfg(feature = "gpu")]
++pub(crate) const DINFO_SUBTREE: u32 = 0xdf01;
++
++#[cfg(any(feature = "disk", feature = "gpu"))]
++pub(crate) const DDI_DEV_T_ANY: libc::dev_t = (-2_i64) as libc::dev_t;
++
++#[repr(C)]
++#[derive(Copy, Clone)]
++#[cfg(any(feature = "network", feature = "system"))]
++pub(crate) struct KstatString {
++    pub(crate) ptr: *const c_char,
++    pub(crate) len: u32,
++    pub(crate) _padding: u32,
++}
++
++#[repr(C)]
++#[derive(Copy, Clone)]
++#[cfg(any(feature = "network", feature = "system"))]
++pub(crate) union KstatValue {
++    pub(crate) chars: [c_char; 16],
++    pub(crate) i32_: i32,
++    pub(crate) u32_: u32,
++    pub(crate) i64_: i64,
++    pub(crate) u64_: u64,
++    pub(crate) string: KstatString,
++}
++
++#[repr(C)]
++#[cfg(any(feature = "network", feature = "system"))]
++pub(crate) struct KstatNamed {
++    pub(crate) name: [c_char; 31],
++    pub(crate) data_type: u8,
++    pub(crate) value: KstatValue,
++}
++
++#[cfg(feature = "system")]
++pub(crate) const KSTAT_DATA_CHAR: u8 = 0;
++#[cfg(any(feature = "network", feature = "system"))]
++pub(crate) const KSTAT_DATA_INT32: u8 = 1;
++#[cfg(any(feature = "network", feature = "system"))]
++pub(crate) const KSTAT_DATA_UINT32: u8 = 2;
++#[cfg(any(feature = "network", feature = "system"))]
++pub(crate) const KSTAT_DATA_INT64: u8 = 3;
++#[cfg(any(feature = "network", feature = "system"))]
++pub(crate) const KSTAT_DATA_UINT64: u8 = 4;
++#[cfg(feature = "system")]
++pub(crate) const KSTAT_DATA_STRING: u8 = 9;
++
++#[repr(C)]
++#[cfg(feature = "disk")]
++pub(crate) struct KstatIo {
++    pub(crate) nread: u64,
++    pub(crate) nwritten: u64,
++    pub(crate) reads: u32,
++    pub(crate) writes: u32,
++    pub(crate) wtime: i64,
++    pub(crate) wlentime: i64,
++    pub(crate) wlastupdate: i64,
++    pub(crate) rtime: i64,
++    pub(crate) rlentime: i64,
++    pub(crate) rlastupdate: i64,
++    pub(crate) wcnt: u32,
++    pub(crate) rcnt: u32,
++}
++
++#[cfg(feature = "disk")]
++const _: [(); 80] = [(); std::mem::size_of::<KstatIo>()];
++
++#[cfg(any(feature = "disk", feature = "network", feature = "system"))]
++#[link(name = "kstat")]
++unsafe extern "C" {
++    pub(crate) fn kstat_open() -> *mut KstatCtl;
++    pub(crate) fn kstat_close(ctl: *mut KstatCtl) -> c_int;
++    pub(crate) fn kstat_lookup(
++        ctl: *mut KstatCtl,
++        module: *const c_char,
++        instance: c_int,
++        name: *const c_char,
++    ) -> *mut Kstat;
++    pub(crate) fn kstat_read(ctl: *mut KstatCtl, stat: *mut Kstat, data: *mut c_void) -> c_int;
++    #[cfg(any(feature = "network", feature = "system"))]
++    pub(crate) fn kstat_data_lookup(stat: *mut Kstat, name: *const c_char) -> *mut c_void;
++}
++
++#[cfg(any(feature = "disk", feature = "gpu"))]
++#[link(name = "devinfo")]
++unsafe extern "C" {
++    pub(crate) fn di_init(path: *const c_char, flags: u32) -> *mut DevInfoNode;
++    pub(crate) fn di_fini(node: *mut DevInfoNode);
++    #[cfg(feature = "gpu")]
++    pub(crate) fn di_child_node(node: *mut DevInfoNode) -> *mut DevInfoNode;
++    #[cfg(feature = "gpu")]
++    pub(crate) fn di_sibling_node(node: *mut DevInfoNode) -> *mut DevInfoNode;
++    #[cfg(feature = "disk")]
++    pub(crate) fn di_driver_name(node: *mut DevInfoNode) -> *const c_char;
++    #[cfg(feature = "disk")]
++    pub(crate) fn di_instance(node: *mut DevInfoNode) -> c_int;
++    pub(crate) fn di_prop_lookup_ints(
++        dev: libc::dev_t,
++        node: *mut DevInfoNode,
++        name: *const c_char,
++        data: *mut *mut c_int,
++    ) -> c_int;
++    #[cfg(feature = "gpu")]
++    pub(crate) fn di_prop_lookup_strings(
++        dev: libc::dev_t,
++        node: *mut DevInfoNode,
++        name: *const c_char,
++        data: *mut *mut c_char,
++    ) -> c_int;
++}
++
++unsafe extern "C" {
++    #[cfg(feature = "system")]
++    pub(crate) fn swapctl(command: c_int, argument: *mut c_void) -> c_int;
++}
+diff -ruN a/src/unix/illumos/gpu.rs b/src/unix/illumos/gpu.rs
+--- a/src/unix/illumos/gpu.rs
++++ b/src/unix/illumos/gpu.rs
+@@ -0,0 +1,341 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use std::ffi::CStr;
++use std::fs::File;
++use std::io::{BufRead, BufReader};
++
++use crate::{Gpu, PCI};
++
++use super::ffi;
++
++const CLASS_CODE_PROPERTY: &CStr = c"class-code";
++const DEVICE_ID_PROPERTY: &CStr = c"device-id";
++const MODEL_PROPERTY: &CStr = c"model";
++const REG_PROPERTY: &CStr = c"reg";
++const VENDOR_ID_PROPERTY: &CStr = c"vendor-id";
++
++const PCI_ID_PATHS: &[&str] = &[
++    "/usr/share/hwdata/pci.ids",
++    "/usr/share/pci.ids",
++    "/usr/share/lib/pci/pci.ids",
++];
++
++pub(crate) struct GpusInner {
++    pub(crate) gpus: Vec<Gpu>,
++}
++
++pub(crate) struct GpuInner {
++    pci: PCI,
++    vendor: Option<String>,
++    model: Option<String>,
++    pub(crate) updated: bool,
++}
++
++impl GpuInner {
++    pub(crate) fn pci(&self) -> &PCI {
++        &self.pci
++    }
++
++    pub(crate) fn vendor(&self) -> Option<&str> {
++        self.vendor.as_deref()
++    }
++
++    pub(crate) fn model(&self) -> Option<&str> {
++        self.model.as_deref()
++    }
++
++    pub(crate) fn usage(&self) -> Option<f32> {
++        None
++    }
++
++    pub(crate) fn total_memory(&self) -> Option<u64> {
++        None
++    }
++
++    pub(crate) fn used_memory(&self) -> Option<u64> {
++        None
++    }
++}
++
++impl GpusInner {
++    pub(crate) fn new() -> Result<Self, crate::Error> {
++        Ok(Self { gpus: Vec::new() })
++    }
++
++    pub(crate) fn refresh(&mut self) {
++        let Some(snapshot) = DevInfoSnapshot::new() else {
++            sysinfo_debug!("failed to create a libdevinfo snapshot");
++            return;
++        };
++
++        snapshot.for_each_node(|node| {
++            let node = DevInfoNode { node };
++            let Some(class_code) = node.integer_property(CLASS_CODE_PROPERTY) else {
++                return;
++            };
++            if !is_display_controller(class_code as u32) {
++                return;
++            }
++
++            let Some(reg) = node.integer_property(REG_PROPERTY) else {
++                return;
++            };
++            let pci = pci_from_reg(reg as u32);
++
++            if let Some(gpu) = self.gpus.iter_mut().find(|gpu| gpu.inner.pci == pci) {
++                gpu.inner.updated = true;
++                return;
++            }
++
++            let vendor_id = node
++                .integer_property(VENDOR_ID_PROPERTY)
++                .map(|value| value as u32 & 0xffff);
++            let device_id = node
++                .integer_property(DEVICE_ID_PROPERTY)
++                .map(|value| value as u32 & 0xffff);
++            let (database_vendor, database_model) = vendor_id
++                .zip(device_id)
++                .map_or((None, None), |(vendor, device)| pci_names(vendor, device));
++            let vendor = database_vendor.or_else(|| {
++                vendor_id
++                    .and_then(crate::utils::gpu_vendor_name)
++                    .map(str::to_owned)
++            });
++            let model = database_model.or_else(|| node.string_property(MODEL_PROPERTY));
++
++            self.gpus.push(Gpu {
++                inner: GpuInner {
++                    pci,
++                    vendor,
++                    model,
++                    updated: true,
++                },
++            });
++        });
++    }
++}
++
++struct DevInfoSnapshot {
++    root: *mut ffi::DevInfoNode,
++}
++
++impl DevInfoSnapshot {
++    fn new() -> Option<Self> {
++        // SAFETY: The path is NUL-terminated and the returned snapshot handle is checked before
++        // use.
++        let root = unsafe { ffi::di_init(c"/".as_ptr(), ffi::DINFO_SUBTREE | ffi::DINFO_PROP) };
++        (!root.is_null()).then_some(Self { root })
++    }
++
++    fn for_each_node(&self, mut callback: impl FnMut(*mut ffi::DevInfoNode)) {
++        let mut nodes = vec![self.root];
++        while let Some(node) = nodes.pop() {
++            callback(node);
++
++            // SAFETY: `node` belongs to this live snapshot. Child and sibling pointers, when
++            // present, are owned by the same snapshot.
++            let sibling = unsafe { ffi::di_sibling_node(node) };
++            if !sibling.is_null() {
++                nodes.push(sibling);
++            }
++            // SAFETY: Same as above.
++            let child = unsafe { ffi::di_child_node(node) };
++            if !child.is_null() {
++                nodes.push(child);
++            }
++        }
++    }
++}
++
++impl Drop for DevInfoSnapshot {
++    fn drop(&mut self) {
++        // SAFETY: `root` was returned by `di_init` and is finalized exactly once here.
++        unsafe { ffi::di_fini(self.root) };
++    }
++}
++
++struct DevInfoNode {
++    node: *mut ffi::DevInfoNode,
++}
++
++impl DevInfoNode {
++    fn integer_property(&self, name: &CStr) -> Option<i32> {
++        let mut value = std::ptr::null_mut();
++        // SAFETY: The node and property name are valid, and `value` points to writable storage.
++        let count = unsafe {
++            ffi::di_prop_lookup_ints(ffi::DDI_DEV_T_ANY, self.node, name.as_ptr(), &mut value)
++        };
++        if count < 1 || value.is_null() {
++            None
++        } else {
++            // SAFETY: A positive count means libdevinfo returned at least one integer. The data is
++            // owned by the snapshot and remains valid for its lifetime.
++            Some(unsafe { *value })
++        }
++    }
++
++    fn string_property(&self, name: &CStr) -> Option<String> {
++        let mut value = std::ptr::null_mut();
++        // SAFETY: The node and property name are valid, and `value` points to writable storage.
++        let count = unsafe {
++            ffi::di_prop_lookup_strings(ffi::DDI_DEV_T_ANY, self.node, name.as_ptr(), &mut value)
++        };
++        if count < 1 || value.is_null() {
++            None
++        } else {
++            // SAFETY: A positive count means libdevinfo returned a NUL-terminated string. The data
++            // is owned by the snapshot and remains valid for its lifetime.
++            Some(
++                unsafe { CStr::from_ptr(value) }
++                    .to_string_lossy()
++                    .into_owned(),
++            )
++        }
++    }
++}
++
++fn is_display_controller(class_code: u32) -> bool {
++    class_code & 0xff0000 == 0x030000
++}
++
++fn pci_from_reg(reg: u32) -> PCI {
++    PCI {
++        domain: 0,
++        bus: (reg >> 16) & 0xff,
++        device: (reg >> 11) & 0x1f,
++        function: (reg >> 8) & 0x7,
++    }
++}
++
++fn pci_names(vendor_id: u32, device_id: u32) -> (Option<String>, Option<String>) {
++    for path in PCI_ID_PATHS {
++        let Ok(file) = File::open(path) else {
++            continue;
++        };
++        let names = parse_pci_names(BufReader::new(file), vendor_id, device_id);
++        if names.0.is_some() || names.1.is_some() {
++            return names;
++        }
++    }
++    (None, None)
++}
++
++fn parse_pci_names(
++    reader: impl BufRead,
++    vendor_id: u32,
++    device_id: u32,
++) -> (Option<String>, Option<String>) {
++    let mut vendor = None;
++    let mut in_vendor = false;
++
++    for line in reader.lines().map_while(Result::ok) {
++        if line.starts_with("C ") {
++            break;
++        }
++        if !line.starts_with(char::is_whitespace) {
++            if in_vendor {
++                break;
++            }
++            let Some((id, name)) = parse_id_and_name(&line) else {
++                continue;
++            };
++            if id == vendor_id {
++                vendor = Some(name.to_owned());
++                in_vendor = true;
++            }
++        } else if in_vendor && line.starts_with('\t') && !line.starts_with("\t\t") {
++            let Some((id, name)) = parse_id_and_name(line.trim_start()) else {
++                continue;
++            };
++            if id == device_id {
++                return (vendor, Some(name.to_owned()));
++            }
++        }
++    }
++    (vendor, None)
++}
++
++fn parse_id_and_name(line: &str) -> Option<(u32, &str)> {
++    let (id, name) = line.split_once(char::is_whitespace)?;
++    Some((u32::from_str_radix(id, 16).ok()?, name.trim_start()))
++}
++
++#[cfg(test)]
++mod tests {
++    use std::io::Cursor;
++
++    use super::*;
++
++    #[test]
++    fn display_controller_class() {
++        assert!(is_display_controller(0x030000));
++        assert!(is_display_controller(0x030200));
++        assert!(!is_display_controller(0x020000));
++    }
++
++    #[test]
++    fn pci_location_from_reg() {
++        assert_eq!(
++            pci_from_reg(0x00001800),
++            PCI {
++                domain: 0,
++                bus: 0,
++                device: 3,
++                function: 0,
++            }
++        );
++        assert_eq!(
++            pci_from_reg(0x00122b00),
++            PCI {
++                domain: 0,
++                bus: 0x12,
++                device: 5,
++                function: 3,
++            }
++        );
++    }
++
++    #[test]
++    fn pci_id_names() {
++        let data = b"\
++1234  Example Devices, Inc.\n\
++\t1111  Example GPU\n\
++\t\t1234 5678  Example subsystem\n\
++\t2222  Another GPU\n\
++abcd  Other Vendor\n\
++C 00  Unclassified device\n";
++
++        assert_eq!(
++            parse_pci_names(Cursor::new(data), 0x1234, 0x1111),
++            (
++                Some("Example Devices, Inc.".to_owned()),
++                Some("Example GPU".to_owned()),
++            )
++        );
++        assert_eq!(
++            parse_pci_names(Cursor::new(data), 0x1234, 0x9999),
++            (Some("Example Devices, Inc.".to_owned()), None)
++        );
++        assert_eq!(
++            parse_pci_names(Cursor::new(data), 0xffff, 0x1111),
++            (None, None)
++        );
++    }
++
++    #[test]
++    fn refreshes_gpu_list() {
++        let mut gpus = crate::Gpus::new_with_refreshed_list().unwrap();
++        assert!(
++            gpus.iter()
++                .enumerate()
++                .all(|(index, gpu)| !gpus[..index].contains(gpu))
++        );
++
++        gpus.refresh(true);
++        assert!(
++            gpus.iter()
++                .enumerate()
++                .all(|(index, gpu)| !gpus[..index].contains(gpu))
++        );
++    }
++}
+diff -ruN a/src/unix/illumos/kstat.rs b/src/unix/illumos/kstat.rs
+--- a/src/unix/illumos/kstat.rs
++++ b/src/unix/illumos/kstat.rs
+@@ -0,0 +1,123 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use std::ffi::CStr;
++#[cfg(any(feature = "network", feature = "system"))]
++use std::ffi::CString;
++use std::ptr;
++
++use super::ffi;
++
++pub(crate) struct KstatReader {
++    ctl: *mut ffi::KstatCtl,
++}
++
++impl KstatReader {
++    pub(crate) fn new() -> Option<Self> {
++        let ctl = unsafe { ffi::kstat_open() };
++        (!ctl.is_null()).then_some(Self { ctl })
++    }
++
++    fn find(&self, module: Option<&CStr>, instance: i32, name: Option<&CStr>) -> *mut ffi::Kstat {
++        unsafe {
++            ffi::kstat_lookup(
++                self.ctl,
++                module.map_or(ptr::null(), CStr::as_ptr),
++                instance,
++                name.map_or(ptr::null(), CStr::as_ptr),
++            )
++        }
++    }
++
++    #[cfg(any(feature = "network", feature = "system"))]
++    pub(crate) fn lookup(
++        &self,
++        module: Option<&CStr>,
++        instance: i32,
++        name: Option<&CStr>,
++    ) -> Option<KstatRecord<'_>> {
++        let stat = self.find(module, instance, name);
++        if stat.is_null() || unsafe { ffi::kstat_read(self.ctl, stat, ptr::null_mut()) } < 0 {
++            None
++        } else {
++            Some(KstatRecord {
++                _reader: self,
++                stat,
++            })
++        }
++    }
++
++    #[cfg(feature = "disk")]
++    pub(crate) fn read_io(
++        &self,
++        module: Option<&CStr>,
++        instance: i32,
++        name: Option<&CStr>,
++    ) -> Option<ffi::KstatIo> {
++        let stat = self.find(module, instance, name);
++        if stat.is_null() {
++            return None;
++        }
++        let mut io = std::mem::MaybeUninit::<ffi::KstatIo>::uninit();
++        if unsafe { ffi::kstat_read(self.ctl, stat, io.as_mut_ptr().cast()) } < 0 {
++            None
++        } else {
++            Some(unsafe { io.assume_init() })
++        }
++    }
++}
++
++impl Drop for KstatReader {
++    fn drop(&mut self) {
++        unsafe {
++            ffi::kstat_close(self.ctl);
++        }
++    }
++}
++
++#[cfg(any(feature = "network", feature = "system"))]
++pub(crate) struct KstatRecord<'a> {
++    _reader: &'a KstatReader,
++    stat: *mut ffi::Kstat,
++}
++
++#[cfg(any(feature = "network", feature = "system"))]
++impl KstatRecord<'_> {
++    fn named(&self, name: &str) -> Option<&ffi::KstatNamed> {
++        let name = CString::new(name).ok()?;
++        let value = unsafe { ffi::kstat_data_lookup(self.stat, name.as_ptr()) };
++        unsafe { (value as *const ffi::KstatNamed).as_ref() }
++    }
++
++    pub(crate) fn integer(&self, name: &str) -> Option<u64> {
++        let named = self.named(name)?;
++        unsafe {
++            match named.data_type {
++                ffi::KSTAT_DATA_INT32 => Some(named.value.i32_.max(0) as u64),
++                ffi::KSTAT_DATA_UINT32 => Some(named.value.u32_ as u64),
++                ffi::KSTAT_DATA_INT64 => Some(named.value.i64_.max(0) as u64),
++                ffi::KSTAT_DATA_UINT64 => Some(named.value.u64_),
++                _ => None,
++            }
++        }
++    }
++
++    #[cfg(feature = "system")]
++    pub(crate) fn string(&self, name: &str) -> Option<String> {
++        let named = self.named(name)?;
++        unsafe {
++            match named.data_type {
++                ffi::KSTAT_DATA_CHAR => Some(
++                    CStr::from_ptr(named.value.chars.as_ptr())
++                        .to_string_lossy()
++                        .into_owned(),
++                ),
++                ffi::KSTAT_DATA_STRING => {
++                    let value = named.value.string;
++                    (!value.ptr.is_null())
++                        .then(|| CStr::from_ptr(value.ptr).to_string_lossy().into_owned())
++                }
++                _ => None,
++            }
++        }
++    }
++}
+diff -ruN a/src/unix/illumos/mod.rs b/src/unix/illumos/mod.rs
+--- a/src/unix/illumos/mod.rs
++++ b/src/unix/illumos/mod.rs
+@@ -0,0 +1,102 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++#[cfg(any(
++    feature = "disk",
++    feature = "gpu",
++    feature = "network",
++    feature = "system"
++))]
++mod ffi;
++#[cfg(any(feature = "disk", feature = "network", feature = "system"))]
++mod kstat;
++
++cfg_select! {
++    feature = "system" => {
++        pub mod cpu;
++        pub mod motherboard;
++        pub mod process;
++        pub mod product;
++        pub mod system;
++        mod smbios;
++
++        pub(crate) use self::cpu::CpuInner;
++        pub(crate) use self::motherboard::MotherboardInner;
++        pub(crate) use self::process::ProcessInner;
++        pub(crate) use self::product::ProductInner;
++        pub(crate) use self::system::SystemInner;
++
++        #[path = "../bsd/system_common.rs"]
++        mod system_common;
++        pub use self::system_common::*;
++    }
++    _ => {}
++}
++cfg_select! {
++    feature = "disk" => {
++        pub mod disk;
++
++        pub(crate) use self::disk::DiskInner;
++        pub(crate) use crate::unix::DisksInner;
++    }
++    _ => {}
++}
++cfg_select! {
++    feature = "component" => {
++        pub mod component;
++
++        pub(crate) use self::component::{ComponentInner, ComponentsInner};
++    }
++    _ => {}
++}
++cfg_select! {
++    feature = "gpu" => {
++        pub mod gpu;
++
++        pub(crate) use self::gpu::{GpuInner, GpusInner};
++    }
++    _ => {}
++}
++cfg_select! {
++    feature = "network" => {
++        pub mod network;
++        mod network_common;
++
++        pub(crate) use self::network::NetworksInner;
++        pub(crate) use self::network_common::NetworkDataInner;
++    }
++    _ => {}
++}
++cfg_select! {
++    feature = "user" => {
++        pub(crate) use crate::unix::groups::{get_groups, new_groups};
++        pub(crate) use crate::unix::users::{UserInner, get_users, new_users};
++    }
++    _ => {}
++}
++
++/// Whether this platform is supported (illumos: yes).
++pub const IS_SUPPORTED_SYSTEM: bool = true;
++
++// Little trick to ensure `rustfmt` works on all files.
++#[cfg(any())]
++mod component;
++#[cfg(any())]
++mod cpu;
++#[cfg(any())]
++mod disk;
++#[cfg(any())]
++mod gpu;
++#[cfg(any())]
++mod motherboard;
++#[cfg(any())]
++mod network;
++#[cfg(any())]
++mod network_common;
++#[cfg(any())]
++mod process;
++#[cfg(any())]
++mod product;
++#[cfg(any())]
++mod smbios;
++#[cfg(any())]
++mod system;
+diff -ruN a/src/unix/illumos/motherboard.rs b/src/unix/illumos/motherboard.rs
+--- a/src/unix/illumos/motherboard.rs
++++ b/src/unix/illumos/motherboard.rs
+@@ -0,0 +1,38 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use super::smbios::{CommonInfo, Smbios};
++use crate::Error;
++
++pub(crate) struct MotherboardInner;
++
++impl MotherboardInner {
++    pub(crate) fn new() -> Result<Self, Error> {
++        Smbios::new()
++            .map(|_| Self)
++            .ok_or_else(|| Error::Other("failed to open system SMBIOS data".into()))
++    }
++
++    pub(crate) fn asset_tag(&self) -> Option<String> {
++        baseboard_info()?.asset
++    }
++
++    pub(crate) fn name(&self) -> Option<String> {
++        baseboard_info()?.product
++    }
++
++    pub(crate) fn vendor_name(&self) -> Option<String> {
++        baseboard_info()?.manufacturer
++    }
++
++    pub(crate) fn version(&self) -> Option<String> {
++        baseboard_info()?.version
++    }
++
++    pub(crate) fn serial_number(&self) -> Option<String> {
++        baseboard_info()?.serial
++    }
++}
++
++fn baseboard_info() -> Option<CommonInfo> {
++    Smbios::new()?.baseboard_info()
++}
+diff -ruN a/src/unix/illumos/network_common.rs b/src/unix/illumos/network_common.rs
+--- a/src/unix/illumos/network_common.rs
++++ b/src/unix/illumos/network_common.rs
+@@ -0,0 +1,98 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use crate::{InterfaceOperationalState, IpNetwork, MacAddr};
++
++pub(crate) struct NetworkDataInner {
++    pub(crate) ifi_ibytes: u64,
++    pub(crate) old_ifi_ibytes: u64,
++    pub(crate) ifi_obytes: u64,
++    pub(crate) old_ifi_obytes: u64,
++    pub(crate) ifi_ipackets: u64,
++    pub(crate) old_ifi_ipackets: u64,
++    pub(crate) ifi_opackets: u64,
++    pub(crate) old_ifi_opackets: u64,
++    pub(crate) ifi_ierrors: u64,
++    pub(crate) old_ifi_ierrors: u64,
++    pub(crate) ifi_oerrors: u64,
++    pub(crate) old_ifi_oerrors: u64,
++    pub(crate) updated: bool,
++    pub(crate) mac_addr: MacAddr,
++    pub(crate) ip_networks: Vec<IpNetwork>,
++    pub(crate) mtu: u64,
++    pub(crate) link_speed: Option<u64>,
++    pub(crate) operational_state: InterfaceOperationalState,
++}
++
++impl NetworkDataInner {
++    pub(crate) fn transmit_link_speed(&self) -> Option<u64> {
++        self.link_speed
++    }
++
++    pub(crate) fn receive_link_speed(&self) -> Option<u64> {
++        self.link_speed
++    }
++
++    pub(crate) fn received(&self) -> u64 {
++        self.ifi_ibytes.saturating_sub(self.old_ifi_ibytes)
++    }
++
++    pub(crate) fn total_received(&self) -> u64 {
++        self.ifi_ibytes
++    }
++
++    pub(crate) fn transmitted(&self) -> u64 {
++        self.ifi_obytes.saturating_sub(self.old_ifi_obytes)
++    }
++
++    pub(crate) fn total_transmitted(&self) -> u64 {
++        self.ifi_obytes
++    }
++
++    pub(crate) fn packets_received(&self) -> u64 {
++        self.ifi_ipackets.saturating_sub(self.old_ifi_ipackets)
++    }
++
++    pub(crate) fn total_packets_received(&self) -> u64 {
++        self.ifi_ipackets
++    }
++
++    pub(crate) fn packets_transmitted(&self) -> u64 {
++        self.ifi_opackets.saturating_sub(self.old_ifi_opackets)
++    }
++
++    pub(crate) fn total_packets_transmitted(&self) -> u64 {
++        self.ifi_opackets
++    }
++
++    pub(crate) fn errors_on_received(&self) -> u64 {
++        self.ifi_ierrors.saturating_sub(self.old_ifi_ierrors)
++    }
++
++    pub(crate) fn total_errors_on_received(&self) -> u64 {
++        self.ifi_ierrors
++    }
++
++    pub(crate) fn errors_on_transmitted(&self) -> u64 {
++        self.ifi_oerrors.saturating_sub(self.old_ifi_oerrors)
++    }
++
++    pub(crate) fn total_errors_on_transmitted(&self) -> u64 {
++        self.ifi_oerrors
++    }
++
++    pub(crate) fn mac_address(&self) -> MacAddr {
++        self.mac_addr
++    }
++
++    pub(crate) fn ip_networks(&self) -> &[IpNetwork] {
++        &self.ip_networks
++    }
++
++    pub(crate) fn mtu(&self) -> u64 {
++        self.mtu
++    }
++
++    pub(crate) fn operational_state(&self) -> InterfaceOperationalState {
++        self.operational_state
++    }
++}
+diff -ruN a/src/unix/illumos/network.rs b/src/unix/illumos/network.rs
+--- a/src/unix/illumos/network.rs
++++ b/src/unix/illumos/network.rs
+@@ -0,0 +1,267 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use std::collections::{HashMap, hash_map};
++use std::ffi::{CStr, CString, OsString};
++use std::os::unix::ffi::OsStringExt;
++
++use crate::network::refresh_networks_addresses;
++use crate::{Error, InterfaceOperationalState, MacAddr, NetworkData};
++
++use super::NetworkDataInner;
++use super::kstat::{KstatReader, KstatRecord};
++
++const LINK_MODULE: &CStr = c"link";
++const LOOPBACK_MODULE: &CStr = c"lo";
++const UNIX_MODULE: &CStr = c"unix";
++const SIOCGLIFMTU: libc::c_int = _IOWR::<LifReq>(b'i', 122); // 0xc078_697a
++const SIOCGLIFHWADDR: libc::c_int = _IOWR::<LifReq>(b'i', 192); // 0xc078_69c0
++
++// See <sys/ioccom.h>
++// #define _IOWR(x, y, t)
++//     ((int)((uint32_t)(IOC_INOUT|(((sizeof (t))&IOCPARM_MASK)<<16)|(x<<8)|y)))
++#[allow(non_snake_case)]
++const fn _IOWR<T>(x: u8, y: u8) -> libc::c_int {
++    const IOCPARM_MASK: u32 = 0xff; // parameters must be < 256 bytes
++    const IOC_OUT: u32 = 0x4000_0000; // copy out parameters
++    const IOC_IN: u32 = 0x8000_0000; // copy in parameters
++    const IOC_INOUT: u32 = IOC_IN | IOC_OUT;
++
++    (IOC_INOUT
++        | (((std::mem::size_of::<T>() as u32) & IOCPARM_MASK) << 16)
++        | ((x as u32) << 8)
++        | y as u32) as libc::c_int
++}
++
++#[repr(C)]
++struct LifReq {
++    name: [libc::c_char; libc::IF_NAMESIZE],
++    address_length: libc::c_int,
++    interface_type: libc::c_uint,
++    data: [u8; 336],
++}
++
++const _: [(); 376] = [(); std::mem::size_of::<LifReq>()];
++
++impl LifReq {
++    fn new(name: &[u8]) -> Self {
++        let mut request = Self {
++            name: [0; libc::IF_NAMESIZE],
++            address_length: 0,
++            interface_type: 0,
++            data: [0; 336],
++        };
++        for (output, input) in request.name[..libc::IF_NAMESIZE - 1].iter_mut().zip(name) {
++            *output = *input as libc::c_char;
++        }
++        request
++    }
++}
++
++pub(crate) struct NetworksInner {
++    pub(crate) interfaces: HashMap<OsString, NetworkData>,
++}
++
++impl NetworksInner {
++    pub(crate) fn new() -> Result<Self, Error> {
++        Ok(Self {
++            interfaces: HashMap::new(),
++        })
++    }
++
++    pub(crate) fn list(&self) -> &HashMap<OsString, NetworkData> {
++        &self.interfaces
++    }
++
++    pub(crate) fn refresh(&mut self, remove_not_listed_interfaces: bool) {
++        for interface in self.interfaces.values_mut() {
++            interface.inner.updated = false;
++        }
++        let Some(kstat) = KstatReader::new() else {
++            return;
++        };
++
++        let mut addresses = std::ptr::null_mut();
++        if unsafe { libc::getifaddrs(&mut addresses) } != 0 || addresses.is_null() {
++            return;
++        }
++        let original = addresses;
++        while !addresses.is_null() {
++            let address = unsafe { &*addresses };
++            addresses = address.ifa_next;
++            if address.ifa_name.is_null() {
++                continue;
++            }
++            let bytes = unsafe { CStr::from_ptr(address.ifa_name) }.to_bytes();
++            let bytes = bytes.split(|byte| *byte == b':').next().unwrap_or_default();
++            if bytes.is_empty() {
++                continue;
++            }
++            let name = OsString::from_vec(bytes.to_vec());
++            if self
++                .interfaces
++                .get(&name)
++                .is_some_and(|interface| interface.inner.updated)
++            {
++                continue;
++            }
++
++            let Ok(c_name) = CString::new(bytes) else {
++                continue;
++            };
++            let record = [LINK_MODULE, LOOPBACK_MODULE, UNIX_MODULE]
++                .into_iter()
++                .find_map(|module| kstat.lookup(Some(module), -1, Some(&c_name)));
++            let flags = address.ifa_flags as libc::c_int;
++            let state = if flags & libc::IFF_UP != 0 && flags & libc::IFF_RUNNING != 0 {
++                InterfaceOperationalState::Up
++            } else {
++                InterfaceOperationalState::Down
++            };
++            let counters = record.as_ref().map(read_counters).unwrap_or_default();
++            let mtu = read_mtu(bytes);
++            let link_speed = record.as_ref().and_then(|r| r.integer("ifspeed")).filter(|s| *s != 0);
++            let mac_addr = read_mac_addr(bytes);
++
++            match self.interfaces.entry(name) {
++                hash_map::Entry::Occupied(mut entry) => {
++                    let inner = &mut entry.get_mut().inner;
++                    inner.old_ifi_ibytes = inner.ifi_ibytes;
++                    inner.old_ifi_obytes = inner.ifi_obytes;
++                    inner.old_ifi_ipackets = inner.ifi_ipackets;
++                    inner.old_ifi_opackets = inner.ifi_opackets;
++                    inner.old_ifi_ierrors = inner.ifi_ierrors;
++                    inner.old_ifi_oerrors = inner.ifi_oerrors;
++                    inner.ifi_ibytes = counters.received;
++                    inner.ifi_obytes = counters.transmitted;
++                    inner.ifi_ipackets = counters.packets_received;
++                    inner.ifi_opackets = counters.packets_transmitted;
++                    inner.ifi_ierrors = counters.errors_received;
++                    inner.ifi_oerrors = counters.errors_transmitted;
++                    inner.operational_state = state;
++                    inner.mtu = mtu;
++                    inner.link_speed = link_speed;
++                    inner.mac_addr = mac_addr;
++                    inner.updated = true;
++                }
++                hash_map::Entry::Vacant(entry) => {
++                    entry.insert(NetworkData {
++                        inner: NetworkDataInner {
++                            ifi_ibytes: counters.received,
++                            old_ifi_ibytes: 0,
++                            ifi_obytes: counters.transmitted,
++                            old_ifi_obytes: 0,
++                            ifi_ipackets: counters.packets_received,
++                            old_ifi_ipackets: 0,
++                            ifi_opackets: counters.packets_transmitted,
++                            old_ifi_opackets: 0,
++                            ifi_ierrors: counters.errors_received,
++                            old_ifi_ierrors: 0,
++                            ifi_oerrors: counters.errors_transmitted,
++                            old_ifi_oerrors: 0,
++                            updated: true,
++                            mac_addr,
++                            ip_networks: Vec::new(),
++                            mtu,
++                            link_speed,
++                            operational_state: state,
++                        },
++                    });
++                }
++            }
++        }
++        unsafe { libc::freeifaddrs(original) };
++
++        if remove_not_listed_interfaces {
++            self.interfaces
++                .retain(|_, interface| interface.inner.updated);
++        }
++        refresh_networks_addresses(&mut self.interfaces);
++    }
++}
++
++struct Socket(libc::c_int);
++
++impl Socket {
++    fn new() -> Option<Self> {
++        let socket = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
++        if socket < 0 { None } else { Some(Self(socket)) }
++    }
++}
++
++impl Drop for Socket {
++    fn drop(&mut self) {
++        // SAFETY: The descriptor is valid and owned exclusively by this wrapper.
++        unsafe { libc::close(self.0) };
++    }
++}
++
++fn read_mtu(name: &[u8]) -> u64 {
++    let mut request = LifReq::new(name);
++    let Some(socket) = Socket::new() else {
++        return 0;
++    };
++    let result = unsafe { libc::ioctl(socket.0, SIOCGLIFMTU, &mut request) };
++    if result == 0 {
++        u32::from_ne_bytes(request.data[..4].try_into().unwrap()) as u64
++    } else {
++        0
++    }
++}
++
++fn read_mac_addr(name: &[u8]) -> MacAddr {
++    let mut request = LifReq::new(name);
++    let Some(socket) = Socket::new() else {
++        return MacAddr::UNSPECIFIED;
++    };
++    let result = unsafe { libc::ioctl(socket.0, SIOCGLIFHWADDR, &mut request) };
++    if result != 0 {
++        return MacAddr::UNSPECIFIED;
++    }
++
++    let name_length = request.data[5] as usize;
++    let address_length = request.data[6] as usize;
++    let start = 8usize.saturating_add(name_length);
++    let Some(address) = request
++        .data
++        .get(start..start.saturating_add(address_length))
++    else {
++        return MacAddr::UNSPECIFIED;
++    };
++    let Ok(address) = <[u8; 6]>::try_from(address) else {
++        return MacAddr::UNSPECIFIED;
++    };
++    MacAddr(address)
++}
++
++#[derive(Default)]
++struct Counters {
++    received: u64,
++    transmitted: u64,
++    packets_received: u64,
++    packets_transmitted: u64,
++    errors_received: u64,
++    errors_transmitted: u64,
++}
++
++fn read_counters(record: &KstatRecord<'_>) -> Counters {
++    Counters {
++        received: record
++            .integer("rbytes64")
++            .or_else(|| record.integer("rbytes"))
++            .unwrap_or(0),
++        transmitted: record
++            .integer("obytes64")
++            .or_else(|| record.integer("obytes"))
++            .unwrap_or(0),
++        packets_received: record
++            .integer("ipackets64")
++            .or_else(|| record.integer("ipackets"))
++            .unwrap_or(0),
++        packets_transmitted: record
++            .integer("opackets64")
++            .or_else(|| record.integer("opackets"))
++            .unwrap_or(0),
++        errors_received: record.integer("ierrors").unwrap_or(0),
++        errors_transmitted: record.integer("oerrors").unwrap_or(0),
++    }
++}
+diff -ruN a/src/unix/illumos/process.rs b/src/unix/illumos/process.rs
+--- a/src/unix/illumos/process.rs
++++ b/src/unix/illumos/process.rs
+@@ -0,0 +1,349 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use std::ffi::OsString;
++use std::fs::{File, read_dir, read_link};
++use std::os::unix::ffi::OsStringExt;
++use std::os::unix::fs::FileExt;
++use std::path::PathBuf;
++
++use crate::{DiskUsage, Gid, Pid, ProcessRefreshKind, ProcessStatus, Uid};
++
++const PSINFO_MIN_SIZE: usize = 315;
++const MAX_VECTOR_ITEMS: usize = 65_536;
++const MAX_STRING_SIZE: usize = 1024 * 1024;
++
++pub(crate) struct ProcessInner {
++    pub(crate) name: OsString,
++    pub(crate) cmd: Vec<OsString>,
++    pub(crate) exe: Option<PathBuf>,
++    pub(crate) pid: Pid,
++    pub(crate) parent: Option<Pid>,
++    pub(crate) environ: Vec<OsString>,
++    pub(crate) cwd: Option<PathBuf>,
++    pub(crate) root: Option<PathBuf>,
++    pub(crate) memory: u64,
++    pub(crate) virtual_memory: u64,
++    pub(crate) updated: bool,
++    pub(crate) cpu_usage: f32,
++    pub(crate) start_time: u64,
++    pub(crate) run_time: u64,
++    pub(crate) status: ProcessStatus,
++    pub(crate) user_id: Uid,
++    pub(crate) effective_user_id: Uid,
++    pub(crate) group_id: Gid,
++    pub(crate) effective_group_id: Gid,
++    pub(crate) read_bytes: u64,
++    pub(crate) old_read_bytes: u64,
++    pub(crate) written_bytes: u64,
++    pub(crate) old_written_bytes: u64,
++    pub(crate) accumulated_cpu_time: u64,
++    pub(crate) exists: bool,
++}
++
++impl ProcessInner {
++    pub(crate) fn disk_usage(&self) -> DiskUsage {
++        DiskUsage {
++            written_bytes: self.written_bytes.saturating_sub(self.old_written_bytes),
++            total_written_bytes: self.written_bytes,
++            read_bytes: self.read_bytes.saturating_sub(self.old_read_bytes),
++            total_read_bytes: self.read_bytes,
++        }
++    }
++
++    pub(crate) fn open_files(&self) -> Option<usize> {
++        read_dir(format!("/proc/{}/fd", self.pid))
++            .ok()
++            .map(|entries| entries.count())
++    }
++
++    pub(crate) fn open_files_limit(&self) -> Option<usize> {
++        crate::System::open_files_limit().ok()
++    }
++}
++
++pub(crate) struct ProcessInfo {
++    pub(crate) pid: Pid,
++    parent: Option<Pid>,
++    user_id: Uid,
++    effective_user_id: Uid,
++    group_id: Gid,
++    effective_group_id: Gid,
++    virtual_memory: u64,
++    memory: u64,
++    cpu_usage: f32,
++    start_time: u64,
++    accumulated_cpu_time: u64,
++    name: OsString,
++    fallback_cmd: Vec<OsString>,
++    argc: usize,
++    argv: u64,
++    envp: u64,
++    pointer_size: usize,
++    status: ProcessStatus,
++}
++
++impl ProcessInfo {
++    pub(crate) fn read(pid: Pid) -> Option<Self> {
++        let data = std::fs::read(format!("/proc/{pid}/psinfo")).ok()?;
++        if data.len() < PSINFO_MIN_SIZE || read_i32(&data, 8)? != pid.0 {
++            return None;
++        }
++
++        let model = *data.get(256)?;
++        let pointer_size = if model == 1 { 4 } else { 8 };
++        let name = c_field(&data, 136, 16);
++        let psargs = c_field(&data, 152, 80);
++        let fallback_cmd = if psargs.is_empty() {
++            Vec::new()
++        } else {
++            psargs
++                .split(|byte| byte.is_ascii_whitespace())
++                .filter(|part| !part.is_empty())
++                .map(|part| OsString::from_vec(part.to_vec()))
++                .collect()
++        };
++        let status = match *data.get(314)? as char {
++            'O' | 'R' => ProcessStatus::Run,
++            'S' => ProcessStatus::Sleep,
++            'T' => ProcessStatus::Stop,
++            'Z' => ProcessStatus::Zombie,
++            'I' => ProcessStatus::Idle,
++            value => ProcessStatus::Unknown(value as u32),
++        };
++
++        Some(Self {
++            pid,
++            parent: match read_i32(&data, 12)? {
++                0 => None,
++                parent => Some(Pid(parent)),
++            },
++            user_id: Uid(read_u32(&data, 24)?),
++            effective_user_id: Uid(read_u32(&data, 28)?),
++            group_id: Gid(read_u32(&data, 32)?),
++            effective_group_id: Gid(read_u32(&data, 36)?),
++            virtual_memory: read_u64(&data, 48)?.saturating_mul(1024),
++            memory: read_u64(&data, 56)?.saturating_mul(1024),
++            // pr_pctcpu is a share of all online CPUs; sysinfo reports per core (100% = one core)
++            cpu_usage: read_u16(&data, 80)? as f32 * 100. / 32768.
++                * (unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) }).max(1) as f32,
++            start_time: read_i64(&data, 88)?.max(0) as u64,
++            accumulated_cpu_time: timespec_millis(&data, 104)?,
++            name: OsString::from_vec(name),
++            fallback_cmd,
++            argc: read_i32(&data, 236)?.max(0) as usize,
++            argv: read_pointer(&data, 240, pointer_size)?,
++            envp: read_pointer(&data, 248, pointer_size)?,
++            pointer_size,
++            status,
++        })
++    }
++
++    pub(crate) fn start_time(&self) -> u64 {
++        self.start_time
++    }
++
++    fn vector(&self, address: u64, count: Option<usize>) -> Vec<OsString> {
++        if address == 0 {
++            return Vec::new();
++        }
++        let Ok(address_space) = File::open(format!("/proc/{}/as", self.pid)) else {
++            return Vec::new();
++        };
++        let limit = count.unwrap_or(MAX_VECTOR_ITEMS).min(MAX_VECTOR_ITEMS);
++        let mut output = Vec::with_capacity(count.unwrap_or(0).min(256));
++        for index in 0..limit {
++            let offset = address.saturating_add((index * self.pointer_size) as u64);
++            let Some(pointer) = read_pointer_at(&address_space, offset, self.pointer_size) else {
++                break;
++            };
++            if pointer == 0 {
++                break;
++            }
++            let Some(value) = read_c_string_at(&address_space, pointer) else {
++                break;
++            };
++            output.push(OsString::from_vec(value));
++        }
++        output
++    }
++}
++
++pub(crate) fn update_process(
++    info: &ProcessInfo,
++    now: u64,
++    refresh_kind: ProcessRefreshKind,
++    process: &mut ProcessInner,
++) {
++    process.parent = info.parent;
++    process.run_time = now.saturating_sub(info.start_time);
++    process.exists = true;
++
++    if refresh_kind.memory() {
++        process.virtual_memory = info.virtual_memory;
++        process.memory = info.memory;
++    }
++    if refresh_kind.cpu() {
++        process.cpu_usage = info.cpu_usage;
++        process.accumulated_cpu_time = info.accumulated_cpu_time;
++    }
++    if refresh_kind.disk_usage() {
++        // illumos procfs does not expose per-process byte counters. Keep the
++        // previous totals so the public deltas remain zero rather than bogus.
++        process.old_read_bytes = process.read_bytes;
++        process.old_written_bytes = process.written_bytes;
++    }
++    if refresh_kind.exe().needs_update(|| process.exe.is_none()) {
++        process.exe = read_link(format!("/proc/{}/path/a.out", info.pid)).ok();
++    }
++    if refresh_kind.cwd().needs_update(|| process.cwd.is_none()) {
++        process.cwd = read_link(format!("/proc/{}/path/cwd", info.pid)).ok();
++    }
++    if refresh_kind.root().needs_update(|| process.root.is_none()) {
++        process.root = read_link(format!("/proc/{}/path/root", info.pid)).ok();
++    }
++    if refresh_kind.cmd().needs_update(|| process.cmd.is_empty()) {
++        process.cmd = info.vector(info.argv, Some(info.argc));
++        if process.cmd.is_empty() {
++            process.cmd.clone_from(&info.fallback_cmd);
++        }
++    }
++    if refresh_kind
++        .environ()
++        .needs_update(|| process.environ.is_empty())
++    {
++        process.environ = info.vector(info.envp, None);
++    }
++    if process.name.is_empty() {
++        process.name.clone_from(&info.name);
++        if process.name.is_empty()
++            && let Some(command) = process.cmd.first()
++        {
++            process.name = PathBuf::from(command)
++                .file_name()
++                .map_or_else(OsString::new, OsString::from);
++        }
++    }
++    process.status = info.status;
++    process.updated = true;
++}
++
++pub(crate) fn new_process(
++    info: &ProcessInfo,
++    now: u64,
++    refresh_kind: ProcessRefreshKind,
++) -> ProcessInner {
++    let mut process = ProcessInner {
++        name: OsString::new(),
++        cmd: Vec::new(),
++        exe: None,
++        pid: info.pid,
++        parent: info.parent,
++        environ: Vec::new(),
++        cwd: None,
++        root: None,
++        memory: 0,
++        virtual_memory: 0,
++        updated: true,
++        cpu_usage: 0.,
++        start_time: info.start_time,
++        run_time: 0,
++        status: info.status,
++        user_id: info.user_id.clone(),
++        effective_user_id: info.effective_user_id.clone(),
++        group_id: info.group_id,
++        effective_group_id: info.effective_group_id,
++        read_bytes: 0,
++        old_read_bytes: 0,
++        written_bytes: 0,
++        old_written_bytes: 0,
++        accumulated_cpu_time: 0,
++        exists: true,
++    };
++    update_process(info, now, refresh_kind, &mut process);
++    process
++}
++
++fn c_field(data: &[u8], offset: usize, length: usize) -> Vec<u8> {
++    data.get(offset..offset.saturating_add(length))
++        .unwrap_or_default()
++        .split(|byte| *byte == 0)
++        .next()
++        .unwrap_or_default()
++        .to_vec()
++}
++
++fn read_u16(data: &[u8], offset: usize) -> Option<u16> {
++    Some(u16::from_ne_bytes(
++        data.get(offset..offset + 2)?.try_into().ok()?,
++    ))
++}
++
++fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
++    Some(u32::from_ne_bytes(
++        data.get(offset..offset + 4)?.try_into().ok()?,
++    ))
++}
++
++fn read_i32(data: &[u8], offset: usize) -> Option<i32> {
++    Some(i32::from_ne_bytes(
++        data.get(offset..offset + 4)?.try_into().ok()?,
++    ))
++}
++
++fn read_u64(data: &[u8], offset: usize) -> Option<u64> {
++    Some(u64::from_ne_bytes(
++        data.get(offset..offset + 8)?.try_into().ok()?,
++    ))
++}
++
++fn read_i64(data: &[u8], offset: usize) -> Option<i64> {
++    Some(i64::from_ne_bytes(
++        data.get(offset..offset + 8)?.try_into().ok()?,
++    ))
++}
++
++fn read_pointer(data: &[u8], offset: usize, size: usize) -> Option<u64> {
++    match size {
++        4 => read_u32(data, offset).map(u64::from),
++        8 => read_u64(data, offset),
++        _ => None,
++    }
++}
++
++fn timespec_millis(data: &[u8], offset: usize) -> Option<u64> {
++    let seconds = read_i64(data, offset)?.max(0) as u64;
++    let nanoseconds = read_i64(data, offset + 8)?.max(0) as u64;
++    Some(
++        seconds
++            .saturating_mul(1000)
++            .saturating_add(nanoseconds / 1_000_000),
++    )
++}
++
++fn read_pointer_at(file: &File, offset: u64, size: usize) -> Option<u64> {
++    let mut bytes = [0u8; 8];
++    (file.read_at(&mut bytes[..size], offset).ok()? == size).then(|| match size {
++        4 => u32::from_ne_bytes(bytes[..4].try_into().unwrap()) as u64,
++        8 => u64::from_ne_bytes(bytes),
++        _ => 0,
++    })
++}
++
++fn read_c_string_at(file: &File, address: u64) -> Option<Vec<u8>> {
++    let mut output = Vec::new();
++    let mut offset = address;
++    let mut buffer = [0u8; 256];
++    while output.len() < MAX_STRING_SIZE {
++        let read = file.read_at(&mut buffer, offset).ok()?;
++        if read == 0 {
++            return None;
++        }
++        if let Some(end) = buffer[..read].iter().position(|byte| *byte == 0) {
++            output.extend_from_slice(&buffer[..end]);
++            return Some(output);
++        }
++        output.extend_from_slice(&buffer[..read]);
++        offset = offset.saturating_add(read as u64);
++    }
++    None
++}
+diff -ruN a/src/unix/illumos/product.rs b/src/unix/illumos/product.rs
+--- a/src/unix/illumos/product.rs
++++ b/src/unix/illumos/product.rs
+@@ -0,0 +1,61 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use super::smbios::{Smbios, SystemInfo};
++use crate::Error;
++
++pub(crate) struct ProductInner;
++
++impl ProductInner {
++    pub(crate) fn family() -> Result<String, Error> {
++        system_info()?
++            .family
++            .ok_or_else(|| Error::Other("failed to retrieve product family".into()))
++    }
++
++    pub(crate) fn name() -> Result<String, Error> {
++        system_info()?
++            .common
++            .product
++            .ok_or_else(|| Error::Other("failed to retrieve product name".into()))
++    }
++
++    pub(crate) fn serial_number() -> Result<String, Error> {
++        system_info()?
++            .common
++            .serial
++            .ok_or_else(|| Error::Other("failed to retrieve product serial number".into()))
++    }
++
++    pub(crate) fn stock_keeping_unit() -> Result<String, Error> {
++        system_info()?
++            .sku
++            .ok_or_else(|| Error::Other("failed to retrieve product stock keeping unit".into()))
++    }
++
++    pub(crate) fn uuid() -> Result<String, Error> {
++        system_info()?
++            .uuid
++            .ok_or_else(|| Error::Other("failed to retrieve product uuid".into()))
++    }
++
++    pub(crate) fn version() -> Result<String, Error> {
++        system_info()?
++            .common
++            .version
++            .ok_or_else(|| Error::Other("failed to retrieve product version".into()))
++    }
++
++    pub(crate) fn vendor_name() -> Result<String, Error> {
++        system_info()?
++            .common
++            .manufacturer
++            .ok_or_else(|| Error::Other("failed to retrieve product vendor name".into()))
++    }
++}
++
++fn system_info() -> Result<SystemInfo, Error> {
++    Smbios::new()
++        .ok_or_else(|| Error::Other("failed to open system SMBIOS data".into()))?
++        .system_info()
++        .ok_or_else(|| Error::Other("failed to retrieve system SMBIOS data".into()))
++}
+diff -ruN a/src/unix/illumos/smbios.rs b/src/unix/illumos/smbios.rs
+--- a/src/unix/illumos/smbios.rs
++++ b/src/unix/illumos/smbios.rs
+@@ -0,0 +1,227 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use libc::{c_char, c_int, c_void};
++use std::ffi::CStr;
++use std::ptr;
++
++const SMB_VERSION_28: c_int = 0x0208;
++const SMB_TYPE_BASEBOARD: u32 = 2;
++const SMB_ERR: i32 = -1;
++
++#[repr(C)]
++struct SmbiosHandle {
++    _private: [u8; 0],
++}
++
++#[repr(C)]
++struct SmbiosStruct {
++    id: i32,
++    _structure_type: u32,
++    _data: *const c_void,
++    _size: usize,
++}
++
++#[repr(C)]
++struct SmbiosInfo {
++    manufacturer: *const c_char,
++    product: *const c_char,
++    version: *const c_char,
++    serial: *const c_char,
++    asset: *const c_char,
++    _location: *const c_char,
++    _part: *const c_char,
++}
++
++#[repr(C)]
++struct SmbiosSystem {
++    uuid: *const u8,
++    uuid_len: u8,
++    _wakeup: u8,
++    sku: *const c_char,
++    family: *const c_char,
++}
++
++#[derive(Default)]
++pub(super) struct CommonInfo {
++    pub(super) manufacturer: Option<String>,
++    pub(super) product: Option<String>,
++    pub(super) version: Option<String>,
++    pub(super) serial: Option<String>,
++    pub(super) asset: Option<String>,
++}
++
++#[derive(Default)]
++pub(super) struct SystemInfo {
++    pub(super) common: CommonInfo,
++    pub(super) sku: Option<String>,
++    pub(super) family: Option<String>,
++    pub(super) uuid: Option<String>,
++}
++
++pub(super) struct Smbios {
++    handle: *mut SmbiosHandle,
++}
++
++impl Smbios {
++    pub(super) fn new() -> Option<Self> {
++        let mut error = 0;
++        // SAFETY: A null path asks libsmbios to open the system SMBIOS device. `error` is a valid
++        // output pointer and the returned handle is checked before use.
++        let handle = unsafe { smbios_open(ptr::null(), SMB_VERSION_28, 0, &mut error) };
++        (!handle.is_null()).then_some(Self { handle })
++    }
++
++    pub(super) fn system_info(&self) -> Option<SystemInfo> {
++        let mut system = std::mem::MaybeUninit::<SmbiosSystem>::uninit();
++        // SAFETY: The handle remains valid for this call and `system` points to writable storage.
++        let id = unsafe { smbios_info_system(self.handle, system.as_mut_ptr()) };
++        if id == SMB_ERR {
++            return None;
++        }
++
++        // SAFETY: A successful `smbios_info_system` call initialized the structure.
++        let system = unsafe { system.assume_init() };
++        Some(SystemInfo {
++            common: self.common_info(id)?,
++            // SAFETY: libsmbios owns these strings and keeps them alive for the handle's lifetime.
++            sku: unsafe { copy_string(system.sku) },
++            // SAFETY: See above.
++            family: unsafe { copy_string(system.family) },
++            // SAFETY: libsmbios reports the UUID buffer length alongside the pointer, and both
++            // remain valid for the handle's lifetime.
++            uuid: unsafe { copy_uuid(system.uuid, system.uuid_len) },
++        })
++    }
++
++    pub(super) fn baseboard_info(&self) -> Option<CommonInfo> {
++        let mut structure = std::mem::MaybeUninit::<SmbiosStruct>::uninit();
++        // SAFETY: The handle remains valid for this call and `structure` points to writable
++        // storage. SMB_TYPE_BASEBOARD is a valid SMBIOS structure type.
++        if unsafe { smbios_lookup_type(self.handle, SMB_TYPE_BASEBOARD, structure.as_mut_ptr()) }
++            < 0
++        {
++            return None;
++        }
++
++        // SAFETY: A successful lookup initialized the structure.
++        self.common_info(unsafe { structure.assume_init() }.id)
++    }
++
++    fn common_info(&self, id: i32) -> Option<CommonInfo> {
++        let mut info = std::mem::MaybeUninit::<SmbiosInfo>::uninit();
++        // SAFETY: The handle and structure ID came from libsmbios and `info` points to writable
++        // storage.
++        if unsafe { smbios_info_common(self.handle, id, info.as_mut_ptr()) } < 0 {
++            return None;
++        }
++
++        // SAFETY: A successful `smbios_info_common` call initialized the structure. Its string
++        // pointers remain valid while the handle is open.
++        let info = unsafe { info.assume_init() };
++        Some(CommonInfo {
++            // SAFETY: Each pointer is either null or a NUL-terminated libsmbios string.
++            manufacturer: unsafe { copy_string(info.manufacturer) },
++            // SAFETY: See above.
++            product: unsafe { copy_string(info.product) },
++            // SAFETY: See above.
++            version: unsafe { copy_string(info.version) },
++            // SAFETY: See above.
++            serial: unsafe { copy_string(info.serial) },
++            // SAFETY: See above.
++            asset: unsafe { copy_string(info.asset) },
++        })
++    }
++}
++
++impl Drop for Smbios {
++    fn drop(&mut self) {
++        // SAFETY: `handle` was returned by `smbios_open` and is closed exactly once here.
++        unsafe { smbios_close(self.handle) };
++    }
++}
++
++unsafe fn copy_string(value: *const c_char) -> Option<String> {
++    if value.is_null() {
++        return None;
++    }
++
++    // SAFETY: The caller guarantees that `value` points to a NUL-terminated C string.
++    let value = unsafe { CStr::from_ptr(value) }.to_string_lossy();
++    let value = value.trim();
++    (!value.is_empty()).then(|| value.to_owned())
++}
++
++unsafe fn copy_uuid(value: *const u8, len: u8) -> Option<String> {
++    if value.is_null() || len != 16 {
++        return None;
++    }
++
++    // SAFETY: libsmbios reported that the UUID buffer contains exactly 16 bytes.
++    let bytes = unsafe { std::slice::from_raw_parts(value, 16) };
++    if bytes.iter().all(|byte| *byte == 0) || bytes.iter().all(|byte| *byte == u8::MAX) {
++        return None;
++    }
++
++    Some(format!(
++        "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
++        u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
++        u16::from_le_bytes(bytes[4..6].try_into().unwrap()),
++        u16::from_le_bytes(bytes[6..8].try_into().unwrap()),
++        bytes[8],
++        bytes[9],
++        bytes[10],
++        bytes[11],
++        bytes[12],
++        bytes[13],
++        bytes[14],
++        bytes[15],
++    ))
++}
++
++#[link(name = "smbios")]
++unsafe extern "C" {
++    fn smbios_open(
++        path: *const c_char,
++        version: c_int,
++        flags: c_int,
++        error: *mut c_int,
++    ) -> *mut SmbiosHandle;
++    fn smbios_close(handle: *mut SmbiosHandle);
++    fn smbios_lookup_type(
++        handle: *mut SmbiosHandle,
++        structure_type: u32,
++        structure: *mut SmbiosStruct,
++    ) -> c_int;
++    fn smbios_info_common(handle: *mut SmbiosHandle, id: i32, info: *mut SmbiosInfo) -> c_int;
++    fn smbios_info_system(handle: *mut SmbiosHandle, system: *mut SmbiosSystem) -> i32;
++}
++
++const _: [(); 24] = [(); std::mem::size_of::<SmbiosStruct>()];
++const _: [(); 56] = [(); std::mem::size_of::<SmbiosInfo>()];
++const _: [(); 32] = [(); std::mem::size_of::<SmbiosSystem>()];
++
++#[cfg(test)]
++mod tests {
++    use super::copy_uuid;
++
++    #[test]
++    fn formats_uuid_using_smbios_byte_order() {
++        let bytes = [
++            0x75, 0x36, 0x21, 0x57, 0xe8, 0x09, 0x14, 0x44, 0xa3, 0x94, 0x8f, 0x9f, 0xbb, 0x30,
++            0xaa, 0x7c,
++        ];
++        assert_eq!(
++            // SAFETY: `bytes` is a valid 16-byte buffer.
++            unsafe { copy_uuid(bytes.as_ptr(), bytes.len() as u8) }.as_deref(),
++            Some("57213675-09e8-4414-a394-8f9fbb30aa7c"),
++        );
++    }
++
++    #[test]
++    fn rejects_unset_uuids() {
++        // SAFETY: Both arrays are valid 16-byte buffers.
++        assert_eq!(unsafe { copy_uuid([0; 16].as_ptr(), 16) }, None);
++        // SAFETY: See above.
++        assert_eq!(unsafe { copy_uuid([u8::MAX; 16].as_ptr(), 16) }, None);
++    }
++}
+diff -ruN a/src/unix/illumos/system.rs b/src/unix/illumos/system.rs
+--- a/src/unix/illumos/system.rs
++++ b/src/unix/illumos/system.rs
+@@ -0,0 +1,362 @@
++// Take a look at the license at the top of the repository in the LICENSE file.
++
++use std::collections::{HashMap, HashSet};
++use std::ffi::CStr;
++use std::mem::MaybeUninit;
++use std::time::{SystemTime, UNIX_EPOCH};
++
++use crate::{
++    Cpu, CpuRefreshKind, Error, LoadAvg, MemoryRefreshKind, Pid, Process, ProcessRefreshKind,
++    ProcessesToUpdate,
++};
++
++use super::cpu::{CpusWrapper, possible_cpu_ids};
++use super::ffi;
++use super::kstat::KstatReader;
++use super::process::{ProcessInfo, new_process, update_process};
++
++const UNIX_MODULE: &CStr = c"unix";
++const SYSTEM_MISC: &CStr = c"system_misc";
++const CPU_INFO_MODULE: &CStr = c"cpu_info";
++
++pub(crate) struct SystemInner {
++    process_list: HashMap<Pid, Process>,
++    mem_total: u64,
++    mem_free: u64,
++    mem_used: u64,
++    mem_available: u64,
++    swap_total: u64,
++    swap_used: u64,
++    cpus: CpusWrapper,
++}
++
++impl SystemInner {
++    pub(crate) fn new() -> Result<Self, Error> {
++        Ok(Self {
++            process_list: HashMap::with_capacity(200),
++            mem_total: 0,
++            mem_free: 0,
++            mem_used: 0,
++            mem_available: 0,
++            swap_total: 0,
++            swap_used: 0,
++            cpus: CpusWrapper::new(),
++        })
++    }
++
++    pub(crate) fn refresh_memory_specifics(&mut self, refresh_kind: MemoryRefreshKind) {
++        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(0) as u64;
++        if refresh_kind.ram() {
++            let total_pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) }.max(0) as u64;
++            let free_pages = unsafe { libc::sysconf(libc::_SC_AVPHYS_PAGES) }.max(0) as u64;
++            self.mem_total = total_pages.saturating_mul(page_size);
++            self.mem_free = free_pages.saturating_mul(page_size);
++            self.mem_available = self.mem_free;
++            self.mem_used = self.mem_total.saturating_sub(self.mem_free);
++        }
++        if refresh_kind.swap() {
++            if let Some((total_pages, free_pages)) = physical_swap_pages() {
++                self.swap_total = total_pages.saturating_mul(page_size);
++                self.swap_used = total_pages
++                    .saturating_sub(free_pages)
++                    .saturating_mul(page_size);
++            } else {
++                sysinfo_debug!("failed to retrieve physical swap information");
++            }
++        }
++    }
++
++    pub(crate) fn cgroup_limits(&self) -> Option<crate::CGroupLimits> {
++        None
++    }
++
++    pub(crate) fn refresh_cpu_specifics(&mut self, refresh_kind: CpuRefreshKind) {
++        self.cpus.refresh(refresh_kind);
++    }
++
++    pub(crate) fn refresh_cpu_list(&mut self, refresh_kind: CpuRefreshKind) {
++        self.cpus = CpusWrapper::new();
++        self.cpus.refresh(refresh_kind);
++    }
++
++    pub(crate) fn refresh_processes_specifics(
++        &mut self,
++        processes_to_update: ProcessesToUpdate<'_>,
++        refresh_kind: ProcessRefreshKind,
++    ) -> usize {
++        let pids = match processes_to_update {
++            ProcessesToUpdate::Some(&[]) => return 0,
++            ProcessesToUpdate::Some(pids) => pids.to_vec(),
++            ProcessesToUpdate::All => match std::fs::read_dir("/proc") {
++                Ok(entries) => entries
++                    .flatten()
++                    .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
++                    .map(Pid)
++                    .collect(),
++                Err(_error) => {
++                    sysinfo_debug!("failed to read /proc: {_error}");
++                    return 0;
++                }
++            },
++        };
++
++        let now = SystemTime::now()
++            .duration_since(UNIX_EPOCH)
++            .unwrap_or_default()
++            .as_secs();
++        let mut updated = 0;
++        for pid in pids {
++            let Some(info) = ProcessInfo::read(pid) else {
++                continue;
++            };
++            updated += 1;
++            match self.process_list.get_mut(&pid) {
++                Some(process) if process.inner.start_time == info_start_time(&info) => {
++                    update_process(&info, now, refresh_kind, &mut process.inner);
++                }
++                _ => {
++                    self.process_list.insert(
++                        pid,
++                        Process {
++                            inner: new_process(&info, now, refresh_kind),
++                        },
++                    );
++                }
++            }
++        }
++        updated
++    }
++
++    pub(crate) fn processes(&self) -> &HashMap<Pid, Process> {
++        &self.process_list
++    }
++
++    pub(crate) fn processes_mut(&mut self) -> &mut HashMap<Pid, Process> {
++        &mut self.process_list
++    }
++
++    pub(crate) fn process(&self, pid: Pid) -> Option<&Process> {
++        self.process_list.get(&pid)
++    }
++
++    pub(crate) fn global_cpu_usage(&self) -> f32 {
++        self.cpus.global_cpu_usage
++    }
++
++    pub(crate) fn cpus(&self) -> &[Cpu] {
++        &self.cpus.cpus
++    }
++
++    pub(crate) fn total_memory(&self) -> u64 {
++        self.mem_total
++    }
++
++    pub(crate) fn free_memory(&self) -> u64 {
++        self.mem_free
++    }
++
++    pub(crate) fn available_memory(&self) -> u64 {
++        self.mem_available
++    }
++
++    pub(crate) fn used_memory(&self) -> u64 {
++        self.mem_used
++    }
++
++    pub(crate) fn total_swap(&self) -> u64 {
++        self.swap_total
++    }
++
++    pub(crate) fn free_swap(&self) -> u64 {
++        self.swap_total.saturating_sub(self.swap_used)
++    }
++
++    pub(crate) fn used_swap(&self) -> u64 {
++        self.swap_used
++    }
++
++    pub(crate) fn uptime() -> Result<u64, Error> {
++        let now = SystemTime::now()
++            .duration_since(UNIX_EPOCH)
++            .map_err(|_| Error::Other("system time is before the Unix epoch".into()))?
++            .as_secs();
++        Ok(now.saturating_sub(Self::boot_time()?))
++    }
++
++    pub(crate) fn boot_time() -> Result<u64, Error> {
++        let kstat =
++            KstatReader::new().ok_or_else(|| Error::Other("failed to open libkstat".into()))?;
++        let record = kstat
++            .lookup(Some(UNIX_MODULE), 0, Some(SYSTEM_MISC))
++            .ok_or_else(|| Error::Other("failed to read system_misc kstat".into()))?;
++        record
++            .integer("boot_time")
++            .ok_or_else(|| Error::Other("boot_time kstat is unavailable".into()))
++    }
++
++    pub(crate) fn load_average() -> Result<LoadAvg, Error> {
++        let mut load = [0f64; 3];
++        if unsafe { libc::getloadavg(load.as_mut_ptr(), load.len() as _) } < 0 {
++            Err(Error::Other("getloadavg failed".into()))
++        } else {
++            Ok(LoadAvg {
++                one: load[0],
++                five: load[1],
++                fifteen: load[2],
++            })
++        }
++    }
++
++    pub(crate) fn name() -> Result<String, Error> {
++        os_release_value("NAME").map_or_else(|| system_info(libc::SI_SYSNAME), Ok)
++    }
++
++    pub(crate) fn os_version() -> Result<String, Error> {
++        os_release_value("VERSION_ID").map_or_else(|| system_info(libc::SI_RELEASE), Ok)
++    }
++
++    pub(crate) fn long_os_version() -> Result<String, Error> {
++        if let Some(name) = os_release_value("PRETTY_NAME") {
++            return Ok(name);
++        }
++        Ok(format!("{} {}", Self::name()?, Self::os_version()?))
++    }
++
++    pub(crate) fn host_name() -> Result<String, Error> {
++        system_info(libc::SI_HOSTNAME)
++    }
++
++    pub(crate) fn kernel_version() -> Result<String, Error> {
++        system_info(libc::SI_VERSION)
++    }
++
++    pub(crate) fn distribution_id() -> String {
++        os_release_value("ID").unwrap_or_else(|| "illumos".to_owned())
++    }
++
++    pub(crate) fn distribution_id_like() -> Vec<String> {
++        match os_release_value("ID_LIKE") {
++            Some(value) => value.split_ascii_whitespace().map(String::from).collect(),
++            None if Self::distribution_id() != "illumos" => vec!["illumos".to_owned()],
++            None => Vec::new(),
++        }
++    }
++
++    pub(crate) fn kernel_name() -> Option<&'static str> {
++        Some("SunOS")
++    }
++
++    pub(crate) fn cpu_arch() -> Option<String> {
++        system_info(libc::SI_ARCHITECTURE_64)
++            .or_else(|_| system_info(libc::SI_ARCHITECTURE))
++            .ok()
++    }
++
++    pub(crate) fn physical_core_count() -> Result<usize, Error> {
++        let kstat =
++            KstatReader::new().ok_or_else(|| Error::Other("failed to open libkstat".into()))?;
++        let mut cores = HashSet::new();
++        for id in possible_cpu_ids() {
++            if let Some(info) = kstat.lookup(Some(CPU_INFO_MODULE), id, None) {
++                let chip = info.integer("chip_id").unwrap_or(id as u64);
++                let core = info.integer("core_id").unwrap_or(id as u64);
++                cores.insert((chip, core));
++            }
++        }
++        if cores.is_empty() {
++            Err(Error::Other(
++                "failed to retrieve physical core count".into(),
++            ))
++        } else {
++            Ok(cores.len())
++        }
++    }
++
++    pub(crate) fn open_files_limit() -> Result<usize, Error> {
++        let mut limit = MaybeUninit::<libc::rlimit>::uninit();
++        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) } != 0 {
++            Err(Error::Other("getrlimit(RLIMIT_NOFILE) failed".into()))
++        } else {
++            Ok(unsafe { limit.assume_init() }.rlim_cur as usize)
++        }
++    }
++}
++
++fn physical_swap_pages() -> Option<(u64, u64)> {
++    let count = unsafe { ffi::swapctl(ffi::SC_GETNSWP, std::ptr::null_mut()) };
++    if count < 0 {
++        return None;
++    }
++    let capacity = count as usize;
++    if capacity == 0 {
++        return Some((0, 0));
++    }
++
++    let table_size = std::mem::size_of::<ffi::SwapTable>()
++        .checked_add(capacity.checked_mul(std::mem::size_of::<ffi::SwapEntry>())?)?;
++    let word_size = std::mem::size_of::<usize>();
++    let word_count = table_size.checked_add(word_size - 1)? / word_size;
++    let mut table_storage = vec![0usize; word_count];
++    let table = table_storage.as_mut_ptr().cast::<ffi::SwapTable>();
++    unsafe { (*table).count = count };
++
++    let path_size = libc::PATH_MAX as usize;
++    let mut paths = vec![0 as libc::c_char; capacity.checked_mul(path_size)?];
++    let entries =
++        unsafe { std::slice::from_raw_parts_mut((*table).entries.as_mut_ptr(), capacity) };
++    for (index, entry) in entries.iter_mut().enumerate() {
++        entry.path = unsafe { paths.as_mut_ptr().add(index * path_size) };
++    }
++
++    let listed = unsafe { ffi::swapctl(ffi::SC_LIST, table.cast::<libc::c_void>()) };
++    if listed < 0 {
++        return None;
++    }
++
++    let mut total_pages = 0u64;
++    let mut free_pages = 0u64;
++    for entry in entries.iter().take((listed as usize).min(capacity)) {
++        if entry.flags & ffi::ST_INDEL != 0 {
++            continue;
++        }
++        total_pages = total_pages.saturating_add(entry.pages.max(0) as u64);
++        free_pages = free_pages.saturating_add(entry.free.max(0) as u64);
++    }
++    Some((total_pages, free_pages.min(total_pages)))
++}
++
++fn info_start_time(info: &ProcessInfo) -> u64 {
++    // Keep the raw procfs representation private to process.rs while still
++    // allowing PID-reuse detection here.
++    info.start_time()
++}
++
++fn system_info(command: libc::c_int) -> Result<String, Error> {
++    let mut value = [0 as libc::c_char; 257];
++    if unsafe { libc::sysinfo(command, value.as_mut_ptr(), value.len() as libc::c_long) } < 0 {
++        return Err(Error::Other("sysinfo failed".into()));
++    }
++    Ok(unsafe { CStr::from_ptr(value.as_ptr()) }
++        .to_string_lossy()
++        .into_owned())
++}
++
++fn os_release_value(key: &str) -> Option<String> {
++    let contents = std::fs::read_to_string("/etc/os-release").ok()?;
++    let value = contents.lines().find_map(|line| {
++        let (name, value) = line.split_once('=')?;
++        (name == key).then_some(value.trim())
++    })?;
++    Some(
++        value
++            .strip_prefix('"')
++            .and_then(|value| value.strip_suffix('"'))
++            .or_else(|| {
++                value
++                    .strip_prefix('\'')
++                    .and_then(|value| value.strip_suffix('\''))
++            })
++            .unwrap_or(value)
++            .to_owned(),
++    )
++}
+diff -ruN a/src/unix/mod.rs b/src/unix/mod.rs
+--- a/src/unix/mod.rs
++++ b/src/unix/mod.rs
+@@ -26,6 +26,13 @@
+         #[allow(unused_imports)]
+         pub(crate) use bsd::libc_errno;
+     }
++    target_os = "illumos" => {
++        pub(crate) mod illumos;
++        pub(crate) use illumos as sys;
++
++        #[allow(unused_imports)]
++        pub(crate) use libc::___errno as libc_errno;
++    }
+     _ => {
+         compile_error!("Invalid cfg!");
+     }
+@@ -70,6 +77,8 @@
+ #[cfg(any())]
+ mod groups;
+ #[cfg(any())]
++mod illumos;
++#[cfg(any())]
+ mod linux;
+ #[cfg(any())]
+ mod users;
+diff -ruN a/src/unix/network_helper.rs b/src/unix/network_helper.rs
+--- a/src/unix/network_helper.rs
++++ b/src/unix/network_helper.rs
+@@ -128,6 +128,7 @@
+     target_os = "macos",
+     target_os = "freebsd",
+     target_os = "netbsd",
++    target_os = "illumos",
+     target_os = "ios"
+ ))]
+ impl From<&libc::sockaddr_dl> for MacAddr {
+@@ -135,8 +136,13 @@
+         let sdl_data = value.sdl_data;
+         // interface name length, NO trailing 0
+         let sdl_nlen = value.sdl_nlen as usize;
+-        // make sure that it is never out of bound
+-        if sdl_nlen + 5 < 12 {
++        // Link-layer addresses can have a different length, and `sdl_data` is
++        // not the same size on every supported platform.
++        if value.sdl_alen == 6
++            && sdl_nlen
++                .checked_add(6)
++                .is_some_and(|end| end <= sdl_data.len())
++        {
+             MacAddr([
+                 sdl_data[sdl_nlen] as u8,
+                 sdl_data[sdl_nlen + 1] as u8,
+@@ -155,6 +161,7 @@
+     target_os = "macos",
+     target_os = "freebsd",
+     target_os = "netbsd",
++    target_os = "illumos",
+     target_os = "ios"
+ ))]
+ unsafe fn parse_interface_address(ifap: &libc::ifaddrs) -> Option<MacAddr> {
+@@ -229,12 +236,12 @@
+     }
+ }
+ 
+-#[cfg(any(target_os = "linux", target_os = "android"))]
++#[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
+ unsafe fn read_sockaddr<T>(sa: *const libc::sockaddr) -> T {
+     unsafe { (sa as *const T).read_unaligned() }
+ }
+ 
+-#[cfg(not(any(target_os = "linux", target_os = "android")))]
++#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "illumos")))]
+ unsafe fn read_sockaddr<T>(sa: *const libc::sockaddr) -> T {
+     unsafe {
+         let available = usize::from((*sa).sa_len);
+@@ -322,6 +329,25 @@
+ mod tests {
+     use super::*;
+ 
++    #[cfg(target_os = "illumos")]
++    #[test]
++    fn mac_address_after_long_interface_name() {
++        let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_dl>() };
++        address.sdl_nlen = 16;
++        address.sdl_alen = 6;
++        for (output, input) in address.sdl_data[16..22]
++            .iter_mut()
++            .zip([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc])
++        {
++            *output = input as libc::c_char;
++        }
++
++        assert_eq!(
++            MacAddr::from(&address),
++            MacAddr([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc])
++        );
++    }
++
+     #[test]
+     fn ipv4_mask() {
+         let mask = Ipv4Addr::new(255, 255, 255, 0);
+diff -ruN a/src/utils.rs b/src/utils.rs
+--- a/src/utils.rs
++++ b/src/utils.rs
+@@ -68,6 +68,7 @@
+         windows,
+         target_os = "linux",
+         target_os = "android",
++        target_os = "illumos",
+         target_os = "macos",
+         target_os = "ios",
+     ),

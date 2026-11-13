@@ -28,8 +28,11 @@ in {
     bins = "zoxide"; check = chk ''"$out/bin/zoxide" --version'' "^zoxide 0\\.10\\.0"; };
   # procs: NOT BUILT -- its process backend is Linux/macOS/FreeBSD/Windows only (src/process/*.rs;
   # 'unresolved import crate::process::ProcessInfo' on illumos, measured). prstat/ps are the tools here.
-  bottom = pkg { pname = "bottom"; vendorHash = "sha256-hijel5yGMt2zxioly0a7Htr1VvODAxZAQfB7Pfv8J+Y="; version = "0.14.9"; src = gh "ClementTsang/bottom" "0.14.9" "1dbb940c763fb583b7e1c7dfa165b73ed9a0ba712e72cc97311c5b1c098d5b72";
-    bins = "btm"; check = chk ''"$out/bin/btm" --version'' "^bottom 0\\.14\\.9"; };
+  # bottom main 99d586a (2026-11-13): the first commit on sysinfo 0.40.3, which sysinfo's illumos backend (PR #1741) applies to;
+  # 0.14.9 and 0.15.0 pin sysinfo 0.39.6, whose illumos build is its "unknown" stub (btm showed 0% CPU, 0 B RAM, no disks).
+  bottom = pkg { pname = "bottom"; vendorHash = "sha256-4X3A+9cxFA+l8Sib+weeHQ3D2teDZHZ967pl6tdD8Y8="; version = "0.15.0-unstable-2026-11-13";
+    src = { url = "https://codeload.github.com/ClementTsang/bottom/tar.gz/99d586a14ef8a83c8513183e8b016ae94d641a3b"; sha256 = "22161848979550090e674858cac105b678f0a7171101029dd71a46901f08c895"; };
+    bins = "btm"; check = chk ''"$out/bin/btm" --version'' "^bottom 0\\.15\\.0"; };
   difftastic = pkg { pname = "difftastic"; vendorHash = "sha256-ol2He396GJJ9tE0dm6OaSGe7OLiM6oe58qbdnELSslA="; version = "0.71.0"; src = gh "Wilfred/difftastic" "0.71.0" "d6afd26103c6492a91307dc6779c7dd0ca4d4c85499f81d7dc53fdfa5107331d";
     bins = "difft"; check = chk ''"$out/bin/difft" --version'' "^Difftastic 0\\.71\\.0"; };
   atuin = pkg { pname = "atuin"; vendorHash = "sha256-buZX2s1yC+WroYId+0LhkZmDbNBcQVJ7MvpZBcV50zc="; version = "18.24.2"; src = gh "atuinsh/atuin" "v18.24.2" "dcea434c66185bc6c1359c2f719e2aa89a68c6d1e31ca7a8749e1b593313f93f";

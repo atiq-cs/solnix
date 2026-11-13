@@ -29,8 +29,52 @@ in
   ruff = { prep = jemallocFix; };
   qsv = { prep = jemallocFix; };   # tikv-jemalloc-sys, as ruff (its configure also needs GNU grep/sed: /usr/gnu first on PATH)
   uv = { prep = jemallocFix; };
-  # starship-battery (default "battery") and nvml have no illumos arm: build without them.
-  bottom = { noDefault = true; };
+  # starship-battery (default "battery") and nvml have no illumos arm: build without them; "zfs" (the ARC on the memory
+  # widget) has Linux/FreeBSD arms only, so it stays off too.
+  # sysinfo has no illumos backend in any release: its illumos build is the "unknown" stub, so every collector bottom takes
+  # from it (CPU, memory, swap, disks, network, processes, temperatures) read zero. Carry the illumos backend of sysinfo
+  # PR #1741 (notpeter/sysinfo dfcd8a2c, MIT: kstat, /proc, /etc/mnttab + statvfs, ksensor), ported to the 0.40.3 API
+  # (rust-fixups/sysinfo-0.40.3-illumos.patch says how). Drop it when a sysinfo release has an illumos backend.
+  bottom = { noDefault = true; prep = ''
+    d=$V/sysinfo; grep -q '^version = "0.40.3"$' $d/Cargo.toml || { echo "FATAL: bottom's sysinfo is not 0.40.3" >&2; exit 1; }
+    ( cd $d && patch -p1 --no-backup-if-mismatch < ${./rust-fixups/sysinfo-0.40.3-illumos.patch} ) || { echo "FATAL: sysinfo illumos patch" >&2; exit 1; }
+    [ -f $d/src/unix/illumos/kstat.rs ] && grep -q 'target_os = "illumos"' $d/src/unix/mod.rs || { echo "FATAL: sysinfo illumos backend missing" >&2; exit 1; }
+    # bottom refreshes sysinfo's disk list only on Windows and FreeBSD (collection.rs): on illumos it stayed empty ("No data")
+    f=src/collection.rs; a='            #[cfg(any(target_os = "windows", target_os = "freebsd"))]'
+    [ "$(grep -cxF "$a" $f)" = 1 ] || { echo "FATAL: bottom disk-refresh cfg anchor" >&2; exit 1; }
+    sed -i 's/^            #\[cfg(any(target_os = "windows", target_os = "freebsd"))\]$/            #[cfg(any(target_os = "windows", target_os = "freebsd", target_os = "illumos"))]/' $f
+    grep -q 'target_os = "freebsd", target_os = "illumos"))]' $f || { echo "FATAL: bottom disk-refresh cfg" >&2; exit 1; }
+    # its process table: get_processes() routes only linux/freebsd/macos/windows/android/ios to a collector ("Unsupported"
+    # otherwise); illumos takes the generic unix one (GenericProcessExt over sysinfo, as any other unix)
+    f=src/collection/processes.rs; a='                target_os = "ios"'
+    [ "$(grep -cxF "$a" $f)" = 1 ] || { echo "FATAL: bottom get_processes cfg anchor" >&2; exit 1; }
+    sed -i 's/^                target_os = "ios"$/                target_os = "ios",\n                target_os = "illumos"/' $f
+    grep -qx '                target_os = "illumos"' $f || { echo "FATAL: bottom get_processes cfg" >&2; exit 1; }
+    # process states: process_status_str and the state letter have no illumos arm ("Unknown", '?'); psinfo's pr_sname letters
+    "$python3/bin/python3" - src/collection/processes.rs src/collection/processes/unix/process_ext.rs <<'PY'
+import sys
+def ed(p, old, new):
+    s = open(p).read()
+    if s.count(old) != 1: sys.exit("FATAL: bottom state anchor in %s" % p)
+    open(p, "w").write(s.replace(old, new))
+ed(sys.argv[1], '        _ => "Unknown",\n    }\n}', '        target_os = "illumos" => match status {\n            ProcessStatus::Idle => "Idle",\n'
+   '            ProcessStatus::Run => "Runnable",\n            ProcessStatus::Sleep => "Sleeping",\n            ProcessStatus::Stop => "Stopped",\n'
+   '            ProcessStatus::Zombie => "Zombie",\n            _ => "Unknown",\n        },\n        _ => "Unknown",\n    }\n}')
+ed(sys.argv[2], "        _ => '?',\n    }\n}", "        target_os = \"illumos\" => match status {\n            ProcessStatus::Idle => 'I',\n"
+   "            ProcessStatus::Run => 'R',\n            ProcessStatus::Sleep => 'S',\n            ProcessStatus::Stop => 'T',\n"
+   "            ProcessStatus::Zombie => 'Z',\n            _ => '?',\n        },\n        _ => '?',\n    }\n}")
+PY
+    # and its disk table needs an I/O map, which it makes only on Linux/macOS/Windows/FreeBSD ("Unsupported OS" elsewhere
+    # drops the whole widget): on illumos, sysinfo's per-disk counters (rust-fixups/bottom-io-illumos.rs, as FreeBSD's)
+    "$python3/bin/python3" - src/collection/disks.rs ${./rust-fixups/bottom-io-illumos.rs} <<'PY'
+import sys
+p, arm = sys.argv[1], open(sys.argv[2]).read(); s = open(p).read(); a = '    not(target_os = "freebsd") => {\n'
+if s.count(a) != 1: sys.exit("FATAL: bottom io-usage cfg anchor")
+open(p, "w").write(s.replace(a, arm + a))   # cfg_select takes the first arm that matches: illumos before not(freebsd)
+PY
+    # the vendored crate's checksums: the patched files are this build's own, so cargo checks none of them
+    printf '{"files":{},"package":"%s"}' "$(sed -n 's/.*"package":"\([0-9a-f]*\)".*/\1/p' $d/.cargo-checksum.json)" > $d/.cargo-checksum.json
+  ''; };
   # --- batch C1.
   # tree-sitter's portable/endian.h: see difftastic. Its default qjs-rt feature builds rquickjs-sys, whose build.rs
   # needs bindgen + libclang for a target without shipped bindings (x86_64-unknown-illumos; measured): build without it
