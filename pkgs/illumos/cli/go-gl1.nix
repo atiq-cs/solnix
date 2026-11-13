@@ -1275,4 +1275,32 @@ in {
   kubefetch = pkg { pname = "kubefetch"; version = "0.8.1"; src = gh "jkulzer/kubefetch" "0.8.1" "05d1fdb6a18f433186c924465dc7dd729ebbd48f89ff947c4b3c8697c97614ac";
     vendorHash = "sha256-phBkynLrMrQY76UIMwBIl3ModMSJElu+bTPbPuZ1dHw="; subPkgs = ".";
     check = chk ''"$out/bin/kubefetch" --version'' "0\\.8\\.1"; };
+  # kubeprompt (EPL-2.0): kubernetes prompt.
+  kubeprompt = pkg { pname = "kubeprompt"; version = "0.4.0"; src = gh "jlesquembre/kubeprompt" "0.4.0" "7518e032de7b617cf0b6fc7e099cce1f57b041f04732ec81e84083eea38e0abb";
+    vendorHash = "sha256-kShJ/pBn1zq3RQARBW1tFSNnET53s3wwayQweCTCdzI="; subPkgs = "./cmd/kubeprompt"; ldflags = "-w -s -X github.com/jlesquembre/kubeprompt/pkg/version.Version=0.4.0";
+    check = chk ''"$out/bin/kubeprompt" --version'' "0\\.4\\.0"; };
+  # kubepug (Apache-2.0): checks a Kubernetes cluster for objects using deprecated API versions.
+  kubepug = pkg { pname = "kubepug"; version = "1.7.1"; src = gh "kubepug/kubepug" "v1.7.1" "b134e5f67b6097fb4989d8789bfd06eaecb81528527c8372f935ae56cde63546";
+    vendorHash = "sha256-06gmq9s3mv/4R93OK66KoLC0Okc9bYopY+d7ORXWijw="; subPkgs = ". ./generator"; ldflags = "-s -w -X sigs.k8s.io/release-utils/version.gitVersion=1.7.1";
+    check = chk ''"$out/bin/kubepug" version'' "1\\.7\\.1"; };
+  # kubetrim (MIT): trim your KUBECONFIG automatically.
+  kubetrim = pkg { pname = "kubetrim"; version = "0.0.2"; src = gh "alexellis/kubetrim" "refs/tags/v0.0.2" "24455f11699c61760613f630ded0d395cdf5b2d3925a08a730878819f353e00f";
+    vendorHash = "sha256-BwZI7cL9rJxUYUVzoCsCbisuRZVFZw/EAAFzPnsw/xk="; subPkgs = "."; ldflags = "-s -w -X github.com/alexellis/kubetrim/pkg.Version=0.0.2";
+    check = chk ''"$out/bin/kubetrim" --version'' "0\\.0\\.2"; };
+  # kustomize-lint (Apache-2.0): linter for Kustomize configuration files.
+  kustomize-lint = pkg { pname = "kustomize-lint"; version = "1.0.0"; src = gh "groq/kustomize-lint" "refs/tags/v1.0.0" "63bf752fb8708439d9730c219f3c6d39ac35d489c2f966d44b91a977c2d0bc1a";
+    vendorHash = "sha256-2rQFhc+CQQkWXYuPueU7c5roKusyzbfpLvwKriPVSus="; subPkgs = "./cmd/kustomize-lint"; ldflags = "-s";
+    check = chk ''"$out/bin/kustomize-lint" --version'' "1\\.0\\.0"; };
+  # ldapnomnom (MIT): tool to anonymously bruteforce usernames from Domain controllers.
+  ldapnomnom = pkg { pname = "ldapnomnom"; version = "1.5.1"; src = gh "lkarlslund/ldapnomnom" "refs/tags/v1.5.1" "758828d4bd5c84eb6f5af207ff5fca50ce3b7aec81403eb1131b662b67440033";
+    vendorHash = "sha256-QhcM2/U+8Rr1Wn0PVerVcBWqkRNxDZH/HKtpxvtQN4k="; subPkgs = "."; ldflags = "-w -s";
+    check = chk ''"$out/bin/ldapnomnom" --help'' "[Uu]sage"; };
+  # leetsolv (MIT): spaced repetition CLI for DSA and LeetCode.
+  leetsolv = pkg { pname = "leetsolv"; version = "1.2.0"; src = gh "eannchen/leetsolv" "refs/tags/v1.2.0" "430303725aed7340f70d09e2461a82806e9f8ee195a98b8f0af6f0fc09236cd2";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -X main.Version=1.2.0 -X main.BuildTime=1970-01-01T00:00:00Z -X main.GitCommit=refs/tags/v1.2.0";
+    check = chk ''"$out/bin/leetsolv" version'' "1\\.2\\.0"; };
+  # levant (MPL-2.0): open source templating and deployment tool for HashiCorp Nomad jobs.
+  levant = pkg { pname = "levant"; version = "0.4.0"; src = gh "hashicorp/levant" "v0.4.0" "8d299e890af5a3c6e9048f930b10cd34276656142358c298497ec5d7d8efa263";
+    vendorHash = "sha256-KLWChZ9MeP0LnvBuPVHw6Jcz8vvNloI83whUA/xegCU="; subPkgs = ".";
+    check = chk ''"$out/bin/levant" --version'' "0\\.4\\.0"; };
 }
