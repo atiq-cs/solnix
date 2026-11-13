@@ -50,7 +50,10 @@ let
   '';
   h = args // { inherit scrub gnulibFix dropDocs chk autoreconfTools autoreconf; };
   c1 = import ./c-base.nix (h // { inherit shared; inherit (c5) gnupatch; });   # gnupatch: flex's fae57c41b4 (gnupatch's closure has no flex)
-  c2 = import ./c-net.nix (h // { inherit (c1) readline; });
+  c2 = import ./c-net.nix (h // { inherit (c1) readline; }) // c15;   # c15: on this line, so the lines other lanes edit stay main's
+  # qnew7: autotools/meson leaves of the x86 queue (a new file, so no served drv moves); x86 only, as c11
+  c15 = if gtkMeson == null then { } else import ./c-qnew7.nix (h // { inherit (c5) gnupatch python3; inherit (c4) perl libtool;
+    inherit (c1) gnum4 readline; inherit (c9) lzo; inherit (c3) bzip2-bin; inherit gtkMeson; });
   c3 = import ./c-gnupg.nix (h // { inherit (c1) readline; });
   c4 = import ./c-big.nix (h // { inherit (c1) readline gnum4; inherit (c2) sqlite; inherit (c5) gnupatch; });   # gnupatch: perl's no-sys-dirs (no perl in its closure)
   c5 = import ./c-dev.nix (h // { inherit (c1) readline gnum4; inherit (c2) sqlite; inherit (c4) perl; });
