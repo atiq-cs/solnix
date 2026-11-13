@@ -145,4 +145,47 @@ in {
   # mdbook-pagetoc (MPL-2.0): an mdbook preprocessor for a per-page TOC.
   mdbook-pagetoc = pkg { vendorHash = "sha256-vCJfV98jA/6PbJ/IaUDX0MjwuRGyYCMzSm5Z6B00VA8="; pname = "mdbook-pagetoc"; version = "0.3.0"; src = gh "slowsage/mdbook-pagetoc" "v0.3.0" "404b72d2d9039fc52b2a1b5e516f96d42f0f80637846947b4b63f25d5261a672";
     bins = "mdbook-pagetoc"; check = chk ''"$out/bin/mdbook-pagetoc" supports html; echo "rc=$?"'' "^rc=0$"; };
+  # --- batch 3
+  # anewer (GPL-3.0-or-later): append stdin lines a file lacks (anew in Rust).
+  anewer = pkg { vendorHash = "sha256-+7NCWsgtamtmTrd/3O1TCBDZBayxAq709qSQ0V8VSaI="; pname = "anewer"; version = "0.2.2"; src = gh "ysf/anewer" "refs/tags/v0.2.2" "2f4021c76084ff7a3a4b43f45ab806c3de4766283ba23b6993534c67b38b3d11";
+    bins = "anewer"; check = chk ''cd "$W" && printf "a\n" > an.txt && printf "a\nb\n" | "$out/bin/anewer" an.txt > /dev/null && tr "\n" , < an.txt'' "^a,b,$"; };
+  # cargo-readme (MIT OR Apache-2.0): a README from a crate's doc comments.
+  cargo-readme = pkg { vendorHash = "sha256-G6jendLLoCAaRf3HmRS3TmHkr9InTD96nkrjePWJCkU="; pname = "cargo-readme"; version = "3.4.1"; src = gh "webern/cargo-readme" "v3.4.1" "e71ebfead44907ea1573c6e4c177800808b06d6a5cbef2cd49d59a1934f9eb1f";
+    bins = "cargo-readme"; check = chk ''"$out/bin/cargo-readme" readme --version'' "3\\.4\\.1"; };
+  # cargo-toml-lint (MIT OR Apache-2.0): lint Cargo.toml files.
+  cargo-toml-lint = pkg { vendorHash = "sha256-nthe/dnpyRacRxEwAFbL/fCKZNIEStHkhq5kua/pphg="; pname = "cargo-toml-lint"; version = "0.1.1"; src = crate "cargo-toml-lint" "0.1.1" "25a182b3351aa4b74f8ce165c137f9bdea02e1cf50b9a07101a1f8855eaef25e";
+    bins = "cargo-toml-lint"; check = chk ''"$out/bin/cargo-toml-lint" --version'' "0\\.1\\.1"; };
+  # clini (MIT): get and set keys in INI files.
+  clini = pkg { vendorHash = "sha256-be3EHepL55t+FrhBP+tsjzeuuiEOJMULb5FTU7u3/AU="; pname = "clini"; version = "0.1.0"; src = crate "clini" "0.1.0" "01b441f72fa54588629ebcec7e9e139baa5d324a8aa1d97580adc0fcb7d61335";
+    bins = "clini"; check = chk ''"$out/bin/clini" --version'' "^clini 0\\.1\\.0"; };
+  # elf-info (GPL-3.0-only): inspect ELF files (headers, sections, symbols): elf.
+  elf-info = pkg { vendorHash = "sha256-ubCCwf0Er/QOrry6FknRy3ugIi4bN2JkgFVB9ROsyQ0="; pname = "elf-info"; version = "0.3.0"; src = gh "kevin-lesenechal/elf-info" "v0.3.0" "1b182c54b3e498b6a447b937725b1dc5131c5f4239c3585473cea203ef42c923";
+    bins = "elf"; check = chk ''"$out/bin/elf" --version'' "0\\.3\\.0"; };
+  # nix-olde (MIT): which packages in a Nix system are older than upstream (repology).
+  nix-olde = pkg { vendorHash = "sha256-bnZRFOBbcOOWAz0QJQ97aywloz/KBWz8DNwz6+uGREw="; pname = "nix-olde"; version = "0.3.0"; src = gh "trofi/nix-olde" "refs/tags/v0.3.0" "0ac445fd855894abe656175e98874dcc2182bc431cc5a6c9fb7c517c4a35910a";
+    bins = "nix-olde"; check = chk ''"$out/bin/nix-olde" --version'' "^nix-olde 0\\.3\\.0"; };
+  # paging-calculator (MIT): split a virtual address into its x86_64 page-table indexes.
+  paging-calculator = pkg { vendorHash = "sha256-su4IH2mcNo8/p/PNREdyTqH7qT23zQMb35G41cIGR8k="; pname = "paging-calculator"; version = "0.4.0"; src = crate "paging-calculator" "0.4.0" "fd5f9d7e012f41d7928a971c1022d5fe3618fdcac4f9e6efb335429b3b0d6789";
+    bins = "paging-calculator"; check = chk ''"$out/bin/paging-calculator" --version'' "^paging-calculator 0\\.4\\.0"; };
+  # ropr (MIT OR Apache-2.0): a ROP gadget finder.
+  ropr = pkg { vendorHash = "sha256-E7H7a6bxtkwDARhLJLrfxYbYba1/+7I2ivxUdzVAfvs="; pname = "ropr"; version = "0.2.26-unstable-2025-07-20"; src = gh "Ben-Lichtman/ropr" "ec3eb2d91d9b4a940a8013a079ead47d7eab6dac" "298633881cdbfcfd3088b1949c91b4a073806d5f26a9e6a65f2ff77e29829f10";
+    bins = "ropr"; check = chk ''"$out/bin/ropr" --version'' "^ropr 0\\.2\\.26"; };
+  # omekasy (MIT): decorate letters with Unicode font variants.
+  omekasy = pkg { vendorHash = "sha256-j+7wUBDCpazVQXITFetgFw9nf/sTbAv8xJrQ1PMKXSw="; pname = "omekasy"; version = "1.3.3"; src = gh "ikanago/omekasy" "v1.3.3" "0def519ad64396aa12b341dee459049fb54a3cfae265ae739da5e65ca1d7e377";
+    bins = "omekasy"; check = chk ''"$out/bin/omekasy" --font bold ab'' "^𝐚𝐛$"; };
+  # freqle (MIT): rank shell commands by frecency.
+  freqle = pkg { vendorHash = "sha256-e4oMRF94P1UY2zzZJQ/+qV7tMLVUy+tODg/I8oy0sFI="; pname = "freqle"; version = "0.1.0"; src = crate "freqle" "0.1.0" "b2eb593ebb8789ad84e0d6b11e21478551f3fcbcae0acb68200cfc30cb630ebd";
+    bins = "freqle"; check = chk ''"$out/bin/freqle" --version'' "^freqle 0\\.1\\.0"; };
+  # dabet (LGPL-3.0-only): the duration between two times.
+  dabet = pkg { vendorHash = "sha256-JGxVOmSJDJxNqesnVWfzzni+AL7t/8GE2+pCqEsUZHk="; pname = "dabet"; version = "3.0.1"; src = cb "annaaurora/dabet" "v3.0.1" "68ced061be9f390c18adfa0dd705d72e000bd77cdf8fe9b37c60717f0589b06b";
+    bins = "dabet"; check = chk ''"$out/bin/dabet" --version'' "^dabet 3\\.0\\.1"; };
+  # cargo-llvm-lines (MIT OR Apache-2.0): count LLVM IR lines per generic function.
+  cargo-llvm-lines = pkg { vendorHash = "sha256-8Ape2KXHrdteoEUIXXqURkxFyKAuFT39R0+l1cdiqHQ="; pname = "cargo-llvm-lines"; version = "0.4.48"; src = gh "dtolnay/cargo-llvm-lines" "refs/tags/0.4.48" "7eb44a0296047711a9c2c301296ba2c4968203c8fde65f8405de577dfd7c5107";
+    bins = "cargo-llvm-lines"; check = chk ''"$out/bin/cargo-llvm-lines" llvm-lines --version'' "0\\.4\\.48"; };
+  # rsass (MIT OR Apache-2.0): the rsass-cli Sass compiler.
+  rsass = pkg { vendorHash = "sha256-jPrdlhE1+QtS/KX80Xi+ffCzvrw5ZcjW4Tx70BCfRf8="; pname = "rsass"; version = "0.29.0"; src = crate "rsass-cli" "0.29.0" "43208c715a9113e1d9782c242fc7ebfbe0410441ad576479f51c52f609c9c422";
+    bins = "rsass"; check = chk ''printf "a { b { c: d } }\n" > "$W/t.scss" && "$out/bin/rsass" "$W/t.scss"'' "^a b ?\\{"; };
+  # jsonkdl (MIT): JSON to KDL.
+  jsonkdl = pkg { vendorHash = "sha256-/h5DiKTC73gE7cOAhsWe9uxB+mopl8GaCG8qvHvMy4I="; pname = "jsonkdl"; version = "1.1.0"; src = crate "jsonkdl" "1.1.0" "f42da80964d293d092c40b3e69ba48cf85079afd557c63a4b5239d8ded55511a";
+    bins = "jsonkdl"; check = chk ''cd "$W" && printf '[{"name": "a", "arguments": [1]}]' > j.json && "$out/bin/jsonkdl" j.json j.kdl && cat j.kdl'' "^a 1$"; };   # the JSON form of a KDL document
 }
