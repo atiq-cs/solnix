@@ -955,4 +955,84 @@ in {
   gostatic = pkg { pname = "gostatic"; version = "2.35"; src = gh "sansolovyov/gostatic" "2.35" "a179a469938c4ea6be7185bfcab42153114e0b95b62006ec266eccf5e73d3ae3";
     vendorHash = "sha256-AgDJdmDmS76x8PWJqZbsbgn9KoqGFlSGB9qUbrUpryc="; subPkgs = ".";
     check = chk ''"$out/bin/gostatic" --version'' "2\\.35"; };
+  # gotestdox (MIT): tool for formatting Go test results as readable documentation.
+  gotestdox = pkg { pname = "gotestdox"; version = "0.2.3"; src = gh "bitfield/gotestdox" "v0.2.3" "575ec06ce737f5d9911d69dd39b75e376a2da0b73dc0bac023b4b0eaf8a01d5c";
+    vendorHash = "sha256-4GYLdGbTH2tPbWrJVy3yF5olor/Sq0JQHbkgNmQWilU="; subPkgs = "./cmd/gotestdox"; ldflags = "-s -w";
+    check = chk ''"$out/bin/gotestdox" -h'' "[Uu]sage"; };
+  # gotestfmt (Unlicense): go test output for humans.
+  gotestfmt = pkg { pname = "gotestfmt"; version = "2.5.0"; src = gh "gotesttools/gotestfmt" "v2.5.0" "dd9481db9472dbc7a4c1f15b7a25f3ce783e793bcc1ab25e336a88d0912e2121";
+    vendorHash = null; subPkgs = "./cmd/gotestfmt ./cmd/gotestfmt-formatter";
+    check = chk ''"$out/bin/gotestfmt" --help'' "[-]template-dir"; };
+  # gotests (Apache-2.0): generate Go tests from your source code.
+  gotests = pkg { pname = "gotests"; version = "1.9.0"; src = gh "cweill/gotests" "v1.9.0" "1a36874dd5beec211e9b9aaf7d72be8839e76b5ad0a002cb4e83b80ad948697b";
+    vendorHash = "sha256-sX0XYjbE8f3/c7T0SaCWJbylOTiTvQYrWHQ8X/Y1l1s="; subPkgs = "./gotests";
+    check = chk ''"$out/bin/gotests" --help'' "[-]ai-max-cases"; };
+  # gotestwaf (MIT): tool for API and OWASP attack simulation.
+  gotestwaf = pkg { pname = "gotestwaf"; version = "0.5.11"; src = gh "wallarm/gotestwaf" "refs/tags/v0.5.11" "4f80879d0e8e4fc81c98c720f3ee7352f4e50176dac84442124c92ea3a886027";
+    vendorHash = "sha256-8BpGa2RIx6kotb4EohyiCH6pdIHn7yBQPjPO4UXKukw="; subPkgs = "./cmd/gotestwaf"; ldflags = "-w -s -X=github.com/wallarm/gotestwaf/internal/version.Version=v0.5.11";
+    check = chk ''"$out/bin/gotestwaf" --version'' "0\\.5\\.11"; };
+  # gotip (MIT): go test interactive picker.
+  gotip = pkg { pname = "gotip"; version = "0.10.2"; src = gh "lusingander/gotip" "refs/tags/v0.10.2" "77451f3bb35954ed473620ab0b8848d32abb5535f8d31aeb83eb3d6bdc751d32";
+    vendorHash = "sha256-W1TZLS2xlbweNClGq2E9MPY0l4DE2VpVUEDBdzDBd0A="; subPkgs = "./cmd/gotip"; ldflags = "-s -w";
+    check = chk ''"$out/bin/gotip" --version'' "0\\.10\\.2"; };
+  # gotree (BSD-3-Clause): display a tree of files and directories.
+  gotree = pkg { pname = "gotree"; version = "1.4.3"; src = gh "elbachir-one/gt" "v1.4.3" "33de9e42658c50eb639f8a6848ad89cb279d3fc35286c639b44b8b665c8d6f17";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/gt" --help'' "[-]order-by-extension"; };
+  # gotrue (MIT): SWT based API for managing users and issuing SWT tokens.
+  gotrue = pkg { pname = "gotrue"; version = "1.0.1"; src = gh "netlify/gotrue" "v1.0.1" "45116abd6edd9cce336eebb2ddf82fc73796144427d1b42b04a5a1bf6dd1d79e";
+    vendorHash = "sha256-TiyAiMH2lrvCJ3lb8Yu0zftFpeG/4Nz+QRzI5eVV+L4="; subPkgs = "."; ldflags = "-s -w -X=github.com/netlify/gotrue/cmd.Version=1.0.1";
+    check = chk ''"$out/bin/gotrue" version'' "1\\.0\\.1"; };
+  # goverter (MIT): generate type-safe Go converters by defining function signatures.
+  goverter = pkg { pname = "goverter"; version = "1.11.1"; src = gh "jmattheis/goverter" "refs/tags/v1.11.1" "3c2efce15314bb275ecc5d8598852d50a005669054e8e8203a872ed6f5645877";
+    vendorHash = "sha256-uzWbSk9Yr951/daF0C4aHmKhGEDPqe23wA/KDVq1zu4="; subPkgs = "./cmd/goverter";
+    check = chk ''"$out/bin/goverter" --help'' "[-]output-constraint"; };
+  # gowrap (MIT): goWrap is a command line tool for generating decorators for Go interfaces.
+  gowrap = pkg { pname = "gowrap"; version = "1.5.0"; src = gh "hexdigest/gowrap" "refs/tags/v1.5.0" "16634184e07e01906a243545d6c234e078404684637f21b7254c84ddb4330496";
+    vendorHash = "sha256-Y7e/bTva4+seNDylu8iW5rkPcsXu+Om/2MvrmZHnx2s="; subPkgs = "./cmd/gowrap"; ldflags = "-X=github.com/hexdigest/gowrap.version=1.5.0";
+    check = chk ''"$out/bin/gowrap" --help'' "[Uu]sage"; };
+  # grizzly (Apache-2.0): utility for managing Jsonnet dashboards against the Grafana API.
+  grizzly = pkg { pname = "grizzly"; version = "0.7.1"; src = gh "grafana-cold-storage/grizzly" "v0.7.1" "81811b684ef1bddd3b7147c5095224552a0b35dc3ff210d10e6cbc5e12331160";
+    vendorHash = "sha256-dkRYEnkELiom6LTpuOhfd+PBv35EuiIi0n/cyfKmZss="; subPkgs = "./cmd/grr";
+    check = chk ''"$out/bin/grr" --help'' "[Uu]sage"; };
+  # gron (MIT): make JSON greppable.
+  gron = pkg { pname = "gron"; version = "0.7.1"; src = gh "tomnomnom/gron" "v0.7.1" "1c98f2ef2ba03558864b1ab5e9c4b47a2e89d3ffaf24cfa0ac75cd38d775feb4";
+    vendorHash = "sha256-U9WojKqWjlf6pQRfOC86eAF25R7eA39a4KRC4ls19po="; subPkgs = "."; ldflags = "-s -w -X main.gronVersion=0.7.1";
+    check = chk ''"$out/bin/gron" --version'' "0\\.7\\.1"; };
+  # grpcurl (MIT): like cURL, but for gRPC: Command-line tool for interacting with gRPC servers.
+  grpcurl = pkg { pname = "grpcurl"; version = "1.9.4"; src = gh "fullstorydev/grpcurl" "v1.9.4" "bea899ba2f483a951bf40aa05d41e069dd2f7bfe52d2a229717abfdb5620cb7c";
+    vendorHash = "sha256-bkvyYDtUtXNa8Pf2J9p9nh97rS8bm2tKEtG4WZNSpdk="; subPkgs = "./cmd/grpcurl"; ldflags = "-s -w -X main.version=1.9.4";
+    check = chk ''"$out/bin/grpcurl" --version'' "1\\.9\\.4"; };
+  # gtfocli (Apache-2.0): GTFO Command Line Interface for search binaries commands to bypass local security restrictions.
+  gtfocli = pkg { pname = "gtfocli"; version = "0.0.6"; src = gh "cmd-tools/gtfocli" "refs/tags/0.0.6" "b11ecb9b7ba6124c96599e774d51de7901e92a4a75d64dafb7b0d4e5c29fcc8c";
+    vendorHash = "sha256-1LUZOyePUQEqcjFAYmS60KvlEm2XP1JRRF0YsLnhBoc="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/gtfocli" --help'' "[Uu]sage"; };
+  # gungnir (MIT): command-line tool that continuously monitors certificate transparency (CT) logs for newly issued SSL/TLS certificates.
+  gungnir = pkg { pname = "gungnir"; version = "1.4.0"; src = gh "g0ldencybersec/gungnir" "v1.4.0" "ace1c3746cbb411b8335244854fa4b2d9621764445b073bf99903c0deed877fb";
+    vendorHash = "sha256-ayp4Cs9JUgfS1XZk9r90cjDkGnk5/ndjAGZl5UmCFLs="; subPkgs = "./cmd/gungnir"; ldflags = "-s -w";
+    check = chk ''"$out/bin/gungnir" --help'' "[Uu]sage"; };
+  # gx-go (MIT): tool for importing go packages into gx.
+  gx-go = pkg { pname = "gx-go"; version = "1.9.0-unstable-2020-03-03"; src = gh "whyrusleeping/gx-go" "9c30fadeac4aee8346d28c36d6bd5063da3d189a" "092034aeb59a9ce517520fcc1ae940f2ac80ba8be3770a229035bc68f8cb302b";
+    vendorHash = "sha256-j17GdPUGKw+KL9pEv14VV8AUgwa3+U0a48iIbzIyPk4="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/gx-go" --help'' "[Uu]sage"; };
+  # h2spec (MIT): testing tool for HTTP/2 implementation.
+  h2spec = pkg { pname = "h2spec"; version = "2.6.0"; src = gh "summerwind/h2spec" "refs/tags/v2.6.0" "c438130c70c6cec2c20276726a454a9249b64ba48ca89ce37f39aa721867b4f0";
+    vendorHash = "sha256-+wqUM9XWE+Lu3Ygmv3fnXX9woVRrLgVWlWXAzjQNvj8="; subPkgs = "./cmd/h2spec ./cmd/h2specd"; ldflags = "-s -w -X=main.VERSION=2.6.0 -X main.COMMIT=2.6.0";
+    check = chk ''"$out/bin/h2spec" --version'' "2\\.6\\.0"; };
+  # hakrawler (GPL-3.0-only): web crawler for the discovery of endpoints and assets.
+  hakrawler = pkg { pname = "hakrawler"; version = "2.1"; src = gh "hakluke/hakrawler" "2.1" "bdd108e83ac590121abed30fea5ecf41136007e720dfcac3dd429cd04f860292";
+    vendorHash = "sha256-PdLKW3NlaRXwCM8ybvov86OvUjcNRud+NEUHXfL0TG0="; subPkgs = ".";
+    check = chk ''"$out/bin/hakrawler" --help'' "[Uu]sage"; };
+  # harsh (MIT): CLI habit tracking for geeks.
+  harsh = pkg { pname = "harsh"; version = "0.14.5"; src = gh "wakatara/harsh" "refs/tags/v0.14.5" "37516772901d1cd31e7a9655dd3c3f522099f9c0467f3ef886d64301dd8b84a0";
+    vendorHash = "sha256-vbUSs8i4rbSGnBfzWDX4a85JT3fQij+liUyj1vVtjkg="; subPkgs = ".";
+    check = chk ''"$out/bin/harsh" --help'' "[-]-hide-ended"; };
+  # hashi-up (MIT): lightweight utility to install HashiCorp Consul, Nomad, or Vault on any remote Linux host.
+  hashi-up = pkg { pname = "hashi-up"; version = "0.16.0"; src = gh "jsiebens/hashi-up" "v0.16.0" "c1c793fbc6dbce5ccd61117dc4ca74b41cb9f43605b469f202071d39b0919dff";
+    vendorHash = "sha256-TosXQ9+h817UL8zOCt00wqWLxz+rdkgnoFu6dC6YKA8="; subPkgs = ".";
+    check = chk ''"$out/bin/hashi-up" --help'' "[Uu]sage"; };
+  # hcdiag (MPL-2.0): collects and bundles product and platform diagnostics supporting Consul, Nomad, TFE, and Vault.
+  hcdiag = pkg { pname = "hcdiag"; version = "0.5.13"; src = gh "hashicorp/hcdiag" "refs/tags/v0.5.13" "a22407652f683b9e20009b527c44fb59da659cceef67363270b9cd750ce7a342";
+    vendorHash = "sha256-VIhZQ6hQNP1BJcYQvgqQWC7e1NO5SKS7Mjvxq7PgC+Q="; subPkgs = ".";
+    check = chk ''"$out/bin/hcdiag" --version'' "0\\.5\\.13"; };
 }
