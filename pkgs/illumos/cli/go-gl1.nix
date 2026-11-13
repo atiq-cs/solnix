@@ -1783,4 +1783,84 @@ in {
   ultralist = pkg { pname = "ultralist"; version = "1.7.0"; src = gh "gammons/ultralist" "1.7.0" "d4a524c94c1ea4a748711a1187246ed1fd00eaaafd5b8153ad23b42d36485f79";
     vendorHash = null; subPkgs = ".";
     check = chk ''"$out/bin/ultralist" version'' "1\\.7\\.0"; };
+  # unconvert (BSD-3-Clause): remove unnecessary type conversions from Go source.
+  unconvert = pkg { pname = "unconvert"; version = "0-unstable-2026-08-16"; src = gh "mdempsky/unconvert" "33842c47157aa10fcb7bf53e7f67e1bad15b0ecc" "abe9b82b4d3a22fe33cac6ea0abef993d5395c88f111fb311b99b14f11904632";
+    vendorHash = "sha256-h9aPnof3bFcK80H1r11B4avUzMpPHCvHhrewCVNX4y8="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/unconvert" --help'' "[Uu]sage"; };
+  # unparam (BSD-3-Clause): find unused parameters in Go.
+  unparam = pkg { pname = "unparam"; version = "0-unstable-2025-03-01"; src = gh "mvdan/unparam" "0df0534333a487d07b143c1b2c2e0046671d2d63" "f48cca18fb5dbb6932bb1701cb88e17eefdb26f3a1f462dd3e527b0d16c8b55b";
+    vendorHash = "sha256-sljxkcx5GhvFOx2JdTh2Xf1PuxF4+z1c2oEw/dYg3iw="; subPkgs = ".";
+    check = chk ''"$out/bin/unparam" --help'' "[Uu]sage"; };
+  # unwaf (GPL-3.0-only): tool designed to help identify WAF bypasses using passive techniques.
+  unwaf = pkg { pname = "unwaf"; version = "0-unstable-2025-07-04"; src = gh "mmarting/unwaf" "06f19a49d048be1f92f395d04c43c9a2a36d2ab5" "7be78ed108f7cbc290e30090624ce336ca8058d0dc67945c3cf2cf48428e2937";
+    vendorHash = "sha256-Mc46/8+j/Stl6xyV8hsdtGoWQc9y8JeFYc+O3JWOM4I="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/unwaf" --help'' "[Uu]sage"; };
+  # up (Apache-2.0): ultimate Plumber is a tool for writing Linux pipes with instant live preview.
+  up = pkg { pname = "up"; version = "0.4"; src = gh "akavel/up" "v0.4" "3ea2161ce77e68d7e34873cc80324f372a3b3f63bed9f1ad1aefd7969dd0c1d1";
+    vendorHash = "sha256-FAxuntAier/Bm8din+X+cDrYI0P2RQXya4axVXdFwoo="; subPkgs = ".";
+    check = chk ''"$out/bin/up" --help'' "[Uu]sage"; };
+  # urban-cli (GPL-3.0-only): blazingly fast command line interface for Urban Dictionary.
+  urban-cli = pkg { pname = "urban-cli"; version = "0.2.4"; src = gh "tfkhdyt/urban-cli" "v0.2.4" "b0f99ff90da67391c69fb027cbd91a3cfb6d6825a6f532cd84a0d42e5b98a4d3";
+    vendorHash = "sha256-WAjndbZ9y8nAc9WUzOO+dRgR9waWYR4Rvb1186qhgGI="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/urban-cli" --version'' "0\\.2\\.4"; };
+  # url-parser (MIT): simple command-line URL parser.
+  url-parser = pkg { pname = "url-parser"; version = "2.1.22"; src = gh "thegeeklab/url-parser" "refs/tags/v2.1.22" "702b9331aa3fa369fa748b28a4ceaf43abdbd81409d16727fd94fbf44addce20";
+    vendorHash = "sha256-TRGC/0LN7WHNWeCaOlrQQ0n3zQi6Z2QzlovZbKPVDr8="; subPkgs = "./cmd/url-parser"; ldflags = "-s -w -X main.BuildVersion=2.1.22 -X main.BuildDate=1970-01-01";
+    check = chk ''"$out/bin/url-parser" --version'' "2\\.1\\.22"; };
+  # urlhunter (MIT): recon tool that allows searching shortened URLs.
+  urlhunter = pkg { pname = "urlhunter"; version = "0.2.0"; src = gh "utkusen/urlhunter" "v0.2.0" "98cddf39d8106daf92a4e3c304fe3ec582cd147155e692b1cc71d804ed58a0fc";
+    vendorHash = "sha256-15BvyKsthokWk/5/GiB6ZHkWPBaEWJeW3EUgqBKGQ4M="; subPkgs = ".";
+    check = chk ''"$out/bin/urlhunter" --help'' "[Uu]sage"; };
+  # usacloud (Apache-2.0): CLI client for the Sakura Cloud.
+  usacloud = pkg { pname = "usacloud"; version = "1.22.8"; src = gh "sacloud/usacloud" "refs/tags/v1.22.8" "eb1e4810729f56284ca982788e11daf3dec7f9fc0f66707ffe2e122f0206ca65";
+    vendorHash = "sha256-ueaYbL8qeci2OzF1LvX0jKE5aKQuxZDw8mtfPphR0PI="; subPkgs = ". ./tools/gen-commands"; ldflags = "-s -X=github.com/sacloud/usacloud/pkg/version.Revision=refs/tags/v1.22.8";
+    check = chk ''"$out/bin/usacloud" --version'' "1\\.22\\.8"; };
+  # varunastra (GPL-3.0-only): tool to enhance the security of Docker environments.
+  varunastra = pkg { pname = "varunastra"; version = "1.1"; src = gh "redhuntlabs/Varunastra" "refs/tags/v1.1" "51546772ca80c84b9728302cdc384acf5e27d37f0941eb2b55f2448838f3fd0e";
+    vendorHash = "sha256-9/Llr5qljaY2vi3nsZ67U6ntUCdhwWZ26/h66fHHGic="; subPkgs = "./cmd/varunastra"; ldflags = "-s -w";
+    check = chk ''"$out/bin/varunastra" --help'' "[Uu]sage"; };
+  # vault-medusa (MIT): cli tool for importing and exporting Hashicorp Vault secrets.
+  vault-medusa = pkg { pname = "vault-medusa"; version = "0.7.3"; src = gh "jonasvinther/medusa" "v0.7.3" "afbefd17ae356d9e12e81281757790806f755e74c87c823500ea57c670a94d03";
+    vendorHash = "sha256-hFpaoHDRYJrylnhmDHRGuiOA6pA23bls1GLB0YLcFPA="; subPkgs = ".";
+    check = chk ''"$out/bin/medusa" --help'' "[-]-kubernetes-auth-path"; };
+  # vault-unseal (MIT): auto-unseal utility for Hashicorp Vault.
+  vault-unseal = pkg { pname = "vault-unseal"; version = "1.0.1"; src = gh "lrstanley/vault-unseal" "v1.0.1" "2a3c0614f857ea4dc6527ea59ae0a9f8ac773a1d79ef454161746dcfd05728b6";
+    vendorHash = "sha256-UugpnxE7CgYZfuCVsumwKNbPoTnE1o7e4zNjG4XTd1U="; subPkgs = ".";
+    check = chk ''"$out/bin/vault-unseal" --help'' "[-]-version-json"; };
+  # vendir (Apache-2.0): CLI tool to vendor portions of git repos, github releases, helm charts, docker image contents, etc. declaratively.
+  vendir = pkg { pname = "vendir"; version = "0.46.3"; src = gh "carvel-dev/vendir" "v0.46.3" "c6c05cd812842c07d01f67c448396cf3eb96c2fb3df428d6793e8cd9396ad4a8";
+    vendorHash = null; subPkgs = "./cmd/vendir"; ldflags = "-X carvel.dev/vendir/pkg/vendir/version.Version=0.46.3";
+    check = chk ''"$out/bin/vendir" --version'' "0\\.46\\.3"; };
+  # versus (MIT): benchmark multiple API endpoints against each other.
+  versus = pkg { pname = "versus"; version = "1.0"; src = gh "INFURA/versus" "v1.0" "29df67e2f5aa18cdba5bbb63413b4cccd9e53539e04079b70ac40ae0c0491391";
+    vendorHash = "sha256-rRDenI1b2/cbJ5Tg5yFOha8lI5JhHaAVzl00LAuDTPo="; subPkgs = ".";
+    check = chk ''"$out/bin/versus" --help'' "[-]-stop-after"; };
+  # vi-mongo (Apache-2.0): mongoDB TUI manager designed to simplify data visualization and quick manipulation.
+  vi-mongo = pkg { pname = "vi-mongo"; version = "0.3.1"; src = gh "kopecmaciej/vi-mongo" "refs/tags/v0.3.1" "924c585451d5f9ec590d46fa5ba706e9e3ea3b2732ecec0b25a46dfc4939c8c0";
+    vendorHash = "sha256-yYQZHiSBqWpItljKa6kumMsL46hKMQvGPWY8rPwHYgQ="; subPkgs = ". ./scripts/migrate_keybindings"; ldflags = "-s -X=github.com/kopecmaciej/vi-mongo/internal/build.Version=0.3.1";
+    check = chk ''"$out/bin/vi-mongo" --version'' "0\\.3\\.1"; };
+  # vsh (MIT): hashiCorp Vault interactive shell.
+  vsh = pkg { pname = "vsh"; version = "1.0.0"; src = gh "fishi0x01/vsh" "v1.0.0" "567ced47700cf36e0a542867e2b92f816757b62e149cc62002dc561ab2312cfd";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w -X main.vshVersion=v1.0.0";
+    check = chk ''"$out/bin/vsh" --version'' "1\\.0\\.0"; };
+  # vt-cli (Apache-2.0): virusTotal Command Line Interface.
+  vt-cli = pkg { pname = "vt-cli"; version = "1.3.1"; src = gh "VirusTotal/vt-cli" "refs/tags/1.3.1" "3d95ddab1da71ee769ec65e3ed087994fc837d2d234f9c2640c669c8ce8c7d7a";
+    vendorHash = "sha256-Zm4TeSTERXOUsA7Z7J1kQcJ+vT3e+rdhYPclTMFkxhQ="; subPkgs = "./vt"; ldflags = "-X github.com/VirusTotal/vt-cli/cmd.Version=1.3.1";
+    check = chk ''"$out/bin/vt" version'' "1\\.3\\.1"; };
+  # vultr (MIT): CLI and API client library.
+  vultr = pkg { pname = "vultr"; version = "2.0.3"; src = gh "JamesClonk/vultr" "v2.0.3" "6529d521a7fa006808cd07331f31256e91773ec7e1a0c7839cd14884034fb185";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/vultr" version'' "2\\.0\\.3"; };
+  # wait4x (Apache-2.0): allows you to wait for a port or a service to enter the requested state.
+  wait4x = pkg { pname = "wait4x"; version = "3.7.3"; src = gh "wait4x/wait4x" "v3.7.3" "4fbb68d1387128fed8d8072761e021f67853668287c37bfc7f52d6561dbf5f3e";
+    vendorHash = "sha256-h/FQTMrHzmzXilVhtiTjxaCSP47dHAvQKQx/Z8PfVME="; subPkgs = "./cmd/wait4x";
+    check = chk ''"$out/bin/wait4x" version'' "3\\.7\\.3"; };
+  # walk (MIT): terminal file manager.
+  walk = pkg { pname = "walk"; version = "1.13.0"; src = gh "antonmedv/walk" "v1.13.0" "9f62377438908757fcb2210bd08bf346391858f21d0ef664d7998abf635880cb";
+    vendorHash = "sha256-jyWH0djFeNU6NjWaxGvqDW2ZzAR9GKERhsJULqb7l8A="; subPkgs = ".";
+    check = chk ''"$out/bin/walk" --version'' "1\\.13\\.0"; };
+  # webanalyze (MIT): tool to uncover technologies used on websites.
+  webanalyze = pkg { pname = "webanalyze"; version = "0.4.5"; src = gh "rverton/webanalyze" "refs/tags/v0.4.5" "02de367153517b5f20957857a1c0d7e879c4dc5d585a167163e87507b9cc34d2";
+    vendorHash = "sha256-dyAUQTmsJbR78EPAJPHzlkiYsHtjh2rJ/p+WW7P2i6o="; subPkgs = "./cmd/webanalyze";
+    check = chk ''"$out/bin/webanalyze" --help'' "[Uu]sage"; };
 }
