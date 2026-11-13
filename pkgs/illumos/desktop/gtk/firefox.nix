@@ -32,6 +32,17 @@ mkSrcPkg {
     # nixpkgs build-mozilla-mach's 136-no-buildconfig.patch (byte-identical): about:buildconfig lists the full compiler
     # command lines, i.e. every build-input store path, which would make the whole toolchain a runtime reference
     patch -p1 < ${./patches/firefox-136-no-buildconfig.patch}
+    # RFPTargetConstants.sys.mjs (generated, shipped in omni.ja) named its three .inc inputs by absolute path, i.e. this build
+    # dir (gate B8): name their basenames (patch says why)
+    patch -p1 < ${./patches/firefox-153-rfp-targets-basenames.patch}
+    # nasm names each object's STT_FILE after its input path as given, and mozbuild passes absolute sources (rules.mk relativizes
+    # only under WINE), so libxul, libgkcodecs and libmozav* named this build dir (gate B8). The same wrapper as libjpeg-turbo's
+    # (cli/c-recipes4.nix nasmRel): pass nasm the path relative to its cwd. toolkit/moz.configure takes NASM from the environment.
+    printf '%s\n' '#!/usr/bin/bash' \
+      'rel() { local d=$PWD up=; while [ "''${1#"$d"/}" = "$1" ]; do d=''${d%/*}; up=../$up; done; printf %s "$up''${1#"$d"/}"; }' \
+      "a=(); for x in \"\$@\"; do case \"\$x\" in $SRC/*) x=\$(rel \"\$x\");; esac; a+=(\"\$x\"); done" \
+      'exec ${tools.nasm}/bin/nasm "''${a[@]}"' > "$W/nasm"
+    chmod +x "$W/nasm"; export NASM="$W/nasm"
     # vendored bindgen: illumos' `using std::size_t` reached Rust as c_ulong, not usize (patch says why); re-stamps the checksum
     bash ${./vendor-fix.sh} "$PWD" ${./patches/firefox-153-bindgen-illumos-using-size_t.patch}
     # mk-src-pkg's cc/c++ wrappers put every dep's include dir FIRST (-I), ahead of the tree's own -I: mesa's EGL/eglext.h
