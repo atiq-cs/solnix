@@ -327,7 +327,43 @@ let
       # builtins/psize.sh times a pipe fill ('psize.aux | sleep 3') and falls back to 512 when that comes back empty: on dixa 2 of 3
       # builds got 512, one 16384 (--check differs in bin/bash). Pin the fallback, which the served stage0 bash ships (safe for here-docs).
       bash = { build = "printf '#!/bin/sh\\necho \"#define PIPESIZE 512\"\\n' > builtins/psize.sh\n" + args.build; };
+      # a64w (cli/c-qnew6.nix): its bison and autoconf-archive are cli/c-base.nix's, unrowed copies here; the set's (./a64h-pkgs.nix, rowed), as tmux/nix
+      # and its CMakeLists.txt adds -m64 to CMAKE_C_FLAGS/CMAKE_LINKER_FLAGS for gcc on SunOS (x86/SPARC Solaris): the aarch64 gcc rejects
+      # it, so every cmake probe failed (FindThreads first: "Could NOT find Threads"; the same probe without -m64 passes on dixa)
+      cyclonedds = { nativeTools = map a64Tool args.nativeTools; build = ''
+        [ "$(grep -cx 'elseif(CMAKE_SYSTEM_NAME STREQUAL "SunOS")' CMakeLists.txt)" = 1 ] || { echo "FATAL: a64w cyclonedds SunOS -m64 anchor" >&2; exit 1; }
+        sed -i 's/^elseif(CMAKE_SYSTEM_NAME STREQUAL "SunOS")$/elseif(FALSE)/' CMakeLists.txt
+      '' + args.build; };
+      libkate = { nativeTools = map a64Tool args.nativeTools; };
+      libdatrie = { nativeTools = map a64Tool args.nativeTools; };
+      # cmake's lib''${LIB_SUFFIX}: lp64Fix turns lib/amd64 into lib, not this suffix, so the library went to lib/amd64 and the check's -L missed it
+      libuecc = { build = rep1 "libuecc" "-DLIB_SUFFIX=/amd64" "-DLIB_SUFFIX=" args.build; };
+      # libtomcrypt 1.18.2's tomcrypt_cfg.h detects x86/PPC/SPARC/S390 but not aarch64, and its endianness fallback reads
+      # `_BYTE_ORDER == _LITTLE_ENDIAN`, which does not parse on illumos (<sys/isa_defs.h>: `#define _LITTLE_ENDIAN`, empty): "#error Cannot
+      # detect endianness", in the build and in every consumer of the installed header (the recipe's own check program, dixa). An aarch64
+      # block before the fallback, as the amd64 one (no LTC_FAST: the header's note, unaligned access is the x86 assumption).
+      libtomcrypt = { build = ''
+        f=src/headers/tomcrypt_cfg.h; [ "$(grep -cx '/\* endianness fallback \*/' $f)" = 1 ] || { echo "FATAL: a64w libtomcrypt anchor" >&2; exit 1; }
+        sed -i 's|^/\* endianness fallback \*/$|/* detect aarch64 (solnix) */\n#if defined(__aarch64__) \&\& !defined(__AARCH64EB__)\n   #define ENDIAN_LITTLE\n   #define ENDIAN_64BITWORD\n#endif\n\n&|' $f
+        [ "$(grep -c '^#if defined(__aarch64__) && !defined(__AARCH64EB__)$' $f)" = 1 ] || { echo "FATAL: a64w libtomcrypt edit" >&2; exit 1; }
+      '' + args.build; };
+      # pkgdiff ships #!/usr/bin/perl (bin/.pkgdiff-wrapped) and #!/bin/bash (two Tools/*.sh), gate B9: x86 store-only rewrites them with
+      # ../patch-shebangs.sh (NixOS patchShebangs), which the aarch64 path does not run; the same two rewrites here, to its deps' perl and bash
+      pkgdiff = { build = args.build + ''
+        for f in $(grep -rlE '^#! */(usr/bin/perl|bin/bash)' "$out"); do [ -x "$f" ] || continue; chmod u+w "$f"
+          sed -i -e '1s|^#! */usr/bin/perl|#!${homePkgs.cliSet.perl}/bin/perl|' -e '1s|^#! */bin/bash|#!${srcPkgs.bash}/bin/bash|' "$f"; done
+        ! grep -rlE '^#! */(usr/bin/perl|bin/bash)' "$out" | while read -r f; do [ -x "$f" ] && echo "$f"; done | grep -q . || { echo "FATAL: a64w pkgdiff host #!" >&2; exit 1; }
+      ''; };
+      # libiff's IFF_Byte is a plain char (ifftypes.h), unsigned on aarch64: byterun.c's `(int)(IFF_Byte)b` is never negative there, so
+      # ILBM_unpackByteRun misreads every run (byterun-simple{,-padded}.sh FAIL, dixa). -fsigned-char: the meaning x86 and the source assume.
+      libilbm = { build = rep1 "libilbm" ''./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static''
+        ''./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static CFLAGS="-O2 -fsigned-char"'' args.build; };
+      # wdiff's test suite runs `which` (x86: the world's); cli/c-recipes3.nix's store which (its own aarch64 job), as nixpkgs' nativeCheckInputs
+      wdiff = { nativeTools = [ homePkgs.cliSet.which ] ++ args.nativeTools; };
+      ecdsautils = { build = rep1 "ecdsautils" "-DLIB_SUFFIX=/amd64" "-DLIB_SUFFIX=" args.build; };
     }.${args.pname} or { };
+      a64Tool = t: if (t.pname or "") == "bison" then final.bison else if (t.pname or "") == "autoconf-archive" then final.autoconf-archive else t;
+      rep1 = what: a: b: s: let r = builtins.replaceStrings [ a ] [ b ] s; in if r == s then throw "a64w ${what}: anchor not found: ${a}" else r;
       # a64t: the security/version bumps (./bumps.nix), on top of the fixes above (they see the recipe as fixed here)
       v = (import ./bumps.nix { tcl = homePkgs.cliSet.tcl.unfixed or homePkgs.cliSet.tcl; } (args // p)).${args.pname} or { };   # cli/c-recipes2.nix: why unfixed
     in p // v;

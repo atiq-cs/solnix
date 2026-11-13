@@ -42,10 +42,11 @@ TPROG
                  sha256 = "909aa9702bfa67deabe35b5fd1ad235d15122e195c02373b9b59dc277b787914"; };
   # header-only .zip sources (no tarball, so not mk-src-pkg: GNU tar cannot unpack them): the store python's zipfile and coreutils, as
   # cli/c-recipes2.nix's hunspell-dict-en-us; the check compiles and runs a program against the headers with the store gcc wrapper.
-  zipHeaders = { pname, version, url, sha256, dir, incs ? [ ], test, want }: derivation {
-    name = "${pname}-${version}"; inherit pname version; system = "x86_64-solaris"; builder = "/usr/bin/bash";
+  # aarch64 (aarch64/a64r-pkgs.nix) passes its system, gcc wrapper and store-only plain derivation in gtkMeson; x86 takes the defaults.
+  zipHeaders = { pname, version, url, sha256, dir, incs ? [ ], test, want }: (gtkMeson.zipDrv or derivation) {
+    name = "${pname}-${version}"; inherit pname version; system = gtkMeson.system or "x86_64-solaris"; builder = "/usr/bin/bash";
     src = import <nix/fetchurl.nix> { inherit url sha256; };
-    inherit python3; coreutils = base.coreutils; gccw = base.gccWrapper; pathGate = ../path-gate.sh;
+    inherit python3; coreutils = base.coreutils; gccw = gtkMeson.gccWrapper or base.gccWrapper; pathGate = ../path-gate.sh;
     args = [ "-c" ''
       set -eu; export PATH="$coreutils/bin:$python3/bin"; /usr/bin/bash "$pathGate"; mkdir w; cd w
       python3 -m zipfile -e "$src" .

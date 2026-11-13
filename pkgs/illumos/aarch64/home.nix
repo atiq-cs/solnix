@@ -22,6 +22,9 @@ in
   inherit world;
   # the recipe sets themselves (not derivations, so the flake's packages filter drops them), for ./a64r-pkgs.nix
   cliSet = cli; baseSet = base'; graphicsSet = graphics;
+  # cli/ again with an aarch64 gtkMeson, for ./a64r-pkgs.nix (c-qnew5.nix, c-qnew6.nix and their c-recipes4.nix inputs; a64w). A function,
+  # so the flake's packages filter drops it; cliSet's drvs do not move (its other files ignore gtkMeson; nasm = null keeps c-qalias.nix's).
+  cliWith = gtkMeson: import ../cli { base = base'; inherit world shared graphics gtkMeson; };
   # lib/home-manager-pkgs.nix's tools + home-manager
   inherit (base) coreutils findutils gnused gnugrep diffutils gnutar gzip jq lndir gettext hostname
     gnumake pkgconf rsync libevent tmux;

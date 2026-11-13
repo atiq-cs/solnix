@@ -40,6 +40,12 @@ let
   gtkGfxM = import ../desktop/gtk/gfx.nix { mkSrcPkg = mkCores; tools = gtkTools; inherit zlib; base = gtkBase; inherit (srcPkgs) nixChain;
     inherit (base) libxml2; graphics = glibs // { inherit (ginputS) pixman libxkbcommon; inherit (glibsD) dbus; inherit (glibsS) wayland wayland-protocols libdrm;
       inherit (mesaSet) mesa; }; };
+  # a64w: cli/ with an aarch64 gtkMeson (../aarch64/home.nix cliWith): c-qnew5.nix and c-qnew6.nix (x86 queue leaves that aarch64 has jobs
+  # for too) on gtk's meson/gperf/libpng and graphics' samurai. No nasm (c-qalias.nix stays cli's); gtkTools is x86's GNU binutils farm,
+  # which aarch64 has none of (no aarch64 binutils upstream): sh, already on every a64h PATH. zipHeaders (tnt, jama): this system, the
+  # set's gcc wrapper and a64.plain (store-only builder and PATH, as hunspell-dict-en-us).
+  cliQ = homePkgs.cliWith { inherit (gtkTools) meson gperf; inherit (gtools) samurai; inherit (gtkBase) libpng; nasm = null; gtkTools = a64.shAlias;
+    inherit system; inherit (srcPkgs) gccWrapper; zipDrv = a: derivation (a64.plain a); };
   # solnix-torrent.nix's libtorrent-rasterbar (the community seeder's client library): the set's openssl, nixChain's boost (headers)
   torrent = import ../solnix-torrent.nix { inherit mkSrcPkg; inherit (srcPkgs) openssl gccWrapper; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
     inherit (base) pkgconf; binutils = null; gcc = null; gate = null; libc = null; inherit system; };
@@ -108,6 +114,13 @@ in
   inherit (base) smartmontools libxml2;   # libxml2: on the set's zlib (./default.nix perPkg)
   inherit (desk) xdg-utils xdg-user-dirs;
   solnix-help = derivation (a64.plain (desk.solnix-help.drvAttrs // { inherit system; }));
+  # a64w: c-qnew5.nix + c-qnew6.nix (every attr has an aarch64 job at the x86 target), and the c-recipes3/4 inputs aarch64 has jobs for
+  inherit (cliQ) dos2unix argp-standalone lzlib gengetopt halibut libestr libnxml tnt jama liblockfile base16-schemes base24-schemes m4ri tie
+    libndtypes wdiff c-stdaux updfparser libee libmrss lockfile-progs m4rie libxnd c-siphash plzip tarlz pkgdiff id3lib id3v2 help2man libiff
+    libilbm dns-root-data lrzsz libdicom cyclonedds easel libtommath libkate libhubbub ncompress pbzip2 memtailor curlpp gnulib libdatrie
+    libmediainfo expected-lite libuecc libtomcrypt pigz mathic libthai mediainfo ecdsautils;
+  inherit (cliQ) lzip uthash netsurf-buildsystem libparserutils libzen libogg check gtest;
+  inherit (cli) which;   # c-recipes3.nix: wdiff's test suite runs it (./default.nix perPkg); its own aarch64 job
 } // builtins.mapAttrs (_: retarget) {
   inherit (desk) sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts noto-fonts-color-emoji cosmic-wallpapers;
   inherit (cosmicData) open-sans hicolor-icon-theme pop-icon-theme cosmic-icons;
