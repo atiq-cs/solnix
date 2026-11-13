@@ -1,0 +1,15 @@
+# config.site for sparcv9's store-only builds (./stdenv.nix): ../config-x86.site's answers, but big-endian (sparcv9 is the one big-endian
+# solnix target; ../config-x86.site's AC_C_BIGENDIAN note asks for this file). Each pin's reason is in ../config-x86.site.
+gt_cv_locale_fr=none
+gt_cv_locale_fr_utf8=none
+gt_cv_locale_zh_CN=none
+gt_cv_locale_ja=none
+gt_cv_locale_tr_utf8=none
+am_cv_func_iconv_works=yes
+gl_cv_header_working_fcntl_h=yes
+cf_cv_ipv6type=solaris
+tar_cv_path_RSH=no
+ac_cv_c_bigendian=yes
+gnupg_cv_c_endian=big
+ac_cv_file__usr_share_man_man7_attributes_7=yes
+ac_cv_broken_nice=no

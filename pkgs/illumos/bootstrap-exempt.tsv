@@ -28,6 +28,8 @@
 #   sv9gccseed: sparcv9's gcc 14 (pkgs/illumos/sparcv9/gcc-src.nix) compiled by OI's IPS gcc-13 (OI's sparc catalog has no gcc-14):
 #              drv system and env system sparcv9-solaris, builder /usr/bin/bash, env keys exactly its 20, stage0 /usr/gcc/13.
 #              sparcv9 has one host (zone lixu), so its proof is same-host (nix-store --check), as aarch64's
+#   sv9seed  : sparcv9's seed tools the `seed` rule does not name (gawk: sparcv9 has no world awk): env btPath "", drv system and env
+#              system sparcv9-solaris (pkgs/illumos/sparcv9/stdenv.nix, sv9-2 S2c); proof same-host only (lixu --check)
 #   a64glibs : the frozen aarch64 seed's mkGateLibs (gate libraries copied from the proto, RUNPATH -> itself + libc slice + zlib):
 #              aarch64-solaris, builder /usr/bin/bash, env keys exactly builder gate libc name out roots system zlib, no inputSrcs,
 #              and exactly 3 input drvs, each the out its env key names: the pinned aarch64 gate proto (fod), the libc slice, the
@@ -36,6 +38,7 @@
 ^(bash|binutils|bzip2-bin|coreutils|diffutils|findutils|gnugrep|gnum4|gnumake|gnupatch|gnused|gnutar|gzip|libxml2|nspr|nss|openssl|perl|pkgconf|xz|zlib)-[0-9][0-9.a-z]*$	seed	the seed instance: built on the OI host's /usr/gnu + /usr/bin, compiles the first store tools (bash: gcc15's CONFIG_SHELL, wave6t)
 ^gcc-14\.3\.0$	gccseed	gcc 14 from the OI IPS gcc-14 (stage0 of gcc15)
 ^gcc-14\.3\.0$	sv9gccseed	sparcv9's gcc 14 from the OI IPS gcc-13 (stage0 /usr/gcc/13; the sparcv9 stage0 of gcc15, sv9-2 S2b); proof same-host only (lixu --check)
+^gawk-[0-9][0-9.a-z]*$	sv9seed	sparcv9's seed gawk (pkgs/illumos/sparcv9/stdenv.nix: configure's and the store-only builds' awk); proof same-host only (lixu --check)
 ^(libc|ld|rtld|sys|base-tools)$	slice	gate proto slices, copied with the gate's own tools (mk-illumos-component)
 ^illumos-(early|zfs|halt|core-utils|oamuser|smf)$	pslice	gate proto slices with a computed library closure, the gate's own tools (mk-proto-slice)
 ^illumos-userland$	world	the whole gate userland, relocated (mk-proto-world)

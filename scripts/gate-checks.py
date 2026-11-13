@@ -101,6 +101,9 @@ def _marker(m, d, clo):
     if m == "sv9gccseed":
         return (set(env) == SV9GCC_KEYS and d["system"] == env["system"] == "sparcv9-solaris" and d["builder"] == "/usr/bin/bash"
                 and env["stage0"] == "/usr/gcc/13")
+    # sparcv9's seed tools that the generic `seed` rule does not name (gawk: sparcv9 has no world awk, aarch64 and x86 do): the seed
+    # shape (btPath "") on sparcv9 only, so the row exempts nothing on x86 or aarch64
+    if m == "sv9seed": return env.get("btPath") == "" and d["system"] == env.get("system") == "sparcv9-solaris"
     if m == "fod": return env.get("outputHashMode") == "recursive" and len(env.get("outputHash", "")) + 1 > 40 and "btPath" not in env
     if m == "seedenv":   # every path it links is an output of an input drv that is itself seed, gccseed or seedenv
         ps = (env.get("paths", "") + " " + env.get("gnutar", "")).split()
@@ -1521,6 +1524,11 @@ def selftest():
         ("NOT exempt: sv9gccseed shape with one key missing (tsErrnoPatch)", SV("svh", drop="tsErrnoPatch"), False, "A1-path"),
         ("NOT exempt: sv9gccseed shape under another name (gcc-15.3.0)", SV("svi", name="gcc-15.3.0"), False, "A1-path"),
         ("NOT exempt: sv9gccseed shape with a store builder", SV("svj", builder=STORE + "5" * 32 + "-bash"), False, "A1-path"),
+        # sv9seed: sparcv9's gawk seed (btPath "", host PATH)
+        ("exempt: sv9seed gawk (sparcv9, btPath empty)", fake_drv("sws", ["-c", "export PATH=/usr/gnu/bin:/usr/bin"], {"PATH": "/usr/gnu/bin:/usr/bin", "btPath": "", "system": SV9}, name="gawk-5.4.1", system=SV9), True, "EXEMPT"),
+        ("NOT exempt: sv9seed shape on x86_64-solaris", fake_drv("swx", ["-c", "export PATH=/usr/gnu/bin:/usr/bin"], {"PATH": "/usr/gnu/bin:/usr/bin", "btPath": "", "system": "x86_64-solaris"}, name="gawk-5.4.1"), False, "A1-path"),
+        ("NOT exempt: sv9seed shape with btPath set (a store-only gawk)", fake_drv("swb", ["-c", "export PATH=/usr/gnu/bin:/usr/bin"], {"PATH": "/usr/gnu/bin:/usr/bin", "btPath": T + "/bin", "system": SV9}, name="gawk-5.4.1", system=SV9), False, "A1-path"),
+        ("NOT exempt: sv9seed shape on a name outside its rule (jq)", fake_drv("swj", ["-c", "export PATH=/usr/gnu/bin:/usr/bin"], {"PATH": "/usr/gnu/bin:/usr/bin", "btPath": "", "system": SV9}, name="jq-1.8.2", system=SV9), False, "A1-path"),
         ("NOT exempt: x86 gccseed shape on sparcv9 (stage0 /usr/gcc/13, x86 keys)", fake_drv("svk", ["-c", "export PATH=/usr/gnu/bin:/usr/bin"], {"stage0": "/usr/gcc/13", "gccSrc": "x"}, name="gcc-14.3.0", system=SV9), False, "A1-path"),
     ]
     ca = lambda p: FAKE_CA.get(p, True)

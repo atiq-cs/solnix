@@ -56,11 +56,57 @@ let
       else b;
   mkSrcPkg = args: sparcv9Fix (import ../mk-src-pkg.nix { inherit gate; gcc = "/usr/gcc/13"; stage0 = "/usr/gcc/13";
     runtimeLibDirs = [ "${libc}/lib/sparcv9" ]; } (args // { inherit system; }));
+  # the store-only stdenv (sv9-2 S2c, ./stdenv.nix): seed tools by the store gcc, then store-only recipes on them
+  sv9 = import ./stdenv.nix { inherit gate libc ld system; gcc = gccSrc; };
+  gccSrc = import ./gcc-src.nix { inherit gate libc ld system; };
+  # an in-build test program against the just-installed library (cli/c-recipes3.nix's tprog, lib/sparcv9)
+  tprog = src: libs: ''
+    cat > "$W/t.c" <<'TPROG'
+${src}
+TPROG
+    gcc -I"$out/include" "$W/t.c" -L"$out/lib/sparcv9" ${libs} -Wl,-R,"$out/lib/sparcv9" -o "$W/t"
+    [ "$("$W/t")" = "$want" ] || { echo "FATAL: in-build test printed '$("$W/t")', want '$want'" >&2; exit 1; }
+  '';
 in
 {
   inherit libc ld;
+  # the seed build tools (S2c), for the builder's drv_for and rows: packages.sparcv9-solaris.<tool> is the seed instance's
+  inherit (sv9.seed) gnumake gnused gnugrep gawk coreutils findutils diffutils gnutar gzip gnupatch gnum4 xz binutils;
+  # jansson, oniguruma: cli/c-recipes3.nix's recipes (the served sparcv9 rows' tarballs), store-only (drv-gate A1 PASS)
+  jansson = sv9.mkSrcPkg {
+    pname = "jansson"; version = "2.14";
+    src = { url = "https://github.com/akheron/jansson/releases/download/v2.14/jansson-2.14.tar.gz";
+            sha256 = "5798d010e41cf8d76b66236cfb2f2543c8d082181d16bc3085ab49538d4b9929"; };
+    build = ''
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static
+      gmake -j2; gmake install
+      want=42
+      ${tprog ''#include <jansson.h>
+#include <stdio.h>
+int main(void){json_error_t e; json_t *j=json_loads("{\"a\":[1,2,42]}",0,&e); if(!j) return 1;
+printf("%lld\n",(long long)json_integer_value(json_array_get(json_object_get(j,"a"),2))); json_decref(j); return 0;}'' "-ljansson"}
+    '';
+  };
+  oniguruma = sv9.mkSrcPkg {
+    pname = "oniguruma"; version = "6.9.9";
+    src = { url = "https://github.com/kkos/oniguruma/releases/download/v6.9.9/onig-6.9.9.tar.gz";
+            sha256 = "60162bd3b9fc6f4886d4c7a07925ffd374167732f55dce8c491bfd9cd818a6cf"; };
+    build = ''
+      # illumos declares alloca() only in <alloca.h>, which regint.h does not include: the gcc builtin (as cli/c-recipes3.nix)
+      ./configure --prefix="$out" --libdir="$out/lib/amd64" --disable-static --enable-posix-api=yes CFLAGS="-O2 -Dalloca=__builtin_alloca"
+      gmake -j2; gmake install
+      want="3 6"
+      ${tprog ''#include <oniguruma.h>
+#include <stdio.h>
+#include <string.h>
+int main(void){regex_t *r; OnigErrorInfo ei; OnigEncoding e[1]={ONIG_ENCODING_UTF8}; onig_initialize(e,1);
+const UChar *p=(const UChar*)"a(b+)c", *s=(const UChar*)"xxabbbcyy"; OnigRegion *g=onig_region_new();
+if(onig_new(&r,p,p+strlen((const char*)p),ONIG_OPTION_DEFAULT,ONIG_ENCODING_UTF8,ONIG_SYNTAX_DEFAULT,&ei)) return 1;
+if(onig_search(r,s,s+9,s,s+9,g,ONIG_OPTION_NONE)<0) return 1; printf("%d %d\n",g->beg[1],g->end[1]); return 0;}'' "-lonig"}
+    '';
+  };
   # gcc 14.3.0 from source (./gcc-src.nix), compiled by OI's /usr/gcc/13 (the `sv9gccseed` marker): gcc.lib is the C++/unwind runtime
-  gcc = import ./gcc-src.nix { inherit gate libc ld system; };
+  gcc = gccSrc;
   # as ../aarch64/src.nix's zlib (OI symbol-version mapfile), LP64 only; --libdir first: zlib's configure is not autoconf
   zlib = mkSrcPkg {
     pname = "zlib"; version = "1.3.2";
