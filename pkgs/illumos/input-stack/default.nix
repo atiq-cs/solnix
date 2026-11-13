@@ -53,6 +53,8 @@ rec {
       cp check.log "$out/share/libudev-solnix/"
       printf 'prefix=%s\nlibdir=%s/lib/amd64\nincludedir=%s/include\nName: libudev\nDescription: solnix libudev (libudev-solnix)\nVersion: 255\nLibs: -L%s/lib/amd64 -ludev\nCflags: -I%s/include\n' \
         "$out" "$out" "$out" "$out" "$out" > "$out/lib/amd64/pkgconfig/libudev.pc"
+      # DT_CHECKSUM -> 0, as mk-src-pkg does (../zero-checksum.sh says why: udevtest's RUNPATH names $out, so --check differed)
+      . ${../illumos-bin.sh}; : > "$W/zc"; /usr/bin/bash ${../zero-checksum.sh} "$out" "$W/zc"; [ ! -s "$W/zc" ] || { cat "$W/zc" >&2; exit 1; }
       cd /; find "$W" -depth -delete
     '' ];
   };
