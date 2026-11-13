@@ -12,16 +12,16 @@ struct Rec { joins: StdMutex<Vec<(String, String, Option<String>, Option<String>
 struct RecBe(Arc<Rec>);
 impl backend::Backend for RecBe {
     fn links(&self) -> backend::Fut<'_, Vec<sys::Link>> {
-        Box::pin(async { vec![sys::Link { name: "iwx0".into(), wifi: true, up: true, mac: "E0:D0:45:3D:6F:35".into() }] })
+        Box::pin(async { vec![sys::Link { name: "iwx0".into(), wifi: true, up: true, mac: "00:00:5E:00:53:10".into() }] })
     }
     fn scan<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, Option<Vec<sys::Bss>>> {
         Box::pin(async { Some(vec![
-            sys::Bss { essid: "cafe".into(), bssid: "1C:6A:1B:12:16:F3".into(), sec: "wpa".into(), strength: 80, mode: "a".into(), speed_mbps: 54 },
-            sys::Bss { essid: "open-net".into(), bssid: "1C:6A:1B:12:16:F4".into(), sec: "none".into(), strength: 60, mode: "g".into(), speed_mbps: 54 }]) })
+            sys::Bss { essid: "cafe".into(), bssid: "00:00:5E:00:53:F3".into(), sec: "wpa".into(), strength: 80, mode: "a".into(), speed_mbps: 54 },
+            sys::Bss { essid: "open-net".into(), bssid: "00:00:5E:00:53:F4".into(), sec: "none".into(), strength: 60, mode: "g".into(), speed_mbps: 54 }]) })
     }
     fn wifi_status<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, sys::WifiStatus> {
         let c = self.0.connected.lock().unwrap().clone();
-        Box::pin(async move { match c { Some(e) => sys::WifiStatus { connected: true, essid: e, bssid: "1C:6A:1B:12:16:F3".into() }, None => sys::WifiStatus::default() } })
+        Box::pin(async move { match c { Some(e) => sys::WifiStatus { connected: true, essid: e, bssid: "00:00:5E:00:53:F3".into() }, None => sys::WifiStatus::default() } })
     }
     fn addr<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, Option<(String, u32)>> {
         let c = self.0.connected.lock().unwrap().is_some();

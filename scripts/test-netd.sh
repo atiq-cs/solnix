@@ -68,28 +68,28 @@ done
 lease() { # lease <new|old> <iwx0's addrobj line>
   st a; echo "$2" > "$NB/addrs"; NB=$NB PATH="$T/bin:$PATH" $SH -c ". '$T/$1.fn'; leased iwx0" ; }
 lease new 'iwx0/dhcp:dhcp:ok:?' && no "(a) ok/? is a lease" || ok "(a) dhcp ok with ADDR ? is not a lease"
-lease new 'iwx0/dhcp:dhcp:ok:192.168.1.192/24' && ok "(a) dhcp ok with an address is a lease" || no "(a) a bound lease is not one"
+lease new 'iwx0/dhcp:dhcp:ok:192.0.2.10/24' && ok "(a) dhcp ok with an address is a lease" || no "(a) a bound lease is not one"
 lease new 'iwx0/dhcp:dhcp:disabled:?' && no "(a) disabled is a lease" || ok "(a) dhcp disabled is not a lease"
 lease new 'iwx0/v4:static:ok:10.0.0.5/24' && no "(a) static is a lease" || ok "(a) a static address is not a lease"
 lease old 'iwx0/dhcp:dhcp:ok:?' && ok "(a) NEG $OLD_REV's leased() takes ok/? for a lease" || no "(a) NEG the old leased() should take ok/?"
-lease old 'iwx0/dhcp:dhcp:ok:192.168.1.192/24' && ok "(a) $OLD_REV's leased() takes a bound lease (sanity)" || no "(a) old leased() on a bound lease"
+lease old 'iwx0/dhcp:dhcp:ok:192.0.2.10/24' && ok "(a) $OLD_REV's leased() takes a bound lease (sanity)" || no "(a) old leased() on a bound lease"
 
 st b; : > "$T/log"
 cat > "$T/b.sh" <<E
 . '$T/new.fn'
 echo 'lo0/v4:static:ok:127.0.0.1/8' > "\$NB/addrs"; echo 'iwx0/dhcp:dhcp:ok:?' >> "\$NB/addrs"
 online; [ -e "\$NETD_ONLINE" ] && echo "1: online with no route, no address"
-echo 'default 192.168.1.1 UG 1 0 iwx0' > "\$NB/routes"
+echo 'default 192.0.2.1 UG 1 0 iwx0' > "\$NB/routes"
 online; [ -e "\$NETD_ONLINE" ] && echo "2: online with a route and no address (ok/?)"
-echo 'lo0/v4:static:ok:127.0.0.1/8' > "\$NB/addrs"; echo 'iwx0/dhcp:dhcp:ok:192.168.1.192/24' >> "\$NB/addrs"
+echo 'lo0/v4:static:ok:127.0.0.1/8' > "\$NB/addrs"; echo 'iwx0/dhcp:dhcp:ok:192.0.2.10/24' >> "\$NB/addrs"
 : > "\$NB/routes"; online; [ -e "\$NETD_ONLINE" ] && echo "3: online with an address and no route"
-echo 'default 192.168.1.1 UG 1 0 iwx0' > "\$NB/routes"
+echo 'default 192.0.2.1 UG 1 0 iwx0' > "\$NB/routes"
 online; [ -e "\$NETD_ONLINE" ] || echo "4: not online with a route and an address"
 online; online
 E
 NB=$NB NETD_ONLINE=$NB/online PATH="$T/bin:$PATH" $SH "$T/b.sh" > "$T/log" 2>&1
 if ! [ -s "$T/log" ] && [ "$(grep -c '^online: ' "$NB/log")" = 1 ] &&
-  grep -qx 'online: default via 192.168.1.1, iwx0/dhcp:ok:192.168.1.192/24' "$NB/log"
+  grep -qx 'online: default via 192.0.2.1, iwx0/dhcp:ok:192.0.2.10/24' "$NB/log"
 then ok "(b) online(): marker only with a default route and an address (not ok/?), logged once"
 else cat "$NB/log" >> "$T/log"; no "(b) online()"; fi
 

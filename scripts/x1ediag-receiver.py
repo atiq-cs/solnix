@@ -4,7 +4,7 @@
 Appends every POST to <inbox>/<host>-<boot>.<kind>.log and prints one line per
 request. Text in, text on disk; no auth, so run it only on a trusted LAN and bind
 it to the LAN address. Usage:
-    python3 x1ediag-receiver.py [--bind 192.168.1.151] [--port 8099] [--inbox DIR]
+    python3 x1ediag-receiver.py [--bind 192.0.2.10] [--port 8099] [--inbox DIR]
 """
 import argparse, os, re, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

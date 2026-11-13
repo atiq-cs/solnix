@@ -214,7 +214,7 @@ in
           };
         };
       });
-      example = lib.literalExpression ''{ sedgwick.pskFile = "/etc/wifi/sedgwick.psk"; }'';
+      example = lib.literalExpression ''{ example-net.pskFile = "/etc/wifi/example-net.psk"; }'';
     };
   };
 
@@ -281,7 +281,7 @@ in
         service (DNS from the lease when networking.nameservers is empty).
       '';
       type = options.hardware.wirelessIwm.networks.type;
-      example = lib.literalExpression ''{ sedgwick.pskFile = "/etc/wifi/sedgwick.psk"; }'';
+      example = lib.literalExpression ''{ example-net.pskFile = "/etc/wifi/example-net.psk"; }'';
     };
   };
 

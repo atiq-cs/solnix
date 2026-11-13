@@ -45,7 +45,7 @@ pub fn split_parsable(line: &str) -> Vec<String> {
     out
 }
 
-/// dladm prints MAC octets without leading zeros (1c:6a:1b:12:d:7e); NM's HwAddress is upper-case two-digit.
+/// dladm prints MAC octets without leading zeros (0:0:5e:0:53:7e); NM's HwAddress is upper-case two-digit.
 pub fn norm_mac(m: &str) -> String {
     m.split(':').map(|o| format!("{:0>2}", o.to_ascii_uppercase())).collect::<Vec<_>>().join(":")
 }
@@ -233,40 +233,40 @@ pub fn set_hold(link: &str, on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // real lines from a solnix laptop (2026-11-10, dladm scan-wifi -p as root)
+    // dladm scan-wifi -p's format as measured 2026-11-10 (escaped colons, octets without leading zeros), documentation values
     #[test]
     fn scan_lines() {
-        let t = "sedgwick:c\\:ea\\:14\\:36\\:14\\:22:wpa:good:g:54Mb\n:12\\:ea\\:14\\:36\\:14\\:22:wpa:good:g:54Mb\nsedgwick:1c\\:6a\\:1b\\:12\\:16\\:f3:wpa:very good:a:54Mb\n";
+        let t = "example-net:0\\:0\\:5e\\:0\\:53\\:1:wpa:good:g:54Mb\n:0\\:0\\:5e\\:0\\:53\\:2:wpa:good:g:54Mb\nexample-net:0\\:0\\:5e\\:0\\:53\\:f3:wpa:very good:a:54Mb\n";
         let b = parse_scan(t);
         assert_eq!(b.len(), 3);
-        assert_eq!(b[0].essid, "sedgwick"); assert_eq!(b[0].bssid, "0C:EA:14:36:14:22"); assert_eq!(b[0].strength, 60);
+        assert_eq!(b[0].essid, "example-net"); assert_eq!(b[0].bssid, "00:00:5E:00:53:01"); assert_eq!(b[0].strength, 60);
         assert_eq!(b[1].essid, ""); assert_eq!(b[2].strength, 80); assert_eq!(b[2].speed_mbps, 54);
     }
     #[test]
     fn status_and_addr() {
-        let w = parse_wifi_status("connected:sedgwick:1c\\:6a\\:1b\\:12\\:16\\:f3\n");
-        assert!(w.connected); assert_eq!(w.essid, "sedgwick"); assert_eq!(w.bssid, "1C:6A:1B:12:16:F3");
+        let w = parse_wifi_status("connected:example-net:0\\:0\\:5e\\:0\\:53\\:f3\n");
+        assert!(w.connected); assert_eq!(w.essid, "example-net"); assert_eq!(w.bssid, "00:00:5E:00:53:F3");
         assert!(!parse_wifi_status("disconnected::\n").connected);
-        assert_eq!(parse_addr("iwx0/dhcp:ok:192.168.1.192/24\n"), Some(("192.168.1.192".into(), 24)));
+        assert_eq!(parse_addr("iwx0/dhcp:ok:192.0.2.10/24\n"), Some(("192.0.2.10".into(), 24)));
         assert_eq!(parse_addr("usbecm1/dhcp:disabled:?\n"), None);
     }
     #[test]
     fn names_and_store() {
-        assert_eq!(psk_name(b"sedgwick"), "sedgwick.psk");
+        assert_eq!(psk_name(b"example-net"), "example-net.psk");
         assert_eq!(psk_name(b"../etc/x"), "x2e2e2f6574632f78.psk");   // never a path
         assert_eq!(psk_name(b".hidden"), "x2e68696464656e.psk");
         assert_eq!(unhex(&hex(b"caf\xc3\xa9")), Some(b"caf\xc3\xa9".to_vec()));
-        assert_eq!(uuid_from(b"sedgwick"), uuid_from(b"sedgwick")); assert_ne!(uuid_from(b"a"), uuid_from(b"b"));
+        assert_eq!(uuid_from(b"example-net"), uuid_from(b"example-net")); assert_ne!(uuid_from(b"a"), uuid_from(b"b"));
         let d = std::env::temp_dir().join(format!("solnix-nm-test-{}", std::process::id()));
         let st = Store { dir: d.join("lib"), wifi_dir: d.join("wifi") };
-        let mut all = st.load(&format!("{}=/etc/wifi/sedgwick.psk", hex(b"sedgwick")));
+        let mut all = st.load(&format!("{}=/etc/wifi/example-net.psk", hex(b"example-net")));
         assert_eq!(all.len(), 1); assert!(all[0].declared);
         let s = st.save(&mut all, b"cafe", Some("hunter22"), "u-1").unwrap();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&s.psk_file).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::read_to_string(&s.psk_file).unwrap(), "hunter22\n");
-        assert_eq!(st.load(&format!("{}=/etc/wifi/sedgwick.psk", hex(b"sedgwick"))).len(), 2);
-        assert!(!st.delete(&mut all, &uuid_from(b"sedgwick")).unwrap());   // declared: refused
+        assert_eq!(st.load(&format!("{}=/etc/wifi/example-net.psk", hex(b"example-net"))).len(), 2);
+        assert!(!st.delete(&mut all, &uuid_from(b"example-net")).unwrap());   // declared: refused
         assert!(st.delete(&mut all, "u-1").unwrap());
         assert!(!Path::new(&s.psk_file).exists());
         let _ = std::fs::remove_dir_all(&d);

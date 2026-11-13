@@ -485,7 +485,7 @@ iwm_il_join(void *arg, const uint8_t *essid, int esslen,
 	}
 
 	/*
-	 * Optional BSSID pin (SIOCS80211BSSID semantics). "sedgwick" is served
+	 * Optional BSSID pin (SIOCS80211BSSID semantics). The test network is served
 	 * by several APs of mixed security (WPA and WEP) and bands; without a
 	 * pin, ieee80211_node_choose_bss selects by RSSI and may try to
 	 * associate to a WEP or distant/5GHz AP that never completes the WPA2
@@ -499,7 +499,7 @@ iwm_il_join(void *arg, const uint8_t *essid, int esslen,
 		ic->ic_flags &= ~IEEE80211_F_DESBSSID;
 	}
 
-	/* WPA2 (RSN) / CCMP / PSK -- the sedgwick profile. */
+	/* WPA2 (RSN) / CCMP / PSK -- the test network's profile. */
 	bzero(&wpa, sizeof (wpa));
 	wpa.i_enabled = 1;
 	wpa.i_protos = IEEE80211_WPA_PROTO_WPA2;

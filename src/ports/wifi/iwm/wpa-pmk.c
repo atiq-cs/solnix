@@ -213,7 +213,7 @@ static void readpass(const char *file, char *buf, size_t bufsz)
 
 /*
  * Canonicalize a BSSID to 17 chars "aa:bb:cc:dd:ee:ff" (lowercase, 2-digit
- * octets). Accepts dladm scan-wifi's abbreviated form (e.g. "1c:6a:1b:12:d:7e")
+ * octets). Accepts dladm scan-wifi's abbreviated form (e.g. "0:0:5e:0:53:7e")
  * and pads single-digit octets. The driver's _wpa_psk parser needs the fixed
  * 17-char form. Returns 0 on success.
  */
