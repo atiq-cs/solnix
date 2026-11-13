@@ -20,7 +20,7 @@ for a regular file, so chmod 4755, 0755 and 0777 dump to the same NAR, and nix-s
 can never reach the cache in a NAR; on the host they mean the store path is not in Nix's canonical form (or was
 tampered with after registration), which is what `store` checks before the host exports it.
 """
-import base64, hashlib, io, json, lzma, os, re, stat, subprocess, sys
+import base64, hashlib, io, json, lzma, os, re, stat, subprocess, sys, time, zlib
 
 STORE = "/nix/store/"
 HASH = r"[0-9a-df-np-sv-z]{32}"
@@ -517,10 +517,10 @@ def search_list(data, at):
     parts = [x for x in data[a:b].split(b":") if x not in (b"", b".", b"PATH")]   # texinfo's list starts with its "PATH" placeholder
     return len(parts) >= 4 and all(x.startswith(b"/") for x in parts)
 
-def host_hits(data):
+def host_hits(data, pos=0):
     """HOST_STR matches that are a host path, not a subpath of a store path (/nix/store/<h>-world/usr/gnu/...) or of a
     variable ($out/usr/local, ${prefix}/usr/gnu): scan back to the start of the token and skip those two."""
-    for m in HOST_STR.finditer(data):
+    for m in HOST_STR.finditer(data, pos):
         i = m.start()
         while i > 0 and data[i - 1] in TOKEN_CH: i -= 1
         tok = data[i:m.start()]
@@ -654,21 +654,27 @@ def elf_live_strings(data):
     except (struct.error, IndexError, ValueError):
         return None
 
-DZ_LIMIT = 1 << 30   # 1 GiB per decompressed section: far above any real debug section (gcc15 cc1plus .debug_info ~ 300 MB)
+# B16: compressed debug sections are read decompressed, streamed (infra 20261112T193000 s3: no per-section cap, a budget per NAR).
+# The scans see the same text as the old in-memory gate (the file with each compressed section masked to NUL, a NUL, the sections
+# decompressed and NUL-joined, an unreadable one as UNREADABLE), cut into windows that end just after a NUL: no pattern but
+# UNREADABLE can match across a NUL, so a match lies inside one window, and DZ_CARRY bytes of context on both sides give the
+# finding text the same bytes (S4 reads 20, B19 120). A NUL-free run is held whole, so it is capped (DZ_RUN). So a new pattern (a
+# linux-package-hints.tsv row too) must not match a NUL: selftest_b16's random texts check the scans against one in-memory pass.
+DZ_CHUNK = 4 << 20                                                # inflate output step and window size
+DZ_CARRY = 256                                                    # context kept before and after each window
+DZ_RUN = 1 << 30                                                  # longest NUL-free run of text the scan holds
+DZ_BYTES = int(os.environ.get("GATE_DZ_BYTES") or 64 << 30)       # decompressed bytes per NAR
+DZ_SECONDS = float(os.environ.get("GATE_DZ_SECONDS") or 4 * 3600)  # wall time per NAR for the decompressed scans
+UNREADABLE = b"\0GATE-UNREADABLE-COMPRESSED-SECTION\0"
 
-def elf_compressed_text(data):
-    """(byte ranges, DECOMPRESSED bytes) of an ELF's compressed sections (SHF_COMPRESSED + Elf_Chdr zlib, as gobjcopy
-    --compress-debug-sections=zlib writes them; and GNU .zdebug_* 'ZLIB'+8-byte-size), the text joined by NULs; ([], b"") when not an
-    ELF, none, or unparseable. The content scans (S3 S4 B8 B13) read the real text: scanning zlib bytes gives false hits (wave6t: 'lixi'
-    in a seed binutils .debug) and hides real ones (a host name inside a compressed .debug_str). A section that does not
-    inflate is returned as nothing (the raw bytes are still scanned)."""
-    import struct, zlib
-    def inflate(b, limit):   # bounded: a crafted NAR must not exhaust memory (infra's server gate mirrors this code)
-        d = zlib.decompressobj(); r = d.decompress(b, limit)
-        if d.unconsumed_tail: raise zlib.error("decompressed section larger than the limit")
-        return r
+def elf_compressed_sections(data):
+    """(byte ranges, zlib streams as memoryviews) of an ELF's compressed sections (SHF_COMPRESSED + Elf_Chdr zlib, as gobjcopy
+    --compress-debug-sections=zlib writes them; and GNU .zdebug_* 'ZLIB'+8-byte-size); ([], []) when not an ELF, none, or
+    unparseable. The content scans (S3 S4 B8 B13) read the real text: scanning zlib bytes gives false hits (wave6t: 'lixi' in a seed
+    binutils .debug) and hides real ones (a host name inside a compressed .debug_str)."""
+    import struct
     try:
-        if data[:4] != b"\x7fELF": return [], b""
+        if data[:4] != b"\x7fELF": return [], []
         is64, end = data[4] == 2, "<" if data[5] == 1 else ">"
         if is64:
             shoff = struct.unpack_from(end + "Q", data, 0x28)[0]; shentsize, shnum, shstrndx = struct.unpack_from(end + "HHH", data, 0x3A)
@@ -681,31 +687,149 @@ def elf_compressed_text(data):
             else: name, typ, flags, _, off, size = struct.unpack_from(end + "IIIIII", data, o)
             secs.append((name, typ, flags, off, size))
         stro = secs[shstrndx][3] if shstrndx < len(secs) else 0
-        out, rng = [], []
+        mv, zs, rng = memoryview(data), [], []
         for name, typ, flags, off, size in secs:
             if typ == 8 or size == 0: continue   # SHT_NOBITS
-            sec = data[off:off + size]
+            sec = mv[off:off + size]
             nm = data[stro + name:data.index(b"\0", stro + name)] if stro else b""
-            try:
-                if flags & 0x800:   # SHF_COMPRESSED: Elf64_Chdr (24 bytes) / Elf32_Chdr (12), ch_type 1 = ELFCOMPRESS_ZLIB
-                    hl = 24 if is64 else 12
-                    if struct.unpack_from(end + "I", sec, 0)[0] == 1: out.append(inflate(sec[hl:], DZ_LIMIT)); rng.append((off, off + size))
-                elif nm.startswith(b".zdebug") and sec[:4] == b"ZLIB":
-                    out.append(inflate(sec[12:], DZ_LIMIT)); rng.append((off, off + size))
-            except zlib.error:
-                out.append(b"\0GATE-UNREADABLE-COMPRESSED-SECTION\0"); rng.append((off, off + size))   # never silently skipped
-        return rng, b"\0".join(out)
+            if flags & 0x800:   # SHF_COMPRESSED: Elf64_Chdr (24 bytes) / Elf32_Chdr (12), ch_type 1 = ELFCOMPRESS_ZLIB
+                hl = 24 if is64 else 12
+                if struct.unpack_from(end + "I", sec, 0)[0] == 1: zs.append(sec[hl:]); rng.append((off, off + size))
+            elif nm.startswith(b".zdebug") and sec[:4] == b"ZLIB":
+                zs.append(sec[12:]); rng.append((off, off + size))
+        return rng, zs
     except (struct.error, IndexError, ValueError):
-        return [], b""
+        return [], []
 
-def scan_text(data):
-    """What the content scans read: the file with each compressed section's bytes masked to NUL (same length, so offsets
-    into data stay valid), then the decompressed sections. A file without compressed sections is returned as is."""
-    rng, txt = elf_compressed_text(data) if data[:4] == b"\x7fELF" else ([], b"")
-    if not rng: return data
-    b = bytearray(data)
-    for lo, hi in rng: b[lo:hi] = bytes(hi - lo)
-    return bytes(b) + b"\0" + txt
+def inflate_stream(z, emit):
+    """Inflate the zlib stream z in DZ_CHUNK pieces of output, each passed to emit; stops at the stream's end (bytes after it are
+    ignored) or when emit returns False (-> False). Raises zlib.error if corrupt. A truncated stream yields what it holds."""
+    d, o, tail = zlib.decompressobj(), 0, b""
+    while not d.eof:
+        if not tail:
+            if o >= len(z):   # input done: drain what zlib still holds
+                out = d.decompress(b"", DZ_CHUNK)
+                if not out: break
+                if emit(out) is False: return False
+                continue
+            tail = z[o:o + DZ_CHUNK]; o += DZ_CHUNK
+        out = d.decompress(tail, DZ_CHUNK); tail = d.unconsumed_tail
+        if out and emit(out) is False: return False
+    return True
+
+class DzBudget:
+    """One NAR's budget for the decompressed scans: DZ_BYTES of inflated text, DZ_SECONDS of wall time."""
+    def __init__(self): self.left, self.t0 = DZ_BYTES, time.monotonic()
+    def spend(self, b): self.left -= len(b); return self.left >= 0 and self.time_ok()
+    def time_ok(self): return time.monotonic() - self.t0 <= DZ_SECONDS
+    def why(self):
+        return (f"decompressing its sections passes the gate's budget ({DZ_BYTES >> 20} MiB of text, {DZ_SECONDS:.0f} s per NAR): "
+                "the rest is not scanned")
+
+class TextScan:
+    """The scans that read a file's text, in one pass over windows of it: S3 S4 B8 B13 (compressed sections) B16 (UNREADABLE) B19.
+    feed(buf, pos, end, base): buf[pos:end] is the next window and base the text offset of buf[0]; a match belongs to the window
+    it starts in. over: a B16 finding when the text was not read whole (budget, NUL-free run)."""
+    def __init__(self, rel, data):
+        self.rel, self.dlen = rel, len(data)
+        self.marker = self.s3 = self.s4 = self.b8 = self.run_dir = self.b13c = self.over = None
+        self.b8_stop, self.mapped, self.b19, self.b19_seen = False, 0, [], set()
+    def feed(self, buf, pos, end, base):
+        if self.marker is None and UNREADABLE in buf: self.marker = True   # a marker spans <= 2 windows: buf holds both parts
+        if self.s3 is None:
+            m = BUILDHOST_RE.search(buf, pos)
+            if m and m.start() < end: self.s3 = (m.group(0), base + m.start())
+        if self.s4 is None:
+            m = HOSTNAME_RE.search(buf, pos)
+            if m and m.start() < end: self.s4 = (m.group(0), buf[max(0, m.start() - 20):m.end() + 20])
+        if not self.b8_stop:
+            for m in BUILD_STR.finditer(buf, pos):
+                if m.start() >= end: break
+                g = m.group(0)
+                if g == b"/build/": self.mapped += 1; continue
+                if DRV_KEYED.match(g) and not g.startswith(b"/var/tmp/srcpkg-"):
+                    # WARN: the cargo, go, rust and gcc builders' dirs (wave6t step5, measured: rg and rustc name their cargo target
+                    # dir, gcc's driver the gcc 14 libstdc++ build dir it links statically). drv-keyed, so the same on every host.
+                    # shortcut: WARN for those four until their builders remap the dir (--remap-path-prefix, -ffile-prefix-map); then FAIL.
+                    self.b8 = self.b8 or ("WARN", "B8-builddir", f"{self.rel} names {g.decode()} (drv-keyed build dir: same on every host)")
+                elif DRV_KEYED.match(g):
+                    # mk-src-pkg's dir: wave6 records the compiler by name (gcc, not $W/cc64), so nothing shipped may name it
+                    self.b8 = ("FAIL", "B8-builddir", f"{self.rel} names {g.decode()} (mk-src-pkg's build dir: a recorded CC or path)"); self.b8_stop = True; break
+                else:
+                    self.b8 = ("FAIL", "B8-builddir", f"{self.rel} names {g.decode(errors='replace')} (a build dir that is not drv-keyed)"); self.b8_stop = True; break
+        if self.run_dir is None:
+            m = RUN_DIR_STR.search(buf, pos)
+            if m and m.start() < end: self.run_dir = m.group(0)
+        p = max(pos, self.dlen + 1 - base)   # B13 here reads the decompressed sections only (the file itself is checked below)
+        if self.b13c is None and p < end:
+            for m in host_hits(buf, p):
+                if m.start() >= end: break
+                if m.group(0) not in WARN_ONLY: self.b13c = m.group(0); break
+        rows = linux_hints()[0]
+        if rows is not None and len(self.b19_seen) < len(rows):
+            self.b19 += b19_findings(self.rel, [(buf, pos, end)], self.b19_seen)
+
+class _Windows:
+    """Cut a text stream into windows that end just after a NUL and pass each to ts.feed with DZ_CARRY bytes of the text before
+    and after it. push(b) -> False once the scan stops (a NUL-free run over DZ_RUN, or the time budget)."""
+    def __init__(self, ts, budget):
+        self.ts, self.budget, self.carry, self.pend, self.base, self.clean, self.stop = ts, budget, b"", bytearray(), 0, 0, False
+    def push(self, b):
+        if self.stop: return False
+        self.pend += b
+        if len(self.pend) < DZ_CHUNK + DZ_CARRY: return True
+        lim = len(self.pend) - DZ_CARRY
+        j = self.pend.rfind(b"\0", self.clean, lim)   # pend[:clean] is known to hold no NUL
+        if j >= 0: self.emit(j + 1); self.clean = max(0, lim - j - 1)
+        else:
+            self.clean = lim
+            if lim > DZ_RUN:
+                self.ts.over = f"its decompressed text has a NUL-free run over {DZ_RUN >> 20} MiB: the rest is not scanned (windows are cut only at NULs)"
+                self.stop = True
+        if not self.budget.time_ok(): self.ts.over = self.ts.over or self.budget.why(); self.stop = True
+        return not self.stop
+    def emit(self, n):
+        c = self.carry; buf = c + bytes(self.pend[:n + DZ_CARRY])
+        self.ts.feed(buf, len(c), len(c) + n, self.base - len(c))
+        self.carry = buf[max(0, len(c) + n - DZ_CARRY):len(c) + n]
+        del self.pend[:n]; self.base += n
+    def close(self):
+        if self.pend and not self.stop: self.emit(len(self.pend))
+
+def text_scan(rel, data, budget):
+    """-> TextScan of data's text. Pass 1 inflates each compressed section to /dev/null (is it zlib? within the budget?), pass 2
+    streams the text through the scans; a section that does not inflate is UNREADABLE in the text, as in the old gate."""
+    ts = TextScan(rel, data)
+    rng, zs = elf_compressed_sections(data)
+    if not rng: ts.feed(data, 0, len(data), 0); return ts
+    ok = []
+    for z in zs:
+        if budget.left < 0 or not budget.time_ok(): ts.over = budget.why(); break
+        try:
+            if not inflate_stream(z, budget.spend): ts.over = budget.why(); break
+            ok.append(True)
+        except zlib.error:
+            ok.append(False)
+    w = _Windows(ts, budget)
+    if all(hi <= len(data) for _, hi in rng):
+        def masked():
+            for o in range(0, len(data), DZ_CHUNK):
+                b = bytearray(data[o:o + DZ_CHUNK])
+                for lo, hi in rng:
+                    a, e = max(lo, o), min(hi, o + DZ_CHUNK)
+                    if a < e: b[a - o:e - o] = bytes(e - a)
+                yield b
+    else:   # a section past the end of the file: the old gate's slice assignment grew its masked copy; keep those bytes
+        b = bytearray(data)
+        for lo, hi in rng: b[lo:hi] = bytes(hi - lo)
+        masked = lambda: (b[o:o + DZ_CHUNK] for o in range(0, len(b), DZ_CHUNK))
+    for b in masked():
+        if not w.push(b): break
+    w.push(b"\0")
+    for i, good in enumerate(ok):
+        if (i and not w.push(b"\0")) or not (inflate_stream(zs[i], w.push) if good else w.push(UNREADABLE)): break
+    w.close()
+    return ts
 
 MAN_STUB = b"unable to create a proper manual page"
 
@@ -745,14 +869,17 @@ def linux_hints():
         _B19[src] = (None, f"cannot read {src} ({e})")
     return _B19[src]
 
-def b19_findings(rel, bufs):
-    """B19 lines for one file: one per hint row, at its first hit, with the message around it (to a NUL or newline)."""
+def b19_findings(rel, bufs, seen=None):
+    """B19 lines for one file: one per hint row, at its first hit, with the message around it (to a NUL or newline). bufs:
+    buffers, or windows (buf, pos, end): the matches starting in buf[pos:end]. seen: the rows already reported."""
     rows, rx = linux_hints()
     if rows is None: return [(B19_LEVEL, "B19-linux-hint", f"{rel}: {rx}: no B19 scan")]
     lvl = "INFO" if (DOC_RE.search(rel) or "/lib/debug/" in "/" + rel or rel.endswith(".debug")) else B19_LEVEL
-    seen, r = set(), []
+    seen, r = set() if seen is None else seen, []
     for buf in bufs:
-        for m in rx.finditer(buf):
+        buf, pos, end = buf if isinstance(buf, tuple) else (buf, 0, len(buf))
+        for m in rx.finditer(buf, pos):
+            if m.start() >= end: break
             i = int(m.lastgroup[4:])
             if i in seen: continue
             seen.add(i)
@@ -798,6 +925,7 @@ def check_nar(out, src=None):
         return "in"
     shebangs = {}
     pname = drv_pname(os.path.basename(out)[33:])   # B18's allowlist scope: the store name's pname, as recipes.tsv names the row
+    budget = DzBudget()
     try:
       for rel, kind, info in nar_entries(open_nar(src or out)):   # streamed: one file's data in memory at a time
         names.add(rel)
@@ -806,10 +934,11 @@ def check_nar(out, src=None):
             n["links"] += 1; links[rel] = info["target"]; r.extend(server_checks(rel, target=info["target"])); continue
         n["files"] += 1
         data, top = info["data"], rel.split("/")[0]
-        text = scan_text(data)   # = data unless an ELF has compressed sections
-        if b"\0GATE-UNREADABLE-COMPRESSED-SECTION\0" in text:   # corrupt, or larger than DZ_LIMIT: the scans can't read it
-            r.append(("FAIL", "B16-compressed", f"{rel}: a compressed section that cannot be decompressed (corrupt, or over {DZ_LIMIT >> 20} MiB)"))
-        r.extend(server_checks(rel, data=data, text=text))
+        ts = text_scan(rel, data, budget)   # the text scans, over the file with its compressed sections decompressed
+        if ts.marker:   # a section that does not inflate: the scans can't read it
+            r.append(("FAIL", "B16-compressed", f"{rel}: a compressed section that cannot be decompressed (corrupt)"))
+        if ts.over: r.append(("FAIL", "B16-compressed", f"{rel}: {ts.over}"))
+        r.extend(server_checks(rel, data=data, ts=ts))
         r.extend(config_record_findings(rel, data))
         # B18: real private-key / secret material. SECRET_BODY matches only actual material (an openssh/PEM key BODY, an age
         # secret, an inline sops ciphertext), never a bare header, so it is checked in EVERY file regardless of extension: a
@@ -842,29 +971,17 @@ def check_nar(out, src=None):
         if "share/man/" in "/" + rel and MAN_STUB in (gunzip_bounded(data) if rel.endswith(".gz") else data):
             r.append(("FAIL", "B17-man-stub", f"{rel}: help2man's stub page (\"unable to create a proper manual page\"): no perl at configure"))
         # B19: a message telling the user to install a Linux package (see linux_hints); .gz inflated
-        r.extend(b19_findings(rel, (text,) + ((gunzip_bounded(data),) if rel.endswith(".gz") else ())))
+        r.extend(ts.b19 + b19_findings(rel, (gunzip_bounded(data),) if rel.endswith(".gz") else (), ts.b19_seen)
+                 if linux_hints()[0] is not None else b19_findings(rel, ()))
         # B7: bin/ and sbin/ hold executables (libtool 2.5.4 shipped bin/libtool 0444; gzip zgrep)
         if top in ("bin", "sbin") and rel.count("/") == 1 and not info["exec"]:
             r.append(("FAIL", "B7-exec", f"{rel} is not executable"))
         dbg = "/lib/debug/" in "/" + rel or rel.endswith(".debug")
-        # B8: build directories
-        b8 = None
-        for m in BUILD_STR.finditer(text):
-            if m.group(0) == b"/build/":
-                n["mapped_build"] = n.get("mapped_build", 0) + (0 if dbg else 1); continue
-            if DRV_KEYED.match(m.group(0)) and not m.group(0).startswith(b"/var/tmp/srcpkg-"):
-                # WARN: the cargo, go, rust and gcc builders' dirs (wave6t step5, measured: rg and rustc name their cargo target
-                # dir, gcc's driver the gcc 14 libstdc++ build dir it links statically). drv-keyed, so the same on every host.
-                # shortcut: WARN for those four until their builders remap the dir (--remap-path-prefix, -ffile-prefix-map); then FAIL.
-                b8 = b8 or ("WARN", "B8-builddir", f"{rel} names {m.group(0).decode()} (drv-keyed build dir: same on every host)")
-            elif DRV_KEYED.match(m.group(0)):
-                # mk-src-pkg's dir: wave6 records the compiler by name (gcc, not $W/cc64), so nothing shipped may name it
-                b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode()} (mk-src-pkg's build dir: a recorded CC or path)"); break
-            else:
-                b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode(errors='replace')} (a build dir that is not drv-keyed)"); break
-        m = RUN_DIR_STR.search(text)
-        if m:
-            b8 = ("FAIL", "B8-builddir", f"{rel} names {m.group(0).decode(errors='replace')} (a host- or run-specific dir)")
+        # B8: build directories (read in TextScan.feed: /build/ counted, drv-keyed WARN, the rest FAIL; then a run dir FAILs)
+        n["mapped_build"] = n.get("mapped_build", 0) + (0 if dbg else ts.mapped)
+        b8 = ts.b8
+        if ts.run_dir:
+            b8 = ("FAIL", "B8-builddir", f"{rel} names {ts.run_dir.decode(errors='replace')} (a host- or run-specific dir)")
         if b8: r.append(b8)
         # B9: #! interpreter of an EXECUTABLE file (what the kernel runs; NixOS patchShebangs also only touches executables).
         # A relative interpreter (#!perl, #!./perl in perl's own .pm templates) names no host path: not checked.
@@ -882,9 +999,7 @@ def check_nar(out, src=None):
                 r.append(("FAIL", "B10-pyc", f"{rel}: timestamp-mode pyc (written by an import during the build, not compileall --invalidation-mode checked-hash)"))
         # B13: host tool paths baked into the out: report the first FAIL-class hit, else the first WARN-class one. In the
         # decompressed sections (debug info) every hit but WARN_ONLY is FAIL: the WARN cases are .rodata/.dynstr/text-file shapes.
-        if len(text) > len(data):
-            dh = [m for m in host_hits(text[len(data) + 1:]) if m.group(0) not in WARN_ONLY]
-            if dh: r.append(("FAIL", "B13-hostpath", f"{rel} (compressed section) names {dh[0].group(0).decode(errors='replace')}"))
+        if ts.b13c: r.append(("FAIL", "B13-hostpath", f"{rel} (compressed section) names {ts.b13c.decode(errors='replace')}"))
         hits = list(host_hits(data))
         if hits:
             elf = is_elf(data)
@@ -976,8 +1091,8 @@ def elf_dynamic(data):
     except (struct.error, IndexError, ValueError):
         return None
 
-def server_checks(rel, data=None, target=None, text=None):
-    """-> [(level, check, why)] for one NAR entry: a regular file (data) or a symlink (target). text: scan_text(data)."""
+def server_checks(rel, data=None, target=None, ts=None):
+    """-> [(level, check, why)] for one NAR entry: a regular file (data) or a symlink (target). ts: its TextScan."""
     r = []
     if target is not None:
         if BUILDHOST_RE.search(target.encode(errors="surrogateescape")):
@@ -996,13 +1111,13 @@ def server_checks(rel, data=None, target=None, text=None):
             if interp is not None and not INTERP_OK.match(interp):
                 r.append(("FAIL", "S2-interp", f"{rel}: PT_INTERP {interp} is not the store or the illumos ld.so.1"))
     # S3/S4 read the real text: an ELF's compressed sections decompressed, never the zlib bytes (wave6t, orchestrator 2026-11-03)
-    t = text if text is not None else scan_text(data)
-    m = BUILDHOST_RE.search(t)
-    if m: r.append(("FAIL", "S3-buildhost", f"{rel}: contains {m.group(0).decode(errors='replace')!r} (@{m.start()}{', decompressed' if m.start() >= len(data) else ''})"))
-    m = HOSTNAME_RE.search(t)
-    if m:
-        ctx = t[max(0, m.start() - 20):m.end() + 20].decode(errors="replace").replace("\n", " ")
-        r.append(("FAIL", "S4-hostname", f"{rel}: names host {m.group(0).decode()!r}: ...{ctx}..."))
+    ts = ts or text_scan(rel, data, DzBudget())
+    if ts.s3:
+        g, at = ts.s3
+        r.append(("FAIL", "S3-buildhost", f"{rel}: contains {g.decode(errors='replace')!r} (@{at}{', decompressed' if at >= len(data) else ''})"))
+    if ts.s4:
+        g, ctx = ts.s4
+        r.append(("FAIL", "S4-hostname", f"{rel}: names host {g.decode()!r}: ...{ctx.decode(errors='replace').replace(chr(10), ' ')}..."))
     return r
 
 
@@ -1387,7 +1502,7 @@ def selftest():
         ("NOT exempt: x86 gccseed shape on sparcv9 (stage0 /usr/gcc/13, x86 keys)", fake_drv("svk", ["-c", "export PATH=/usr/gnu/bin:/usr/bin"], {"stage0": "/usr/gcc/13", "gccSrc": "x"}, name="gcc-14.3.0", system=SV9), False, "A1-path"),
     ]
     ca = lambda p: FAKE_CA.get(p, True)
-    bad = selftest_out() + selftest_log() + selftest_b19()
+    bad = selftest_out() + selftest_log() + selftest_b19() + selftest_b16()
     # leaf mode: a host-PATH input whose out IS served is not judged (counted as debt); one whose out is NOT served is
     hostin = fake_drv("hostin", ["-c", "true"], {"PATH": "/usr/bin"})
     hostout = parse_drv(FAKE[hostin])["outputs"]["out"]["path"]
@@ -1578,22 +1693,157 @@ def selftest_b19():
             else: os.environ["GATE_LINUX_HINTS"] = old
     return bad
 
-def mk_elf_zsec(payload, chdr_align=8, zdebug=False):
+def mk_elf_zsec(payload, chdr_align=8, zdebug=False, z=None, ch_size=None):
     """A minimal ELF64 LE with one compressed debug section holding zlib(payload): SHF_COMPRESSED + Elf64_Chdr (gobjcopy
     --compress-debug-sections=zlib), or a GNU .zdebug_str ('ZLIB' + 8-byte BE size). chdr_align: the raw ch_addralign
-    field (8 bytes), so a control can plant bytes in the compressed section that are not part of its text."""
-    import struct, zlib
-    z = zlib.compress(payload)
-    if zdebug: name, sec, flags = b".zdebug_str", b"ZLIB" + struct.pack(">Q", len(payload)) + z, 0
-    else:
-        al = chdr_align if isinstance(chdr_align, bytes) else struct.pack("<Q", chdr_align)
-        name, sec, flags = b".debug_str", struct.pack("<II", 1, 0) + struct.pack("<Q", len(payload)) + al + z, 0x800
-    shstr = b"\0.shstrtab\0" + name + b"\0"
-    off_shstr = 64; off_sec = off_shstr + len(shstr); off_sh = (off_sec + len(sec) + 7) & ~7
-    eh = b"\x7fELF" + bytes([2, 1, 1]) + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 1, 62, 1, 0, 0, off_sh, 0, 64, 0, 0, 64, 3, 1)
-    sh = bytes(64) + struct.pack("<IIQQQQIIQQ", 1, 3, 0, 0, off_shstr, len(shstr), 0, 0, 1, 0) \
-        + struct.pack("<IIQQQQIIQQ", 11, 1, flags, 0, off_sec, len(sec), 0, 0, 1, 0)
-    return (eh + shstr + sec).ljust(off_sh, b"\0") + sh
+    field (8 bytes), so a control can plant bytes in the compressed section that are not part of its text. A list of
+    payloads: one section each (.debug_str0, 1, ...). z, ch_size: the zlib bytes and the size field as given (a lie, a
+    stream built in pieces), for one section."""
+    import struct
+    names, secs, flags = [], [], 0 if zdebug else 0x800
+    for i, p in enumerate(payload if isinstance(payload, list) else [payload]):
+        zz = zlib.compress(p) if z is None else z; n = len(p) if ch_size is None else ch_size
+        if zdebug: names.append(b".zdebug_str"); secs.append(b"ZLIB" + struct.pack(">Q", n) + zz)
+        else:
+            al = chdr_align if isinstance(chdr_align, bytes) else struct.pack("<Q", chdr_align)
+            names.append(b".debug_str" + (str(i).encode() if isinstance(payload, list) else b""))
+            secs.append(struct.pack("<II", 1, 0) + struct.pack("<Q", n) + al + zz)
+    shstr = b"\0.shstrtab\0" + b"".join(nm + b"\0" for nm in names)
+    body, offs = b"\x7fELF" + bytes(60) + shstr, []
+    for sec in secs: offs.append(len(body)); body += sec
+    off_sh = (len(body) + 7) & ~7
+    eh = b"\x7fELF" + bytes([2, 1, 1]) + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 1, 62, 1, 0, 0, off_sh, 0, 64, 0, 0, 64, 2 + len(secs), 1)
+    sh = bytes(64) + struct.pack("<IIQQQQIIQQ", 1, 3, 0, 0, 64, len(shstr), 0, 0, 1, 0)
+    no = 11
+    for nm, o, sec in zip(names, offs, secs):
+        sh += struct.pack("<IIQQQQIIQQ", no, 1, flags, 0, o, len(sec), 0, 0, 1, 0); no += len(nm) + 1
+    return (eh + body[64:]).ljust(off_sh, b"\0") + sh
+
+def _zrep(block, n, tail=b""):
+    """A zlib stream of block * n + tail, built from one deflate fragment repeated (a GiB of text in a few MiB, in seconds)."""
+    co = zlib.compressobj(9, zlib.DEFLATED, -15)
+    f1 = co.compress(block) + co.flush(zlib.Z_FULL_FLUSH); f2 = co.compress(block) + co.flush(zlib.Z_FULL_FLUSH)
+    a = 1
+    for _ in range(n): a = zlib.adler32(block, a)
+    return b"\x78\xda" + f1 + f2 * (n - 1) + co.compress(tail) + co.flush() + zlib.adler32(tail, a).to_bytes(4, "big")
+
+def _ref_scan(rel, data):
+    """The old in-memory gate's text (the file masked, a NUL, the sections inflated whole and NUL-joined) fed as ONE window:
+    what the streaming scan must equal."""
+    rng, zs = elf_compressed_sections(data)
+    ts = TextScan(rel, data)
+    if not rng: ts.feed(data, 0, len(data), 0); return ts
+    out = []
+    for z in zs:
+        try: out.append(zlib.decompressobj().decompress(z))
+        except zlib.error: out.append(UNREADABLE)
+    b = bytearray(data)
+    for lo, hi in rng: b[lo:hi] = bytes(hi - lo)
+    t = bytes(b) + b"\0" + b"\0".join(out); ts.feed(t, 0, len(t), 0)
+    return ts
+
+def selftest_b16(big=False):
+    """B16 streamed: the scans read decompressed sections in windows cut at NULs, and give what one in-memory pass over the whole
+    text gives (seeded random texts, windows of 16-600 bytes); planted strings across the 4 MiB chunk boundary FAIL (S3 S4 B8 B13,
+    and inside a 10 MiB NUL-free run); a NUL-free run past DZ_RUN, a bomb past DZ_BYTES and the time budget each FAIL B16 with
+    their own text. big: the real sizes (a section over the old 1 GiB cap PASSes; a NUL-free run over 1 GiB FAILs): minutes."""
+    global DZ_CHUNK, DZ_RUN, DZ_BYTES, DZ_SECONDS
+    import random, tempfile
+    bad = 0
+    keep = (DZ_CHUNK, DZ_RUN, DZ_BYTES, DZ_SECONDS)
+    O = STORE + "6" * 32 + "-t-debug"
+    R = lambda data: {"type": "reg", "exec": False, "data": data}
+    Dd = lambda **e: {"type": "dir", "entries": e}
+    def nar(data, dbg=True):
+        tree = Dd(lib=Dd(debug=Dd(**{"x.debug": R(data)}))) if dbg else Dd(lib=Dd(**{"libx.so": R(data)}))
+        with tempfile.TemporaryDirectory() as td:
+            f = os.path.join(td, "b16.nar"); open(f, "wb").write(nar_bytes(tree)); lines = []
+            t0 = time.monotonic(); rc = run_out("nar", [O, f], out=lines.append)
+            return rc, lines, time.monotonic() - t0
+    def check(label, ok, lines=()):
+        nonlocal bad
+        bad += not ok
+        print(f"{'ok ' if ok else 'BAD'} b16  {label}" + ("" if ok else "\n    " + "\n    ".join(lines)))
+    try:
+        # 1. equivalence: random texts of the strings each scan looks for, NULs, newlines; many tiny windows vs one pass
+        FR = [b"main.c", b"/build/src/x.c", b"-I/build/", b"/usr/gnu/bin/make", b"/usr/local/lib", b"ip-10-0-1-2.ec2.internal",
+              b"built on dixi by", b"xdixi", b"lixi_", b"/var/tmp/srcpkg-0123456789abcdef/x.c", b"/var/tmp/cargo-0123456789abcdef/t",
+              b"/var/tmp/gccsrc-ab.c/x", b"/tmp/nix-build-foo-1/b", b"/home/gburd/x", b"/root/.cargo/registry/x",
+              b"Install system76-power or power-profiles-daemon.", b"sudo apt install network-manager", b"/var/tmp/big/x",
+              b"/nix/store/" + b"a" * 32 + b"-w/usr/gnu/", b"-L/opt/ooce/lib", b"x" * 150, b"\xff\xfe", b"FLOKI", b"solnix-builder-build",
+              # unbounded matches longer than DZ_CARRY: a 400-byte build dir (BUILD_STR), a 300-byte token before /usr/gnu/ (host_hits)
+              b"/var/tmp/gate-build-" + b"a" * 400, b"/nix/store/" + b"b" * 300 + b"/usr/gnu/", b"x" * 300 + b"/usr/gnu/x"]
+        rnd, diffs = random.Random(16), []
+        for k in range(300):
+            secs = [b"".join(rnd.choice(FR) + rnd.choice([b"\0", b"\0", b"", b" ", b"\n", b"/"]) for _ in range(rnd.randrange(1, 40)))
+                    for _ in range(rnd.randrange(1, 4))]
+            if k % 7 == 0: secs[0] = secs[0] + UNREADABLE[1:-1]   # the marker as text, across windows too
+            data = mk_elf_zsec(secs)
+            if k % 17 == 0: data = mk_elf_zsec(secs[0], z=zlib.compress(secs[0])[:-9])   # truncated: the old gate read what it holds
+            if k % 19 == 0: data = mk_elf_zsec(secs[0], z=zlib.compress(secs[0]) + b"/usr/gnu/ junk")   # bytes after the stream: ignored
+            if k % 11 == 0: data = data.replace(zlib.compress(secs[-1]), b"\x78\x9c" + b"\xff" * 7)   # a corrupt section: UNREADABLE
+            if k % 13 == 0:   # a section whose text inflates and then fails the adler32 check: UNREADABLE, its text not scanned
+                zz = zlib.compress(secs[0]); data = data.replace(zz, zz[:-4] + bytes(4))
+            DZ_CHUNK = rnd.randrange(16, 600)
+            a, b_ = text_scan("lib/debug/x.debug", data, DzBudget()), _ref_scan("lib/debug/x.debug", data)
+            va = [getattr(a, f) for f in ("marker", "s3", "s4", "b8", "mapped", "run_dir", "b13c", "b19", "over")]
+            vb = [getattr(b_, f) for f in ("marker", "s3", "s4", "b8", "mapped", "run_dir", "b13c", "b19", "over")]
+            if va != vb: diffs.append(f"case {k} chunk {DZ_CHUNK}: stream {va} != whole {vb}")
+        DZ_CHUNK = keep[0]
+        check(f"300 random texts, windows of 16-600 bytes: every scan as one in-memory pass ({len(diffs)} differ)", not diffs, diffs[:3])
+        # 2. planted strings across the 4 MiB inflate-chunk boundary (8 and 12 MiB too), in mostly-NUL text
+        C = DZ_CHUNK
+        def at(buf, off, s):   # s placed so that buf[off] is in its middle
+            o = off - len(s) // 2; buf[o - 1:o + len(s) + 1] = b"\0" + s + b"\0"
+        t = bytearray(b"int\0main.c\0" * (13 * C // 11 + 1))[:13 * C]
+        at(t, C, b"/usr/gnu/include/x.h"); at(t, 2 * C, b"/var/tmp/srcpkg-0123abcd/s64/x.c"); at(t, 3 * C, b"ip-10-0-1-23.ec2.internal")
+        at(t, 3 * C + 4096, b"built on floki today")
+        data = mk_elf_zsec(bytes(t))
+        rc, lines, dt = nar(data)
+        hs = [b"/usr/gnu/", b"/var/tmp/srcpkg-0123abcd", b"ec2.internal", b"floki"]
+        want = ["FAIL B13-hostpath", "FAIL B8-builddir", "FAIL S3-buildhost", "FAIL S4-hostname"]
+        for w, h in zip(want, hs):
+            i = bytes(t).find(h) + len(data) + 1
+            ok = rc == 1 and any(l.startswith(w + " ") for l in lines)
+            if w == "FAIL S3-buildhost": ok = ok and any(f"(@{i}, decompressed)" in l for l in lines)
+            check(f"{w} for a string across a {C >> 20} MiB chunk boundary of a 13 MiB section ({dt:.1f} s)", ok, lines)
+        ctx = bytes(t)[bytes(t).find(b"floki") - 20:bytes(t).find(b"floki") + 25].decode(errors="replace")
+        check("... the S4 text quotes the 20 bytes around it, as the in-memory scan did", any(f"...{ctx}..." in l for l in lines), lines)
+        # 3. a NUL-free run: a string across the chunk boundary inside 10 MiB without a NUL FAILs; past DZ_RUN the scan stops
+        run = bytearray(b"A" * (10 << 20)); run[C - 4:C + 6] = b"/usr/gnu/x"
+        data = mk_elf_zsec(b"x\0" + bytes(run) + b"\0end\0")
+        rc, lines, dt = nar(data)
+        check(f"B13 /usr/gnu/ across the chunk boundary inside a 10 MiB NUL-free run: FAIL ({dt:.1f} s)",
+              rc == 1 and any(l.startswith("FAIL B13-hostpath ") and "/usr/gnu/" in l for l in lines), lines)
+        DZ_RUN = 6 << 20
+        rc, lines, dt = nar(data)
+        check("B16 a NUL-free run over DZ_RUN (6 MiB here): FAIL with the run's own text",
+              rc == 1 and any(l.startswith("FAIL B16-compressed ") and "NUL-free run over 6 MiB" in l for l in lines), lines)
+        DZ_RUN = keep[1]
+        # 4. a bomb: 256 MiB of NULs from 260 KiB, against a 64 MiB budget, FAILs in pass 1 (nothing scanned)
+        DZ_BYTES = 64 << 20
+        rc, lines, dt = nar(mk_elf_zsec(b"x", z=_zrep(bytes(1 << 20), 256), ch_size=256 << 20))
+        check(f"B16 a bomb (256 MiB from {len(_zrep(bytes(1 << 20), 256)) >> 10} KiB) past the 64 MiB budget: FAIL in {dt:.1f} s",
+              rc == 1 and dt < 30 and any(l.startswith("FAIL B16-compressed ") and "budget (64 MiB of text" in l for l in lines), lines)
+        rc, lines, _ = nar(mk_elf_zsec([b"/build/a.c\0" * 1000] * 3))
+        check("the same budget passes a debug file well under it", rc == 0, lines)
+        DZ_BYTES = keep[2]; DZ_SECONDS = 0
+        rc, lines, _ = nar(mk_elf_zsec(b"main.c\0" * 1000))
+        check("B16 the time budget (0 s here): FAIL", rc == 1 and any(l.startswith("FAIL B16-compressed ") and "budget" in l for l in lines), lines)
+        DZ_SECONDS = keep[3]
+        if big:
+            # 5. the real sizes: a 1.1 GiB section (over the old 1 GiB cap) PASSes, read to its end (B8 counts every /build/ in it);
+            # a 1.1 GiB NUL-free run FAILs
+            blk = (b"int\0main.c\0/build/src/lib/x.cpp\0unsigned long\0" * 30000)[:1 << 20]; blk = blk[:blk.rfind(b"\0") + 1]
+            rc, lines, dt = nar(mk_elf_zsec(b"x", z=_zrep(blk, 1100), ch_size=len(blk) * 1100), dbg=False)
+            check(f"a {len(blk) * 1100 >> 20} MiB section: PASS, every /build/ in it counted ({dt:.0f} s)",
+                  rc == 0 and any(l.startswith(f"INFO B8-builddir {O}: {blk.count(b'/build/') * 1100} ") for l in lines), lines)
+            rc, lines, dt = nar(mk_elf_zsec(b"x", z=_zrep(b"A" * (1 << 20), 1100), ch_size=1100 << 20))
+            check(f"B16 a 1100 MiB NUL-free run: FAIL with the run's own text ({dt:.0f} s)",
+                  rc == 1 and any("NUL-free run over 1024 MiB" in l for l in lines), lines)
+    finally:
+        DZ_CHUNK, DZ_RUN, DZ_BYTES, DZ_SECONDS = keep
+    return bad
 
 STUB_SED1 = b'.TH "sed" 1 "GNU sed" "User Commands"\n.SH NAME\nsed \\- stream editor for filtering and transforming text\n.SH DESCRIPTION\n.B OOPS!\nWe were unable to create a proper manual page for\n.B sed.\nFor concise option descriptions, run\n.IP\n.B env sed --help\n.PP\nThe full documentation for\n.B sed\nis maintained as a Texinfo manual, which should be accessible\non your system via the command\n.IP\n.B info sed invoking\n'
 REAL_SED1_HEAD = b'.\\" DO NOT MODIFY THIS FILE!  It was generated by help2man 1.48.5.\n.TH SED "1" "January 1980" "GNU sed 4.9" "User Commands"\n.SH NAME\nsed \\- stream editor for filtering and transforming text\n.SH SYNOPSIS\n.nf\nsed [-V] [--version] [--help] [-n] [--quiet] [--silent]\n    [-l N] [--line-length=N] [-u] [--unbuffered]\n    [-E] [-r] [--regexp-extended]\n    [-e script] [--expression=script]\n    [-f script-file] [--file=script-file]\n    [script-if-no-other-script]\n    [file...]\n.fi\n.SH DESCRIPTION\n.ds sd \\fIsed\\fP\n.ds Sd \\fISed\\fP\n\\*(Sd is a stream editor.\nA stream editor is used to perform basic text\ntransformations on an input stream\n(a file or input from a pipeline).\nWhile in some ways similar to an editor which\npermits scripted edits (such as \\fIed\\fP),\n\\*(sd works by making only one pass over the\ninput(s), and is consequently more efficient.\nBut it is \\*(sd\'s ability to filter text in a pipeline\nwhich particularly distinguishes it from other types of\neditors.\n.HP\n\\fB\\-n\\fR, \\fB\\-\\-quiet\\fR, \\fB\\-\\-silent\\fR\n.IP\nsup'
@@ -1863,6 +2113,8 @@ def main(argv):
     if cmd == "inputs" and len(rest) == 1:
         for o in build_inputs(rest[0]): print(o)
         return 0
+    if cmd == "selftest-b16-big":   # B16 at the real sizes (a 1.1 GiB section, a 1.1 GiB NUL-free run): ~15 min, so not in selftest
+        bad = selftest_b16(big=True); print(f"SELFTEST {'PASS' if bad == 0 else 'FAIL'} ({bad} bad)"); return 1 if bad else 0
     if cmd == "selftest":
         bad = selftest(); print(f"SELFTEST {'PASS' if bad == 0 else 'FAIL'} ({bad} bad)"); return 1 if bad else 0
     if cmd in ("nar", "store", "closure") and rest: return run_out(cmd, rest)
