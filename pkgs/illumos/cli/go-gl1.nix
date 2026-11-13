@@ -635,4 +635,84 @@ in {
   galer = pkg { pname = "galer"; version = "0.2.0"; src = gh "dwisiswant0/galer" "refs/tags/v0.2.0" "1752d3062ad8dc39e4e34fb84088e58aa1544d3893147097502c4ec36920210f";
     vendorHash = "sha256-rjCYCHKRKQfO/AlFjAMRZmyP1wMkhiszv0Tg8HSmaSk="; subPkgs = ".";
     check = chk ''"$out/bin/galer" --version'' "0\\.2\\.0"; };
+  # gat (MIT): cat alternative written in Go.
+  gat = pkg { pname = "gat"; version = "0.31.0"; src = gh "koki-develop/gat" "refs/tags/v0.31.0" "424ad788c91081fe5db432f99d108802bb96ef5688b0ccb263cc4ca673efb155";
+    vendorHash = "sha256-uhn5b0H0k3Hqn6Qt/vHFiXf3HWQKqj21Z3eJqXhZMoI="; subPkgs = ". ./docs ./tapes"; ldflags = "-s -w -X github.com/koki-develop/gat/cmd.version=v0.31.0";
+    check = chk ''"$out/bin/gat" --version'' "0\\.31\\.0"; };
+  # gatus-cli (MIT): client for Gatus, an automated developer-oriented status page.
+  gatus-cli = pkg { pname = "gatus-cli"; version = "1.0.0"; src = gh "TwiN/gatus-cli" "refs/tags/v1.0.0" "9afc71669c0f5b51a5f7818618d8c5c0147aa76d6f1af66f829b4e74fd5410a8";
+    vendorHash = "sha256-Q55rfj8WuNBdDHCIkT1p7Qvk4nCro9w6LT/+32VnjYo="; subPkgs = "."; ldflags = "-s -w -X main.version=1.0.0";
+    check = chk ''"$out/bin/gatus-cli" --help'' "[Uu]sage"; };
+  # gau (MIT): tool to fetch known URLs.
+  gau = pkg { pname = "gau"; version = "2.2.4"; src = gh "lc/gau" "refs/tags/v2.2.4" "537abafca9065a7ed5d93aa7722d85da0815abf6b08c2d1494483171558ce3f7";
+    vendorHash = "sha256-kQ2PUKPsGFXn5QPPXwLbTjN/+5g9MeA6l+dgE5Inebw="; subPkgs = "./cmd/gau"; ldflags = "-w -s";
+    check = chk ''"$out/bin/gau" --version'' "2\\.2\\.4"; };
+  # gci (BSD-3-Clause): controls golang package import order and makes it always deterministic.
+  gci = pkg { pname = "gci"; version = "0.14.0"; src = gh "daixiang0/gci" "refs/tags/v0.14.0" "433d6dd89ebcb9f928f91729b9243971f6233970f78efc41ae672fe376de4e88";
+    vendorHash = "sha256-7fT/nXvqM4uqg7Y2+3kzwgviWnjO9JTrT0zPU1vC6JA="; subPkgs = ". ./internal"; ldflags = "-s";
+    check = chk ''"$out/bin/gci" --version'' "0\\.14\\.0"; };
+  # gcov2lcov (MIT): convert go coverage files to lcov format.
+  gcov2lcov = pkg { pname = "gcov2lcov"; version = "1.1.1"; src = gh "jandelgado/gcov2lcov" "v1.1.1" "5a8973d8680b6c242de3b89970b0f1f6b07fec31e7cd6fedcd3e100b17cd8bba";
+    vendorHash = "sha256-Poz2QI8iLGkYGrbz03CK+kk/z0U4VKOCOmDCoF27+OA="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/gcov2lcov" --help'' "[-]use-absolute-source-path"; };
+  # gemget (MIT): command line downloader for the Gemini protocol.
+  gemget = pkg { pname = "gemget"; version = "1.9.0"; src = gh "makew0rld/gemget" "v1.9.0" "ded2b0d86e24d0a35a35ea412d08ebff636698fa5114e0da80b5b4c1b003e431";
+    vendorHash = "sha256-Ydj8IJVtMtIknwb5y/L9P2eWngPoq118mCF/izf8+NA="; subPkgs = ".";
+    check = chk ''"$out/bin/gemget" --version'' "1\\.9\\.0"; };
+  # geoipupdate (Apache-2.0): automatic GeoIP database updater.
+  geoipupdate = pkg { pname = "geoipupdate"; version = "8.0.0"; src = gh "maxmind/geoipupdate" "v8.0.0" "5c08b39d2ac49ad492138b3d618dddac130065852b6237ec450bac856ace7e0a";
+    vendorHash = "sha256-2awt5CELXnxNvluodOWpXoaeJ6lLgIBwXcBH5IY+CGA="; subPkgs = "./cmd/geoipupdate"; ldflags = "-X main.version=8.0.0";
+    check = chk ''"$out/bin/geoipupdate" --version'' "8\\.0\\.0"; };
+  # gerrit-queue (Apache-2.0): merge bot for Gerrit.
+  gerrit-queue = pkg { pname = "gerrit-queue"; version = "0.0.1"; src = gh "flokli/gerrit-queue" "v0.0.1" "85fb7210a0278326104568cbe8ecd7500028c65637a1da3494864f0162b44b02";
+    vendorHash = "sha256-Kdkcb7GWIf4uUSDfRvpVtp7JvuCFjKwW03da+mGNMu4="; subPkgs = ".";
+    check = chk ''"$out/bin/gerrit-queue" --help'' "[-]-trigger-interval"; };
+  # gh-aw (MIT): gh extension for GitHub Agentic Workflows.
+  gh-aw = pkg { pname = "gh-aw"; version = "0.89.21"; src = gh "github/gh-aw" "refs/tags/v0.89.21" "5295ba4118e916f05d264e362afa34be46c7c83b4ff3da951cc394229c644694";
+    vendorHash = "sha256-49vqhSB1LPcMEEJFLYGbsxh1sGFelUwY/CS+PYnWME8="; subPkgs = "./cmd/gh-aw"; ldflags = "-s -w -X main.version=0.89.21";
+    check = chk ''"$out/bin/gh-aw" --version'' "0\\.89\\.21"; };
+  # gh-do (MIT): do and undo and notify with GitHub CLI.
+  gh-do = pkg { pname = "gh-do"; version = "0.6.0"; src = gh "k1LoW/gh-do" "refs/tags/v0.6.0" "ec3657d74317c0ac93745374fe9f5c4e27440b85856476d79206c659c809f6ec";
+    vendorHash = "sha256-LGQ1oNfwxKav2qAkym2JZcF5FsH3n28GpcLAfiNmXtE="; subPkgs = "./cmd/gh-do"; ldflags = "-s -w -X main.version=0.6.0";
+    check = chk ''"$out/bin/gh-do" --version'' "0\\.6\\.0"; };
+  # gh-i (Apache-2.0): search github issues interactively.
+  gh-i = pkg { pname = "gh-i"; version = "0.0.10"; src = gh "gennaro-tedesco/gh-i" "v0.0.10" "ebd317a28e13a78c51e52d948f15a114325419cec355b6f4f0855598f6fbfbcb";
+    vendorHash = "sha256-piSBXwRUhP3ul2GouAdONTR5gz/+G3FB/ep0s0LjVpU="; subPkgs = "."; ldflags = "-s";
+    check = chk ''"$out/bin/gh-i" --version'' "0\\.0\\.10"; };
+  # gh-ost (MIT): triggerless online schema migration solution for MySQL.
+  gh-ost = pkg { pname = "gh-ost"; version = "1.1.11"; src = gh "github/gh-ost" "refs/tags/v1.1.11" "f1cf96257d3f29922a8bd5a906fd742d852cbfb43a0a607e778a9b135cf3133c";
+    vendorHash = null; subPkgs = "./go/cmd/gh-ost"; ldflags = "-s -w -X main.AppVersion=1.1.11";
+    check = chk ''"$out/bin/gh-ost" --version'' "1\\.1\\.11"; };
+  # gh-poi (MIT): gitHub CLI extension to safely clean up your local branches.
+  gh-poi = pkg { pname = "gh-poi"; version = "0.18.5"; src = gh "seachicken/gh-poi" "v0.18.5" "a252a0e7922c46dff689becbf68fdc0bc0b9b1308f9f705b9f4d4594f5547144";
+    vendorHash = "sha256-CaxsFV3sMGcGDTdpSsh4X6P2ytWlkSyy6RQw79QI1ck="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/gh-poi" --help'' "[-]-dry-run"; };
+  # gh-review-conductor (Apache-2.0): gitHub CLI extension to apply PR review comments and suggestions directly to your local code.
+  gh-review-conductor = pkg { pname = "gh-review-conductor"; version = "2.0.0"; src = gh "gh-tui-tools/gh-review-responder" "refs/tags/v2.0.0" "5ed493ccdadc1bd0b7c4bcc75681d6dca75d2b14d1b557cc662d303141f046db";
+    vendorHash = "sha256-N2bscNgTydEvPCjvlJd6R6QynVE6AlsJIy4VOs9DSSA="; subPkgs = "."; ldflags = "-s -w -X github.com/gh-tui-tools/gh-review-conductor/cmd.version=2.0.0";
+    check = chk ''"$out/bin/gh-review-responder" --help'' "[-]-no-color"; };
+  # gh-s (Apache-2.0): search github repositories interactively.
+  gh-s = pkg { pname = "gh-s"; version = "0.0.12"; src = gh "gennaro-tedesco/gh-s" "v0.0.12" "007455d0c324791af04c95dcf47d8ad82a1dddbd2f45cdd7785d69899e23b717";
+    vendorHash = "sha256-2pU9wuoUnM+AGg4LJWoIVP0hDZae0pFputNQ92rDJKw="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/gh-s" --version'' "0\\.0\\.12"; };
+  # gh-skyline (MIT): generate a 3D model of your GitHub contribution history.
+  gh-skyline = pkg { pname = "gh-skyline"; version = "0.1.9"; src = gh "github/gh-skyline" "refs/tags/v0.1.9" "fd40fb5ea0f144e0e96f8638504f4197efe93ebe8e9db7ebd3b7f63ef2f0b4fa";
+    vendorHash = "sha256-KPWk0ZugTw1mfnGEXHONySBzL2+PJC8dDauUJ9SXH5I="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/gh-skyline" --help'' "[-]-art-only"; };
+  # gh-token (MIT): manage installation access tokens for GitHub apps from your terminal.
+  gh-token = pkg { pname = "gh-token"; version = "2.0.10"; src = gh "Link-/gh-token" "v2.0.10" "106fcc0f6fc9ac7f990154be668779c38826dd8e7dd663443bcde05cdcc82bfc";
+    vendorHash = "sha256-wQ2szaacKyzSRBp6qZnQLaz1cRAJF2TbUNV68UG3Blo="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/gh-token" --version'' "2\\.0\\.10"; };
+  # ghosttohugo (MIT): convert Ghost export to Hugo posts.
+  ghosttohugo = pkg { pname = "ghosttohugo"; version = "0.5.3"; src = gh "jbarone/ghostToHugo" "v0.5.3" "2fb42a3ffa50bd38fdeeb6dffa5d5b6308fe5cf17a44f134573ecfe830366494";
+    vendorHash = "sha256-pWxMXxx1wcgxDes5IuWcmCv5Mfj9VnR8A1C4bgli00I="; subPkgs = ".";
+    check = chk ''"$out/bin/ghostToHugo" --help'' "[Uu]sage"; };
+  # git-hound (MIT): reconnaissance tool for GitHub code search.
+  git-hound = pkg { pname = "git-hound"; version = "3.2"; src = gh "tillson/git-hound" "refs/tags/v3.2" "be883cd265a2cc049c9ed8c7bbf29dccf89789173b19b237618d9c9613ee9127";
+    vendorHash = "sha256-w55xscTB3NUaKpT9CG3wjbf0hp9l3tGXB+9cJcacYHI="; subPkgs = ".";
+    check = chk ''"$out/bin/git-hound" --help'' "[-]-many-results"; };
+  # git-lfs-transfer (MIT): server-side implementation of the Git LFS pure-SSH protocol.
+  git-lfs-transfer = pkg { pname = "git-lfs-transfer"; version = "0.1.0-unstable-2026-08-12"; src = gh "charmbracelet/git-lfs-transfer" "971c0284dc33b1ed3f7ed9dde5d4fc0cee62db6b" "92d6720202aa5a059c6683df78f1fa47722c0c48ff1dc4ebfc0bc8137d988702";
+    vendorHash = "sha256-Y8C61lmjBVLer5ka6g+5LMur5kICXHlP8h/WMEkNczY="; subPkgs = ".";
+    check = chk ''"$out/bin/git-lfs-transfer" --help'' "[Uu]sage"; };
 }
