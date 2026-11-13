@@ -50,6 +50,8 @@ mkSrcPkg {
     patch -p1 < ${./patches/mesa-24.0.9-illumos-build-id.patch}
     # PIPE_CAP_DMABUF on illumos (dma-buf fds, src/drm-port obsd_file.c): EGL_EXT_image_dma_buf_import.
     patch -p1 < ${./patches/mesa-24.0.9-illumos-dmabuf.patch}
+    # no memfd_create on illumos: os_create_anonymous_file through shm_open + shm_unlink, not $XDG_RUNTIME_DIR.
+    patch -p1 < ${./patches/mesa-24.0.9-illumos-anon-file.patch}
     export PATH=${pkgconf}/bin:${glslang}/bin:${wayland}/bin:$PATH
     ${py}   # mesa meson find_program('python3') + mako codegen
     ${bs}   # mesa meson YACC (glsl parser, meson.build:1944)
