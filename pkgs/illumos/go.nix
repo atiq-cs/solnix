@@ -29,11 +29,11 @@ in rec {
     sha256 = "012a7e1f37f362c0918c1dfa3334458ac2da1628c4b9cf4d9ca02db986e17d71"; };
   go_1_24 = stage { version = "1.24.13"; boot = go_1_22;
     sha256 = "639a6204c2486b137df1eb6e78ee3ed038f9877d0e4b5a465e796a2153f858d7"; };
-  go_1_26 = stage { version = "1.26.8"; boot = go_1_24; final = true;
-    sha256 = "4e39b98e42f946fa05ac8bc5b71877df97dbdb7cbb1a777b541667ad7117fd2e"; };
+  go_1_26 = stage { version = "1.26.10"; boot = go_1_24; final = true;
+    sha256 = "fd63e883ba2f2bfca93c1646b31ebef63e2b1e4d2b317c9789d976a68d81f36f"; };
   # 1.27 for modules that require it (gh 2.103: "go.mod requires go >= 1.27.0", measured).
-  go_1_27 = stage { version = "1.27.3"; boot = go_1_26; final = true;
-    sha256 = "6e7749035cf360f06b2575d162ea79df9fda8ef671889e5c375f8e50777f26bb"; };
+  go_1_27 = stage { version = "1.27.4"; boot = go_1_26; final = true;
+    sha256 = "73cfb8571aec0c01177687db87163d46aa20e9779672772891aa17654d9a6099"; };
   go = go_1_26;
   goRunpath = rp;
 
