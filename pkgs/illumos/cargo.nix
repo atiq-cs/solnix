@@ -31,6 +31,11 @@ in rec {
       set -eu; export HOME=$PWD CARGO_HOME=$PWD/ch
       cp -RP "$src/tree" s; find s ! -type l -exec chmod u+w {} +; cd s   # unpacked by Nix (no host tar/gzcat)
       "$rust/bin/cargo" vendor --locked "$out" > config.toml
+      # a lock with no dependency: cargo prints "There is no dependency to vendor in this project", makes no $out and writes no
+      # config. An empty vendor dir with the usual source replacement builds offline (cargo metadata --frozen --offline, measured).
+      if [ ! -s config.toml ]; then
+        mkdir "$out"; printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "%s"\n' "$out" > config.toml
+      fi
       cp Cargo.lock "$out/.Cargo.lock"
       # cargo's own source-replacement config, with the vendor dir made relocatable
       sed "s|$out|vendor|" config.toml > "$out/.cargo-config.toml"
