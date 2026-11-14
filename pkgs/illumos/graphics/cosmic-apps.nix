@@ -129,19 +129,12 @@ in {
     pname = "cosmic-files"; sha256 = "ceeea09a6e249192a8e439d416f20391e923cb75c09922297ff9e6b9926e8eb7";
     features = "dbus-config,desktop,notify,wayland,bzip2,lzma-rust2"; cargoArgs = "-p cosmic-files"; bins = "cosmic-files";
     install = "app res/com.system76.CosmicFiles.desktop; meta res/com.system76.CosmicFiles.metainfo.xml; tree res/icons/hicolor share/icons/hicolor";
-    # it daemonizes as cosmic-edit does (fork::daemon unless --no-daemon, src/lib.rs): the same race with the EXIT trap
-    # ("cannot remove /var/tmp/cargo-...: File exists", desk3 11-13 and desk7 11-14). Wait for the child, as cosmic-edit.
-    # The pattern stops at bin/: pgrep -f matches psargs, cut at 79 bytes, and $out/bin/cosmic-files is 80.
-    check = "runok cosmic-files --help; for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f \"^$out/bin/\" >/dev/null || break; sleep 2; done; ! pgrep -f \"^$out/bin/\" >/dev/null";
   };
   cosmic-edit = app {    # no gvfs, wgpu
     pname = "cosmic-edit"; sha256 = "aff1a305a4e7182ae1c360ceac43eff60ba32dc388f872f3ec04624677a6a290";
     features = "dbus-config,wayland"; bins = "cosmic-edit";
     install = "app res/com.system76.CosmicEdit.desktop; meta res/com.system76.CosmicEdit.metainfo.xml; tree res/icons/hicolor share/icons/hicolor";
-    # main() daemonizes first (fork::daemon, src/main.rs): runok sees the parent exit 0 while the child
-    # keeps running in $W and writing there, and the EXIT trap's removal of $W then fails "File exists"
-    # (T5 06:24Z and its retry). Wait for the child, which has no display and exits on its own.
-    check = "runok cosmic-edit --help; for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f \"^$out/bin/cosmic-edit\" >/dev/null || break; sleep 2; done; ! pgrep -f \"^$out/bin/cosmic-edit\" >/dev/null";
+    # main() daemonizes first (fork::daemon); runok's process contract (cosmic-build.sh) ends the child with the check.
   };
   # No flatpak (libflatpak needs glib/ostree), no packagekit: the pkgar backend only, so the
   # store opens and lists nothing installable. NixOS installs cosmic-store only with flatpak.

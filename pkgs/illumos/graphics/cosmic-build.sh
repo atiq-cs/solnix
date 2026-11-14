@@ -103,7 +103,11 @@ echo "=== $name: every ELF resolves inside /nix/store ===" >&2
 runok() {
   local b=$1 rc=0 o="$W/solnix-check/$1.txt"; shift; mkdir -p "$W/solnix-check"
   (cd "$W"; unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS DISPLAY; export XDG_RUNTIME_DIR="$W/home" LD_BIND_NOW=1
-    exec timeout 20 "$out/bin/$b" "$@" < /dev/null) > "$o" 2>&1 || rc=$?
+    # its own process contract (ctrun -o noorphan): a daemon it forks (cosmic-files, cosmic-edit: fork::daemon, setsid,
+    # so a process-group kill misses it) dies with the check instead of writing into $W while the EXIT trap removes it
+    # ("File exists", 11-11 and 11-14). ctrun reports any signal death as 123, so the status comes from inside, in a file.
+    exec /usr/bin/ctrun -l child -o noorphan /usr/bin/bash -c 'timeout 20 "$@" < /dev/null; echo $? > "$0"' "$o.rc" "$out/bin/$b" "$@" < /dev/null) > "$o" 2>&1 || rc=$?
+  [ -s "$o.rc" ] && rc=$(cat "$o.rc")
   echo "rc=$rc" >> "$o"
   # ld.so.1 fatal errors end in SIGKILL (137); a hang is timeout's 124 (still running = it started).
   # The one accepted signal: SIGABRT (134) from a panic=abort profile whose panic is "no display"
