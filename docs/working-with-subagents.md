@@ -88,6 +88,13 @@ tracing the actual dependency or measuring the actual value.
   statement: `bash -n x.sh || exit 1; setsid nohup bash x.sh > out 2>&1 < /dev/null &`.
   Spot it with `get_subagent_result`'s "Last progress: N s ago" and a long-lived `ssh ... nohup`
   on the orchestrator host; killing that ssh pid frees the agent.
+* **The provider's content filter ends an agent with no output and no handoff.** It has killed
+  agents that printed offensive-security tools' source, large drm/Linux compat headers, package
+  source files and READMEs (rl2, 2026-11-14), and a table of 120 package descriptions that
+  included scanners and proxies (gl2, the same hour). Every recipe brief says: print metadata only
+  (Cargo.toml/go.mod names and versions, dependency names, an error's first lines, `grep -l`);
+  screen packages by description in a script that prints only the names it keeps; SKIP a package
+  that needs its source read. Write the HANDOFF early: the filter leaves nothing to salvage.
 * **Never let an agent run an unbounded recursive `grep`/`find` over this repo.** One agent
   wedged permanently — zero progress past tool use #10, ~15 minutes with no output — on
   `grep -rn "driver_aliases" --include='*' -l .`. This repo holds multi-GB artifacts, committed
