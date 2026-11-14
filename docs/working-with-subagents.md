@@ -81,6 +81,13 @@ tracing the actual dependency or measuring the actual value.
 * **Wrap every remote command**: `timeout -s KILL <n> setsid ssh` + ONE short
   non-interactive command. Background long work on-node (`nohup ... > /tmp/x.log 2>&1 &`) and
   poll the logfile with separate short reads.
+* **`cmd1 && nohup cmd2 > log 2>&1 < /dev/null &` over ssh never returns.** `&` applies to the
+  whole `&&` list, so a subshell holding the ssh channel's stdout waits for cmd2. pub8 sat
+  15 h inside one tool call (2026-11-13) while its background watcher kept appending hourly
+  RATE lines, so its progress file looked alive. Check first, then start the job as its own
+  statement: `bash -n x.sh || exit 1; setsid nohup bash x.sh > out 2>&1 < /dev/null &`.
+  Spot it with `get_subagent_result`'s "Last progress: N s ago" and a long-lived `ssh ... nohup`
+  on the orchestrator host; killing that ssh pid frees the agent.
 * **Never let an agent run an unbounded recursive `grep`/`find` over this repo.** One agent
   wedged permanently — zero progress past tool use #10, ~15 minutes with no output — on
   `grep -rn "driver_aliases" --include='*' -l .`. This repo holds multi-GB artifacts, committed
