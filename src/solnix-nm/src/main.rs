@@ -84,6 +84,9 @@ impl Model {
         self.conn_idx.iter().find(|(_, &v)| v == i).and_then(|(u, _)| self.saved.iter().find(|s| &s.uuid == u))
     }
     fn dev(&self, i: u32) -> Option<&Dev> { self.devs.iter().find(|d| d.idx == i) }
+    fn last_scan_ms(&self, link: &str) -> i64 {
+        match (self.last_scan.get(link), self.boot) { (Some(t), Some(b)) => (t.duration_since(b).as_millis() as i64).max(1), _ => -1 }
+    }
 }
 
 /// Rescan the system into the model. `scan`: also run dladm scan-wifi (slow: several seconds).
@@ -460,7 +463,7 @@ impl WifiObj {
     #[zbus(property)] async fn last_scan(&self) -> i64 {
         let m = self.0.m.lock().await;
         let link = m.dev(self.1).map(|d| d.link.name.clone()).unwrap_or_default();
-        match (m.last_scan.get(&link), m.boot) { (Some(t), Some(b)) => (t.duration_since(b).as_millis() as i64).max(1), _ => -1 }
+        m.last_scan_ms(&link)
     }
     #[zbus(signal)] async fn access_point_added(e: &SignalEmitter<'_>, access_point: ObjectPath<'_>) -> zbus::Result<()>;
     #[zbus(signal)] async fn access_point_removed(e: &SignalEmitter<'_>, access_point: ObjectPath<'_>) -> zbus::Result<()>;
@@ -645,8 +648,14 @@ impl AgentMgr {
 }
 
 // ---- publish: make the object tree match the model, and announce what changed -------------------------------------
+// `Seen` also keeps every property value publish has announced: it emits PropertiesChanged only for a value that changed,
+// as NetworkManager does. nmrs (COSMIC's client) turns each announcement into a NetworkEvent, and the network applet and
+// Settings answer every event with a full snapshot of calls. Announcing each AP's Strength and each active connection's
+// State on every 5 s tick, changed or not, flooded the bus: on lixi (BE solnix-51, 18 APs) the system bus refused one
+// Settings process ~3500 times in 2 minutes ("maximum number of pending replies ... (max_replies_per_connection=128)").
 #[derive(Default, PartialEq, Clone)]
-struct Seen { devs: Vec<(u32, bool, u32)>, aps: Vec<(u32, u32)>, active: Vec<(u32, u32)>, conns: Vec<u32>, ips: Vec<u32>, wifi_on: bool, connectivity: u32 }
+struct Seen { devs: Vec<(u32, bool, u32)>, aps: Vec<(u32, u32)>, active: Vec<(u32, u32)>, conns: Vec<u32>, ips: Vec<u32>, wifi_on: bool, connectivity: u32,
+              root: (Vec<u32>, u32), dev: Vec<(u32, u32, bool)>, wifi: Vec<(u32, Vec<u32>, u32, i64)>, strength: Vec<(u32, u8)> }
 
 async fn publish(ctx: &Arc<Ctx>) {
     let last = &ctx.seen;
@@ -656,9 +665,15 @@ async fn publish(ctx: &Arc<Ctx>) {
             devs: m.devs.iter().map(|d| (d.idx, d.link.wifi, d.state)).collect(),
             aps: m.devs.iter().flat_map(|d| d.aps.iter().map(move |a| (*a, d.idx))).collect(),
             active: m.active.iter().map(|a| (a.idx, a.state)).collect(),
-            conns: m.conn_idx.values().copied().collect(),
+            conns: { let mut v: Vec<u32> = m.conn_idx.values().copied().collect(); v.sort(); v },
             ips: m.devs.iter().filter(|d| d.addr.is_some()).map(|d| d.idx).collect(),
             wifi_on: m.wireless_enabled, connectivity: m.connectivity,
+            // (active connections, primary): the State property follows from the primary (connected iff one is activated)
+            root: { let mut v: Vec<u32> = m.active.iter().map(|a| a.idx).collect(); v.sort();
+                    (v, m.active.iter().find(|a| a.state == AC_ACTIVATED).map_or(0, |a| a.idx)) },
+            dev: m.devs.iter().map(|d| (d.idx, d.active, d.addr.is_some())).collect(),
+            wifi: m.devs.iter().filter(|d| d.link.wifi).map(|d| (d.idx, d.aps.clone(), d.active_ap, m.last_scan_ms(&d.link.name))).collect(),
+            strength: m.aps.iter().map(|(i, a)| (*i, a.bss.strength)).collect(),
         }
     };
     let before = last.lock().unwrap().clone();
@@ -700,38 +715,41 @@ async fn publish(ctx: &Arc<Ctx>) {
         if let Ok(e) = SignalEmitter::new(&ctx.conn, format!("{NM}/Settings")) { let _ = SettingsObj::new_connection(&e, ObjectPath::try_from(p.as_str()).unwrap()).await; }
     }
     for &c in &before.conns { if !now.conns.contains(&c) { let _ = os.remove::<ConnObj, _>(format!("{NM}/Settings/{c}")).await; } }
-    // property changes: invalidate (zbus clients refetch), so no value can be stale
-    if before != now {
-        if let Ok(r) = os.interface::<_, Root>(NM).await {
-            let e = r.signal_emitter();
-            let _ = r.get().await.active_connections_changed(e).await;
-            let _ = r.get().await.primary_connection_changed(e).await;
-            let _ = r.get().await.wireless_enabled_changed(e).await;
-            let _ = r.get().await.connectivity_changed(e).await;
-            let _ = r.get().await.state_changed(e).await;
-        }
-        for &(i, wifi, s) in &now.devs {
-            let p = format!("{NM}/Devices/{i}");
-            if let Ok(r) = os.interface::<_, DevObj>(p.as_str()).await {
-                let old = before.devs.iter().find(|d| d.0 == i).map(|d| d.2);
-                if old.is_some_and(|o| o != s) { let _ = DevObj::dev_state_changed(r.signal_emitter(), s, old.unwrap(), 0).await; }
-                let _ = r.get().await.state_changed(r.signal_emitter()).await;
-                let _ = r.get().await.active_connection_changed(r.signal_emitter()).await;
-                let _ = r.get().await.ip4_config_changed(r.signal_emitter()).await;
-            }
-            if wifi { if let Ok(r) = os.interface::<_, WifiObj>(p.as_str()).await {
-                let _ = r.get().await.access_points_changed(r.signal_emitter()).await;
-                let _ = r.get().await.active_access_point_changed(r.signal_emitter()).await;
-                let _ = r.get().await.last_scan_changed(r.signal_emitter()).await;
-            } }
-        }
-        if let Ok(r) = os.interface::<_, SettingsObj>(format!("{NM}/Settings")).await { let _ = r.get().await.connections_changed(r.signal_emitter()).await; }
+    // property changes: each property of an object that already existed, only when its value differs from the last one
+    // announced (a new object's values come with the client's first GetAll)
+    if let Ok(r) = os.interface::<_, Root>(NM).await {
+        let e = r.signal_emitter();
+        if now.root.0 != before.root.0 { let _ = r.get().await.active_connections_changed(e).await; }
+        if now.root.1 != before.root.1 { let _ = r.get().await.primary_connection_changed(e).await; }
+        if now.wifi_on != before.wifi_on { let _ = r.get().await.wireless_enabled_changed(e).await; }
+        if now.connectivity != before.connectivity { let _ = r.get().await.connectivity_changed(e).await; }
+        if (now.root.1 != 0) != (before.root.1 != 0) { let _ = r.get().await.state_changed(e).await; }
     }
-    // AP strength and active-connection state can change without the sets changing
-    for &(a, _) in &now.aps { if let Ok(r) = os.interface::<_, ApObj>(format!("{NM}/AccessPoint/{a}")).await { let _ = r.get().await.strength_changed(r.signal_emitter()).await; } }
+    for &(i, wifi, s) in &now.devs {
+        let p = format!("{NM}/Devices/{i}");
+        if let (Ok(r), Some(old)) = (os.interface::<_, DevObj>(p.as_str()).await, before.devs.iter().find(|d| d.0 == i)) {
+            if old.2 != s { let _ = DevObj::dev_state_changed(r.signal_emitter(), s, old.2, 0).await; let _ = r.get().await.state_changed(r.signal_emitter()).await; }
+            let (n, o) = (now.dev.iter().find(|d| d.0 == i), before.dev.iter().find(|d| d.0 == i));
+            if n.map(|d| d.1) != o.map(|d| d.1) { let _ = r.get().await.active_connection_changed(r.signal_emitter()).await; }
+            if n.map(|d| d.2) != o.map(|d| d.2) { let _ = r.get().await.ip4_config_changed(r.signal_emitter()).await; }
+        }
+        let (n, o) = (now.wifi.iter().find(|w| w.0 == i), before.wifi.iter().find(|w| w.0 == i));
+        if let (true, Some(n), Some(o)) = (wifi, n, o) { if let Ok(r) = os.interface::<_, WifiObj>(p.as_str()).await {
+            if n.1 != o.1 { let _ = r.get().await.access_points_changed(r.signal_emitter()).await; }
+            if n.2 != o.2 { let _ = r.get().await.active_access_point_changed(r.signal_emitter()).await; }
+            if n.3 != o.3 { let _ = r.get().await.last_scan_changed(r.signal_emitter()).await; }
+        } }
+    }
+    if now.conns != before.conns { if let Ok(r) = os.interface::<_, SettingsObj>(format!("{NM}/Settings")).await { let _ = r.get().await.connections_changed(r.signal_emitter()).await; } }
+    for &(a, st) in &now.strength {
+        if !before.strength.iter().any(|x| x.0 == a && x.1 != st) { continue; }
+        if let Ok(r) = os.interface::<_, ApObj>(format!("{NM}/AccessPoint/{a}")).await { let _ = r.get().await.strength_changed(r.signal_emitter()).await; }
+    }
     for &(a, s) in &now.active {
+        let Some(old) = before.active.iter().find(|x| x.0 == a).map(|x| x.1) else { continue };
+        if old == s { continue; }
         if let Ok(r) = os.interface::<_, ActiveObj>(format!("{NM}/ActiveConnection/{a}")).await {
-            if before.active.iter().find(|x| x.0 == a).is_some_and(|x| x.1 != s) { let _ = ActiveObj::ac_state_changed(r.signal_emitter(), s, 0).await; }
+            let _ = ActiveObj::ac_state_changed(r.signal_emitter(), s, 0).await;
             let _ = r.get().await.state_changed(r.signal_emitter()).await;
         }
     }

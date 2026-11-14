@@ -41,6 +41,11 @@ WPA-Enterprise (802.1X), WPA3-SAE, hidden networks, VPN profiles, editing wired 
   0600 and joins that SSID with it; a wrong passphrase ends Deactivated; a plain user gets AccessDenied and nothing is
   written; a 7-character passphrase is refused before any write. Each guard was sabotaged once to confirm its test
   fails.
+- Signal volume, as NetworkManager: a property is announced (PropertiesChanged) only when its value changed. COSMIC's
+  client turns every announcement into a full re-read of the tree. On a private bus with lixi's 18 networks, COSMIC's
+  client (nmrs 3.5.7, one snapshot per event, as the network applet does) got 546 events in 130 s from a solnix-nm
+  that announced every AP's strength on every 5 s tick, and 0 after the fix. The unit test fails on the old code and on
+  a fix that drops the State announcement.
 - Read-only on lixi (private bus, as root): COSMIC's own client, nmrs 3.5.7 `snapshot()`, lists iwx0 as activated,
   18 access points, the connected BSSID as `dladm show-wifi` reports it, and connectivity Full. With no solnix-nm on the
   bus the same call fails with ServiceUnknown.

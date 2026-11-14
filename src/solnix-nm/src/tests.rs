@@ -7,7 +7,7 @@ use std::sync::Mutex as StdMutex;
 
 #[derive(Default)]
 struct Rec { joins: StdMutex<Vec<(String, String, Option<String>, Option<String>)>>, disconnects: StdMutex<Vec<String>>,
-             holds: StdMutex<Vec<(String, bool)>>, uid: StdMutex<u32>, connected: StdMutex<Option<String>> }
+             holds: StdMutex<Vec<(String, bool)>>, uid: StdMutex<u32>, connected: StdMutex<Option<String>>, strength: StdMutex<u8> }
 
 struct RecBe(Arc<Rec>);
 impl backend::Backend for RecBe {
@@ -15,8 +15,9 @@ impl backend::Backend for RecBe {
         Box::pin(async { vec![sys::Link { name: "iwx0".into(), wifi: true, up: true, mac: "00:00:5E:00:53:10".into() }] })
     }
     fn scan<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, Option<Vec<sys::Bss>>> {
-        Box::pin(async { Some(vec![
-            sys::Bss { essid: "cafe".into(), bssid: "00:00:5E:00:53:F3".into(), sec: "wpa".into(), strength: 80, mode: "a".into(), speed_mbps: 54 },
+        let st = match *self.0.strength.lock().unwrap() { 0 => 80, v => v };
+        Box::pin(async move { Some(vec![
+            sys::Bss { essid: "cafe".into(), bssid: "00:00:5E:00:53:F3".into(), sec: "wpa".into(), strength: st, mode: "a".into(), speed_mbps: 54 },
             sys::Bss { essid: "open-net".into(), bssid: "00:00:5E:00:53:F4".into(), sec: "none".into(), strength: 60, mode: "g".into(), speed_mbps: 54 }]) })
     }
     fn wifi_status<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, sys::WifiStatus> {
@@ -47,7 +48,9 @@ impl backend::Backend for RecBe {
     fn poll(&self) -> Duration { Duration::from_millis(10) }
 }
 
-async fn daemon(tag: &str) -> (Arc<Rec>, Connection, std::path::PathBuf) {
+async fn daemon(tag: &str) -> (Arc<Rec>, Connection, std::path::PathBuf) { let (r, c, d, _) = daemon_ctx(tag).await; (r, c, d) }
+
+async fn daemon_ctx(tag: &str) -> (Arc<Rec>, Connection, std::path::PathBuf, Arc<Ctx>) {
     let d = std::env::temp_dir().join(format!("solnix-nm-it-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     let rec = Arc::new(Rec::default());
@@ -60,7 +63,7 @@ async fn daemon(tag: &str) -> (Arc<Rec>, Connection, std::path::PathBuf) {
     conn.request_name(name.as_str()).await.unwrap();
     let client = zbus::connection::Builder::session().unwrap().build().await.unwrap();
     std::env::set_var(format!("NMTEST_{tag}"), &name);
-    (rec, client, d)
+    (rec, client, d, ctx)
 }
 
 fn wifi_settings(ssid: &str, psk: Option<&str>) -> Settings {
@@ -155,5 +158,77 @@ async fn short_passphrase_rejected_before_any_write() {
     assert!(e.to_string().contains("InvalidArgs"), "{e}");
     assert!(rec.joins.lock().unwrap().is_empty());
     assert!(!d.join("wifi").join("cafe.psk").exists());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+// ---- signal volume: NetworkManager emits PropertiesChanged only for values that changed. nmrs (COSMIC's client) turns
+// every AccessPoint Strength change into a NetworkEvent, and the network applet and Settings answer EACH event with a
+// full snapshot of calls (lixi BE solnix-51: ~3500 "maximum number of pending replies (128)" dbus refusals for one user
+// process during a Wi-Fi reconnect). A refresh that changes nothing must announce nothing.
+fn dest_of(tag: &str) -> String { std::env::var(format!("NMTEST_{tag}")).unwrap() }
+
+async fn next_msg(s: &mut zbus::MessageStream) -> Option<zbus::Result<zbus::Message>> {
+    std::future::poll_fn(|cx| zbus::export::futures_core::Stream::poll_next(std::pin::Pin::new(&mut *s), cx)).await
+}
+
+async fn count_props_changed(client: &Connection, dest: &str, ms: u64) -> Vec<(String, String)> {
+    let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface("org.freedesktop.DBus.Properties").unwrap()
+        .member("PropertiesChanged").unwrap().build();
+    let mut s = zbus::MessageStream::for_match_rule(rule, client, None).await.unwrap();
+    let owner = zbus::fdo::DBusProxy::new(client).await.unwrap().get_name_owner(zbus::names::BusName::try_from(dest).unwrap()).await.unwrap();
+    let mut got = Vec::new();
+    let end = tokio::time::Instant::now() + Duration::from_millis(ms);
+    while let Ok(Some(Ok(m))) = tokio::time::timeout_at(end, next_msg(&mut s)).await {
+        let h = m.header();
+        if h.sender().map(|x| x.as_str()) != Some(owner.as_str()) { continue; }
+        let (iface, changed, inval): (String, HashMap<String, OwnedValue>, Vec<String>) = m.body().deserialize().unwrap();
+        let path = h.path().map(|p| p.to_string()).unwrap_or_default();
+        for k in changed.keys().chain(inval.iter()) { got.push((path.clone(), format!("{iface}.{k}"))); }
+    }
+    got
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_refresh_that_changes_nothing_announces_nothing() {
+    let (rec, client, d, ctx) = daemon_ctx("quiet").await;
+    *rec.connected.lock().unwrap() = Some("cafe".into());
+    refresh(&ctx, true).await; publish(&ctx).await;   // settle: connected, APs listed
+    let dest2 = dest_of("quiet");
+    // three light ticks (the daemon's 5 s refresh, no scan) with nothing changed: no announcement at all
+    let c = client.clone(); let t = tokio::spawn(async move { count_props_changed(&c, &dest2, 600).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    for _ in 0..3 { refresh(&ctx, false).await; publish(&ctx).await; }
+    let q = t.await.unwrap();
+    assert!(q.is_empty(), "{} PropertiesChanged on unchanged ticks: {:?}", q.len(), &q[..q.len().min(8)]);
+    // a scan tick that finds the same APs at the same strengths: only the device's LastScan, once
+    let (c, dd) = (client.clone(), dest_of("quiet")); let t = tokio::spawn(async move { count_props_changed(&c, &dd, 600).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    refresh(&ctx, true).await; publish(&ctx).await;
+    let o = t.await.unwrap();
+    assert_eq!(o, vec![("/org/freedesktop/NetworkManager/Devices/1".to_string(), "org.freedesktop.NetworkManager.Device.Wireless.LastScan".to_string())],
+               "an unchanged scan announces LastScan alone");
+    // one AP's strength changes: that property is announced once, beside the scan's LastScan; then quiet again
+    *rec.strength.lock().unwrap() = 40;
+    let (c, dd) = (client.clone(), dest_of("quiet")); let t = tokio::spawn(async move { count_props_changed(&c, &dd, 600).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    refresh(&ctx, true).await; publish(&ctx).await;
+    refresh(&ctx, false).await; publish(&ctx).await;
+    let o = t.await.unwrap();
+    let strength: Vec<_> = o.iter().filter(|(_, p)| p.ends_with("AccessPoint.Strength")).collect();
+    assert_eq!(strength.len(), 1, "one Strength change -> one announcement: {o:?}");
+    assert_eq!(strength[0].0, "/org/freedesktop/NetworkManager/AccessPoint/1", "{o:?}");
+    assert!(o.iter().all(|(_, p)| p.ends_with("AccessPoint.Strength") || p.ends_with("Wireless.LastScan")), "and nothing else: {o:?}");
+    // a disconnect still announces what changed (the negative control for over-suppression)
+    *rec.connected.lock().unwrap() = None;
+    let (c, dd) = (client.clone(), dest_of("quiet")); let t = tokio::spawn(async move { count_props_changed(&c, &dd, 600).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    refresh(&ctx, false).await; publish(&ctx).await;
+    let o: Vec<String> = t.await.unwrap().into_iter().map(|(_, p)| p).collect();
+    for want in ["org.freedesktop.NetworkManager.ActiveConnections", "org.freedesktop.NetworkManager.PrimaryConnection",
+                 "org.freedesktop.NetworkManager.State", "org.freedesktop.NetworkManager.Device.State",
+                 "org.freedesktop.NetworkManager.Device.ActiveConnection", "org.freedesktop.NetworkManager.Device.Ip4Config",
+                 "org.freedesktop.NetworkManager.Device.Wireless.ActiveAccessPoint"] {
+        assert!(o.iter().any(|p| p == want), "a disconnect must announce {want}: {o:?}");
+    }
     let _ = std::fs::remove_dir_all(&d);
 }
