@@ -128,6 +128,11 @@ in
   inherit (cliQ) libxau libxdmcp spdlog xtrans libpthread-stubs doctest lerc libnet libpipeline game-music-emu vulkan-headers util-macros amf-headers
     opencl-headers cjson utf8proc zimg nv-codec-headers spirv-headers libargon2 soundtouch libmpg123 libconfig soxr ladspa-header libfontenc
     popt yasm cereal font-util cmocka libmodplug gsm llhttp zopfli libxshmfence openapv libxfont_2 libvorbis libmd libbsd;
+  # a64x b2
+  inherit (cliQ) vo-aacenc libcbor libvpx libtheora libaec mcpp microsoft-gsl aws-c-common libplist plutovg gflags yaml-cpp capstone utf8cpp oniguruma
+    libexif scdoc minizip fast-float hiredis lmdb range-v3 cmark cfitsio geoip libiscsi dotconf jpegoptim sfsexp uriparser plutosvg
+    libimobiledevice-glue taglib libzip pugixml snappy bdftopcf libmaxminddb rpcsvc-proto opencore-amr aws-checksums aws-c-compression
+    aws-c-sdkutils;
   inherit (cli) which;   # c-recipes3.nix: wdiff's test suite runs it (./default.nix perPkg); its own aarch64 job
 } // builtins.mapAttrs (_: retarget) {
   inherit (desk) sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts noto-fonts-color-emoji cosmic-wallpapers;

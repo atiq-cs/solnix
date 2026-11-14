@@ -158,7 +158,7 @@ let
   a64 = if stage == "seed" then null else import ./tools.nix { gate = gate'; libcSlice = libc; inherit ld gcc seed system;
     perl = homePkgs.perl; } // {
     # per recipe: the build tools stage0 found in /usr/bin or /opt (dixa4 build logs: devroot bison, flex, autoconf-archive).
-    perPkg = args: let p = {
+    perPkg = args: let p = ({
       boost = { nativeTools = [ final.bzip2-bin ]; };   # .tar.bz2
       tmux = { nativeTools = [ final.bison ]; };         # configure requires a yacc
       gdbm = { nativeTools = [ final.bison homePkgs.flex ]; };
@@ -368,7 +368,15 @@ let
       # opencl-headers' CMakeLists.txt runs find_package(Python3) (its tests' generator, BUILD_TESTING=OFF here), which found the stage0
       # devroot's /bin/python3.13 (gate L5, dixa; x86's host has none). Off: the headers do not need it.
       opencl-headers = { build = rep1 "opencl-headers" "-DBUILD_TESTING=OFF" "-DBUILD_TESTING=OFF -DCMAKE_DISABLE_FIND_PACKAGE_Python3=ON" args.build; };
-    }.${args.pname} or { };
+      # a64x: git.openldap.org answered HTTP 429 to every builder fetch (dixa and a second host, 11-14). Gentoo's distfiles copy has the
+      # same sha256 and base name: the same fixed-output path.
+      lmdb = { src = args.src // { url = "https://distfiles.gentoo.org/distfiles/f2/openldap-LMDB_0.9.36.tar.gz"; }; };
+      # a64x: libvpx's configure has no arm64-solaris target; x86_64-solaris-gcc adds -m64 and x86 asm (configure: "Unable to invoke
+      # compiler", dixa). generic-gnu: the plain C build, as nixpkgs picks for targets libvpx does not know.
+      libvpx = { build = rep1 "libvpx" "--target=x86_64-solaris-gcc" "--target=generic-gnu" args.build; };
+    } // builtins.listToAttrs (map (n: { name = n; value = cmakePP; })   # a64x: the new cmake attrs with store deps (cmakePP below)
+      [ "aws-c-compression" "aws-c-sdkutils" "aws-checksums" "cfitsio" "gflags" "libzip" "plutosvg" "taglib" "uriparser" ])
+    ).${args.pname} or { };
       # a64x: the a64h path exports CMAKE_PREFIX_PATH ';'-joined, which cmake splits on ':' on Unix, so find_package sees no store dep
       # (game-music-emu: "ZLib library not found", dixa). x86's cmakeX joins with ':'; per recipe here, so no served aarch64 drv moves.
       cmakePP = { build = "export CMAKE_PREFIX_PATH=\"\${CMAKE_PREFIX_PATH//;/:}\"\n" + args.build; };
