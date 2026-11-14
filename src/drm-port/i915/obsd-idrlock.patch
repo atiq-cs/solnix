@@ -1,0 +1,427 @@
+--- a/drm_linux.c
++++ b/drm_linux.c
+@@ -795,7 +795,7 @@
+  * This is a fairly minimal implementation of the Linux "idr" API.  It
+  * probably isn't very efficient, and definitely isn't RCU safe.  The
+  * pre-load buffer is global instead of per-cpu; we rely on the kernel
+- * lock to make this work.
++ * lock to make this work.  (solnix: obsd_idr_mtx below.)
+  */
+ 
+ int idr_cmp(struct idr_entry *, struct idr_entry *);
+@@ -804,6 +804,31 @@
+ struct pool idr_pool;
+ struct idr_entry *idr_entry_cache;
+ 
++/*
++ * solnix: KERNEL_LOCK is a no-op in the port and drm ioctls run in
++ * parallel, so this lock stands in for it here. It covers every SPLAY_*
++ * call on an idr or xarray tree (SPLAY_FIND rotates the tree: lookups
++ * write too) and idr_entry_cache. A leaf lock: nothing allocates, frees,
++ * sleeps or calls out while holding it.
++ */
++struct mutex obsd_idr_mtx = MUTEX_INITIALIZER(IPL_NONE);
++
++/* solnix: the entry with the least id >= key, or NULL; holds obsd_idr_mtx */
++static struct idr_entry *
++idr_lower_bound(struct idr *idr, unsigned long key)
++{
++	struct idr_entry find, *res;
++
++	if (SPLAY_EMPTY(&idr->tree))
++		return NULL;
++	find.id = key;
++	idr_tree_SPLAY(&idr->tree, &find);	/* root: key or a neighbour */
++	res = SPLAY_ROOT(&idr->tree);
++	if (res->id < key)
++		res = SPLAY_NEXT(idr_tree, &idr->tree, res);
++	return res;
++}
++
+ void
+ idr_init(struct idr *idr)
+ {
+@@ -816,8 +841,13 @@
+ {
+ 	struct idr_entry *id;
+ 
+-	while ((id = SPLAY_MIN(idr_tree, &idr->tree))) {
+-		SPLAY_REMOVE(idr_tree, &idr->tree, id);
++	for (;;) {
++		mtx_enter(&obsd_idr_mtx);
++		if ((id = SPLAY_MIN(idr_tree, &idr->tree)) != NULL)
++			SPLAY_REMOVE(idr_tree, &idr->tree, id);
++		mtx_leave(&obsd_idr_mtx);
++		if (id == NULL)
++			break;
+ 		pool_put(&idr_pool, id);
+ 	}
+ }
+@@ -826,11 +856,23 @@
+ idr_preload(unsigned int gfp_mask)
+ {
+ 	int flags = (gfp_mask & GFP_NOWAIT) ? PR_NOWAIT : PR_WAITOK;
++	struct idr_entry *id;
+ 
+ 	KERNEL_ASSERT_LOCKED();
+ 
+-	if (idr_entry_cache == NULL)
+-		idr_entry_cache = pool_get(&idr_pool, flags);
++	mtx_enter(&obsd_idr_mtx);
++	id = idr_entry_cache;
++	mtx_leave(&obsd_idr_mtx);
++	if (id != NULL || (id = pool_get(&idr_pool, flags)) == NULL)
++		return;
++	mtx_enter(&obsd_idr_mtx);
++	if (idr_entry_cache == NULL) {
++		idr_entry_cache = id;
++		id = NULL;
++	}
++	mtx_leave(&obsd_idr_mtx);
++	if (id != NULL)
++		pool_put(&idr_pool, id);
+ }
+ 
+ /* [start, end) */
+@@ -839,13 +881,15 @@
+ {
+ 	int flags = (gfp_mask & GFP_NOWAIT) ? PR_NOWAIT : PR_WAITOK;
+ 	struct idr_entry *id;
++	int ret;
+ 
+ 	KERNEL_ASSERT_LOCKED();
+ 
+-	if (idr_entry_cache) {
+-		id = idr_entry_cache;
+-		idr_entry_cache = NULL;
+-	} else {
++	mtx_enter(&obsd_idr_mtx);
++	id = idr_entry_cache;
++	idr_entry_cache = NULL;
++	mtx_leave(&obsd_idr_mtx);
++	if (id == NULL) {
+ 		id = pool_get(&idr_pool, flags);
+ 		if (id == NULL)
+ 			return -ENOMEM;
+@@ -854,16 +898,20 @@
+ 	if (end <= 0)
+ 		end = INT_MAX;
+ 
++	mtx_enter(&obsd_idr_mtx);
+ 	id->id = start;
+ 	while (SPLAY_INSERT(idr_tree, &idr->tree, id)) {
+ 		id->id++;
+ 		if (id->id == end) {
++			mtx_leave(&obsd_idr_mtx);
+ 			pool_put(&idr_pool, id);
+ 			return -ENOSPC;
+ 		}
+ 	}
+ 	id->ptr = ptr;
+-	return id->id;
++	ret = id->id;
++	mtx_leave(&obsd_idr_mtx);
++	return ret;
+ }
+ 
+ /* [start, end) */
+@@ -872,13 +920,15 @@
+ {
+ 	int flags = (gfp_mask & GFP_NOWAIT) ? PR_NOWAIT : PR_WAITOK;
+ 	struct idr_entry *id;
++	int ret;
+ 
+ 	KERNEL_ASSERT_LOCKED();
+ 
+-	if (idr_entry_cache) {
+-		id = idr_entry_cache;
+-		idr_entry_cache = NULL;
+-	} else {
++	mtx_enter(&obsd_idr_mtx);
++	id = idr_entry_cache;
++	idr_entry_cache = NULL;
++	mtx_leave(&obsd_idr_mtx);
++	if (id == NULL) {
+ 		id = pool_get(&idr_pool, flags);
+ 		if (id == NULL)
+ 			return -ENOMEM;
+@@ -887,12 +937,14 @@
+ 	if (end <= 0)
+ 		end = INT_MAX;
+ 
++	mtx_enter(&obsd_idr_mtx);
+ 	id->id = idr->next;
+ 	while (SPLAY_INSERT(idr_tree, &idr->tree, id)) {
+ 		id->id++;
+ 		if (id->id == end) {
+ 			id->id = start;
+ 		} else if (id->id == idr->next) {
++			mtx_leave(&obsd_idr_mtx);
+ 			pool_put(&idr_pool, id);
+ 			return -ENOSPC;
+ 		}
+@@ -901,7 +953,9 @@
+ 	idr->next = id->id + 1;
+ 	if (idr->next == end)
+ 		idr->next = start;
+-	return id->id;
++	ret = id->id;
++	mtx_leave(&obsd_idr_mtx);
++	return ret;
+ }
+ 
+ void *
+@@ -911,11 +965,15 @@
+ 	void *old;
+ 
+ 	find.id = id;
++	mtx_enter(&obsd_idr_mtx);
+ 	res = SPLAY_FIND(idr_tree, &idr->tree, &find);
+-	if (res == NULL)
++	if (res == NULL) {
++		mtx_leave(&obsd_idr_mtx);
+ 		return ERR_PTR(-ENOENT);
++	}
+ 	old = res->ptr;
+ 	res->ptr = ptr;
++	mtx_leave(&obsd_idr_mtx);
+ 	return old;
+ }
+ 
+@@ -926,12 +984,15 @@
+ 	void *ptr = NULL;
+ 
+ 	find.id = id;
++	mtx_enter(&obsd_idr_mtx);
+ 	res = SPLAY_FIND(idr_tree, &idr->tree, &find);
+ 	if (res) {
+ 		SPLAY_REMOVE(idr_tree, &idr->tree, res);
+ 		ptr = res->ptr;
+-		pool_put(&idr_pool, res);
+ 	}
++	mtx_leave(&obsd_idr_mtx);
++	if (res)
++		pool_put(&idr_pool, res);
+ 	return ptr;
+ }
+ 
+@@ -939,42 +1000,56 @@
+ idr_find(struct idr *idr, unsigned long id)
+ {
+ 	struct idr_entry find, *res;
++	void *ptr = NULL;
+ 
+ 	find.id = id;
++	mtx_enter(&obsd_idr_mtx);
+ 	res = SPLAY_FIND(idr_tree, &idr->tree, &find);
+-	if (res == NULL)
+-		return NULL;
+-	return res->ptr;
++	if (res != NULL)
++		ptr = res->ptr;
++	mtx_leave(&obsd_idr_mtx);
++	return ptr;
+ }
+ 
+ void *
+ idr_get_next(struct idr *idr, int *id)
+ {
+ 	struct idr_entry *res;
++	void *ptr = NULL;
+ 
+-	SPLAY_FOREACH(res, idr_tree, &idr->tree) {
+-		if (res->id >= *id) {
+-			*id = res->id;
+-			return res->ptr;
+-		}
++	mtx_enter(&obsd_idr_mtx);
++	res = idr_lower_bound(idr, *id);
++	if (res != NULL) {
++		*id = res->id;
++		ptr = res->ptr;
+ 	}
+-
+-	return NULL;
++	mtx_leave(&obsd_idr_mtx);
++	return ptr;
+ }
+ 
++/* solnix: func runs unlocked (it may use the idr), one entry at a time */
+ int
+ idr_for_each(struct idr *idr, int (*func)(int, void *, void *), void *data)
+ {
+-	struct idr_entry *id;
+-	int ret;
++	struct idr_entry *res;
++	unsigned long next = 0;
++	void *ptr = NULL;
++	int id = 0, ret;
+ 
+-	SPLAY_FOREACH(id, idr_tree, &idr->tree) {
+-		ret = func(id->id, id->ptr, data);
++	for (;;) {
++		mtx_enter(&obsd_idr_mtx);
++		if ((res = idr_lower_bound(idr, next)) != NULL) {
++			id = res->id;
++			ptr = res->ptr;
++		}
++		mtx_leave(&obsd_idr_mtx);
++		if (res == NULL)
++			return 0;
++		ret = func(id, ptr, data);
+ 		if (ret)
+ 			return ret;
++		next = (unsigned long)id + 1;
+ 	}
+-
+-	return 0;
+ }
+ 
+ int
+@@ -1058,8 +1133,13 @@
+ {
+ 	struct xarray_entry *id;
+ 
+-	while ((id = SPLAY_MIN(xarray_tree, &xa->xa_tree))) {
+-		SPLAY_REMOVE(xarray_tree, &xa->xa_tree, id);
++	for (;;) {
++		mtx_enter(&obsd_idr_mtx);
++		if ((id = SPLAY_MIN(xarray_tree, &xa->xa_tree)) != NULL)
++			SPLAY_REMOVE(xarray_tree, &xa->xa_tree, id);
++		mtx_leave(&obsd_idr_mtx);
++		if (id == NULL)
++			break;
+ 		pool_put(&xa_pool, id);
+ 	}
+ }
+@@ -1089,18 +1169,21 @@
+ 
+ 	xid->id = start;
+ 
++	mtx_enter(&obsd_idr_mtx);
+ 	while (SPLAY_INSERT(xarray_tree, &xa->xa_tree, xid)) {
+ 		if (xid->id == end)
+ 			xid->id = start;
+ 		else
+ 			xid->id++;
+ 		if (xid->id == start) {
++			mtx_leave(&obsd_idr_mtx);
+ 			pool_put(&xa_pool, xid);
+ 			return -EBUSY;
+ 		}
+ 	}
+ 	xid->ptr = entry;
+ 	*id = xid->id;
++	mtx_leave(&obsd_idr_mtx);
+ 	return 0;
+ }
+ 
+@@ -1132,10 +1215,12 @@
+ 	else
+ 		xid->id = *next;
+ 
++	mtx_enter(&obsd_idr_mtx);
+ 	while (SPLAY_INSERT(xarray_tree, &xa->xa_tree, xid)) {
+ 		if (xid->id == end) {
+ 			xid->id = start;
+ 		} else if (xid->id == *next) {
++			mtx_leave(&obsd_idr_mtx);
+ 			pool_put(&xa_pool, xid);
+ 			return -EBUSY;
+ 		} else {
+@@ -1148,6 +1233,7 @@
+ 	else
+ 		*next = xid->id + 1;
+ 	*id = xid->id;
++	mtx_leave(&obsd_idr_mtx);
+ 	return 0;
+ }
+ 
+@@ -1158,12 +1244,15 @@
+ 	void *ptr = NULL;
+ 
+ 	find.id = index;
++	mtx_enter(&obsd_idr_mtx);
+ 	res = SPLAY_FIND(xarray_tree, &xa->xa_tree, &find);
+ 	if (res) {
+ 		SPLAY_REMOVE(xarray_tree, &xa->xa_tree, res);
+ 		ptr = res->ptr;
+-		pool_put(&xa_pool, res);
+ 	}
++	mtx_leave(&obsd_idr_mtx);
++	if (res)
++		pool_put(&xa_pool, res);
+ 	return ptr;
+ }
+ 
+@@ -1171,12 +1260,15 @@
+ __xa_load(struct xarray *xa, unsigned long index)
+ {
+ 	struct xarray_entry find, *res;
++	void *ptr = NULL;
+ 
+ 	find.id = index;
++	mtx_enter(&obsd_idr_mtx);
+ 	res = SPLAY_FIND(xarray_tree, &xa->xa_tree, &find);
+-	if (res == NULL)
+-		return NULL;
+-	return res->ptr;
++	if (res != NULL)
++		ptr = res->ptr;
++	mtx_leave(&obsd_idr_mtx);
++	return ptr;
+ }
+ 
+ void *
+@@ -1189,14 +1281,17 @@
+ 		return __xa_erase(xa, index);
+ 
+ 	find.id = index;
++	mtx_enter(&obsd_idr_mtx);
+ 	res = SPLAY_FIND(xarray_tree, &xa->xa_tree, &find);
+ 	if (res != NULL) {
+ 		/* index exists */
+ 		/* XXX Multislot entries updates not implemented yet */
+ 		prev = res->ptr;
+ 		res->ptr = entry;
++		mtx_leave(&obsd_idr_mtx);
+ 		return prev;
+ 	}
++	mtx_leave(&obsd_idr_mtx);
+ 
+ 	/* index not found, add new */
+ 	if (gfp & GFP_NOWAIT) {
+@@ -1210,7 +1305,10 @@
+ 		return XA_ERROR(-ENOMEM);
+ 	res->id = index;
+ 	res->ptr = entry;
+-	if (SPLAY_INSERT(xarray_tree, &xa->xa_tree, res) != NULL)
++	mtx_enter(&obsd_idr_mtx);
++	prev = SPLAY_INSERT(xarray_tree, &xa->xa_tree, res);
++	mtx_leave(&obsd_idr_mtx);
++	if (prev != NULL)
+ 		return XA_ERROR(-EINVAL);
+ 	return NULL; /* no prev entry at index */
+ }
+@@ -1219,15 +1317,18 @@
+ xa_get_next(struct xarray *xa, unsigned long *index)
+ {
+ 	struct xarray_entry *res;
++	void *ptr = NULL;
+ 
++	mtx_enter(&obsd_idr_mtx);
+ 	SPLAY_FOREACH(res, xarray_tree, &xa->xa_tree) {
+ 		if (res->id >= *index) {
+ 			*index = res->id;
+-			return res->ptr;
++			ptr = res->ptr;
++			break;
+ 		}
+ 	}
+-
+-	return NULL;
++	mtx_leave(&obsd_idr_mtx);
++	return ptr;
+ }
+ 
+ int

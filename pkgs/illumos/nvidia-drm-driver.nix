@@ -78,6 +78,8 @@ derivation {
     [ "$(grep -c '^obsd_orig_k' "$O/drm_linux.c")" -eq 2 ] || { echo "FATAL: drm_linux.c kmap_atomic anchors not found" >&2; exit 1; }
     ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-norcu.patch" ) >&2
     ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-errno.patch" ) >&2
+    ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-idrlock.patch" ) >&2
+    ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-rculookup.patch" ) >&2
 
     # nvidia-drm: the pinned kernel-open/{nvidia-drm,common/inc} with patches/0001
     mkdir -p "$W/ko"
