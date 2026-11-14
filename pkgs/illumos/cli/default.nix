@@ -90,7 +90,8 @@ let
   c11 = if gtkMeson == null then { } else import ./c-qnew.nix (h // { inherit (c5) cmake python3; inherit (c1) bison gnum4; inherit (c7) fmt;
     inherit (c10) spdlog; inherit (c2) sqlite; inherit gtkMeson; });
   rust = import ./rust.nix { inherit cargoPkg chk; extra = import ./rust-extra.nix h; }
-    // import ./rust-rl1.nix { inherit cargoPkg chk; };   # rl1: Rust leaves of the x86 queue (a new file, so no served drv moves)
+    // import ./rust-rl1.nix { inherit cargoPkg chk; }   # rl1: Rust leaves of the x86 queue (a new file, so no served drv moves)
+    // import ./rust-rl2.nix { inherit cargoPkg chk; };   # rl2: more Rust leaves of the x86 queue (a new file, as rl1)
   gotools = import ./go-tools.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; } // import ./go-c1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }
     // import ./go-recipes2.nix { inherit (goChain) goPkg; inherit chk; }
     // import ./go-recipes3.nix { inherit (goChain) goPkg; inherit chk; }   # recipes3 (a new file: no served drv moves)
