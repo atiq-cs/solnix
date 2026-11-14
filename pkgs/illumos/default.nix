@@ -1527,7 +1527,7 @@ in
   inherit (cosmic) cosmic-comp cosmic-session cosmic-panel cosmic-applets cosmic-launcher
     cosmic-app-library cosmic-notifications cosmic-osd cosmic-settings-daemon cosmic-bg cosmic-workspaces cosmic-randr cosmic-idle
     cosmic-settings cosmic-files cosmic-edit cosmic-store cosmic-screenshot cosmic-greeter greetd;
-  inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono hicolor-icon-theme pop-icon-theme cosmic-icons;
+  inherit (cosmicData) open-sans noto-sans noto-sans-mono fira-mono freefont-ttf hicolor-icon-theme pop-icon-theme cosmic-icons;
   inherit (desktop) pop-launcher cosmic-wallpapers sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts
     noto-fonts-color-emoji xdg-utils xdg-user-dirs solnix-help solnix-nm solnix-power solnix-accounts;
   inherit llvmPackages llvmPackages_23 llvmPackages_21;

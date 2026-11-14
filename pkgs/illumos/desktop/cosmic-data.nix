@@ -41,6 +41,18 @@ in rec {
     sha256 = "77b83feda1f1c5b8e8da07498aff6fa0f9d2d16bbfa2095dd7e7696c887c6128"; })
     "${fonts "opentype"} Fira_Mono_3_2/Fonts/FiraMono_OTF_32/*.otf";
 
+  # GNU FreeFont (nixpkgs freefont_ttf: the same zip, and in NixOS's fonts.enableDefaultPackages). cosmic-text (COSMIC
+  # Terminal) draws braille (U+2800-28FF, btm's and htop's graphs) in FreeMono only. No other monospace font here has those
+  # glyphs, so it fell back to the proportional DejaVu Sans (0.732 em against 0.600), which misaligned every graph row
+  # (lixi, BE solnix-51).
+  freefont-ttf = data "freefont-ttf-20120503" (fetchurl {
+    url = "https://ftp.gnu.org/gnu/freefont/freefont-ttf-20120503.zip";
+    sha256 = "7c85baf1bf82a1a1845d1322112bc6ca982221b484e3b3925022e25b5cae89af"; }) ''
+      ${fonts "truetype"} */*.ttf
+      [ "$(ls "$out/share/fonts/truetype" | wc -l)" -eq 12 ] && [ -f "$out/share/fonts/truetype/FreeMono.ttf" ] \
+        || { echo "FATAL: freefont: want 12 TTFs, FreeMono.ttf among them" >&2; exit 1; }
+    '';
+
   hicolor-icon-theme = data "hicolor-icon-theme-0.18" (fetchurl {
     url = "https://icon-theme.freedesktop.org/releases/hicolor-icon-theme-0.18.tar.xz";
     sha256 = "db0e50a80aa3bf64bb45cbca5cf9f75efd9348cf2ac690b907435238c3cf81d7"; })
