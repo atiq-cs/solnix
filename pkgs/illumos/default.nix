@@ -1540,7 +1540,7 @@ in
   # nixpkgs' versioned top-level names for 21.1.8 (llvm_21 = llvmPackages_21.llvm, clang_21 = its wrapped clang); no lldb_21
   llvm_21 = llvmPackages_21.llvm; lld_21 = llvmPackages_21.lld; clang_21 = llvmPackages_21.clang-wrapper;
   inherit (gtk) pcre2 glib libpng libjpeg-turbo freetype fontconfig fribidi harfbuzz cairo pango gdk-pixbuf libepoxy
-    at-spi2-core gtk3 grim gperf nasm ninja meson_1_10 nodejs cbindgen llvm-clang firefox-esr;
+    at-spi2-core gtk3 grim gperf nasm ninja meson_1_10 nodejs cbindgen llvm-clang firefox firefox-esr;
   # cargoLib.{vendorOf,cargoPkg}: build any Cargo.lock'd crate on rust199 (./cargo.nix).
   cargoLib = cargo;
   inherit (goChain) go go_1_4 go_1_17 go_1_20 go_1_22 go_1_24 go_1_26 go_1_27;

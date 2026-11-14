@@ -1,24 +1,42 @@
-# desktop/gtk/firefox.nix -- Firefox ESR 153.6.0 for COSMIC/Wayland: cairo-gtk3-wayland-only (no X11 libs at all), OI's
-# firefox patch set as of its 153.0.4 commit (oi-userland 7d7fad4aa7; 40 of its 41 patches applied, measured 41/41 on
-# 153.6.0esr by cosmic7), gcc (OI 17-clang-not-work), sunaudio (cubeb's Solaris backend; ESR's SunOS default).
+# desktop/gtk/firefox.nix -- Firefox for COSMIC/Wayland, one recipe for two of nixpkgs' editions (its separate attrs):
+# edition = "esr" (firefox-esr 153.6.0, OI's patch set as of its 153.0.4 commit, oi-userland 7d7fad4aa7: 40 of its 41 applied,
+# measured 41/41 on 153.6.0esr by cosmic7) and "release" (firefox 159.0, the Release channel, solnix's default Firefox: OI's set
+# as of its 159.0 commit c8a7cc7d71, firefox-oi-patches-159.nix says which 42 of 45). Our own four patches apply to both.
+# cairo-gtk3-wayland-only (no X11 libs at all), gcc (OI 17-clang-not-work), sunaudio (cubeb's Solaris backend; the SunOS default).
 # NixOS-shaped (build-mozilla-mach): MOZILLA_OFFICIAL, no updater, no crashreporter, no tests,
 # no Google/Mozilla API keys, no EME (configure offers --enable-eme only on Linux/Windows/macOS: no Widevine possible). Telemetry: the
 # empty env MOZ_TELEMETRY_REPORTING= turns it off at build time (MOZILLA_OFFICIAL defaults it ON: measured =1 in config.status
 # until then); Normandy and health report are browser/moz.configure implies (not settable), so policies.json disables them. The wrapper is
 # NixOS's MOZ_ENABLE_WAYLAND=1 (Wayland-only builds ignore it; kept so the env matches NixOS's).
-{ mkSrcPkg, tools, gtk, cli, rust, cbindgen, nodejs, llvm-clang, zlib, nixChain, graphics, world, noto-sans, libffi ? graphics.libffi }:
+{ mkSrcPkg, tools, gtk, cli, rust, cbindgen, nodejs, llvm-clang, zlib, nixChain, graphics, world, noto-sans, libffi ? graphics.libffi,
+  edition ? "esr" }:
 let
   inherit (gtk) glib gtk3 cairo pango harfbuzz fribidi fontconfig freetype gdk-pixbuf libepoxy at-spi2-core libpng libjpeg-turbo pcre2;
   inherit (graphics) pixman wayland wayland-protocols libxkbcommon mesa dbus libdrm expat;
+  # tag: Mozilla's release dir and what `firefox --version` prints. sha256: ftp.mozilla.org's SHA256SUMS (159.0's = OI's Makefile).
+  ed = {
+    esr = { pname = "firefox-esr"; version = "153.6.0"; tag = "153.6.0esr"; oiRev = "7d7fad4aa7"; oiList = ./firefox-oi-patches.nix;
+            triple = "x86_64-pc-solaris2.11"; bindgenPatch = ./patches/firefox-153-bindgen-illumos-using-size_t.patch;
+            sha256 = "91cb675ddfc678255f57ecd7aad498501961577686d19c1947a82b14edea7f25"; };
+    release = { pname = "firefox"; version = "159.0"; tag = "159.0"; oiRev = "c8a7cc7d71"; oiList = ./firefox-oi-patches-159.nix;
+                # OI's GNU_ARCH: from 159 configure keeps config.guess's "pc" vendor when a rust target has it, so
+                # x86_64-pc-solaris2.11 picked rustc's x86_64-pc-solaris, not our rustc's own x86_64-unknown-illumos, and
+                # configure died ("rust compiler host ... is not suitable", measured); illumos maps to SunOS as solaris does
+                triple = "x86_64-unknown-illumos";
+                # 159 binds nsGkAtoms::kStaticAtomCount, a constexpr size_t that libclang spells "const size_t": the 153 patch
+                # missed it (style: "expected usize, found u64", measured), so this one strips the const first
+                bindgenPatch = ./patches/firefox-159-bindgen-illumos-using-size_t.patch;
+                sha256 = "3d98df785894057fce60603e845828e758a5411ad79aaaaff2b8230597f500d9"; };
+  }.${edition};
   oi = n: sha256: import <nix/fetchurl.nix> {
-    url = "https://raw.githubusercontent.com/OpenIndiana/oi-userland/7d7fad4aa7/components/web/firefox/patches/${n}"; inherit sha256; };
-  # OI's list minus 08-branding (points the welcome page at an OI path). sha256 = floki /scratch/solnix/browser1/ff/p153.sha256.
-  patches = import ./firefox-oi-patches.nix { inherit oi; };
+    url = "https://raw.githubusercontent.com/OpenIndiana/oi-userland/${ed.oiRev}/components/web/firefox/patches/${n}"; inherit sha256; };
+  # OI's list minus 08-branding (points the welcome page at an OI path). sha256 = floki /scratch/solnix/browser1/ff/p153.sha256
+  # (ESR), /scratch/solnix/ff2/p159.C.sha256 (Release).
+  patches = import ed.oiList { inherit oi; };
 in
 mkSrcPkg {
-  pname = "firefox-esr"; version = "153.6.0";
-  src = { url = "https://ftp.mozilla.org/pub/firefox/releases/153.6.0esr/source/firefox-153.6.0esr.source.tar.xz";
-          sha256 = "91cb675ddfc678255f57ecd7aad498501961577686d19c1947a82b14edea7f25"; };
+  inherit (ed) pname version;
+  src = { url = "https://ftp.mozilla.org/pub/firefox/releases/${ed.tag}/source/firefox-${ed.tag}.source.tar.xz"; inherit (ed) sha256; };
   # world: rust's std NEEDs libumem.so.1, which the libc slice lacks; without world in RUNPATH it resolved to the host's
   # /lib/64 copy, whose host libc.so.1 then loaded beside the slice's, and every cargo build script SEGVed in libgcc's
   # __register_frame_info (measured: 2 libc.so.1 in the core; nodejs.nix has the same fix for libkstat)
@@ -44,7 +62,7 @@ mkSrcPkg {
       'exec ${tools.nasm}/bin/nasm "''${a[@]}"' > "$W/nasm"
     chmod +x "$W/nasm"; export NASM="$W/nasm"
     # vendored bindgen: illumos' `using std::size_t` reached Rust as c_ulong, not usize (patch says why); re-stamps the checksum
-    bash ${./vendor-fix.sh} "$PWD" ${./patches/firefox-153-bindgen-illumos-using-size_t.patch}
+    bash ${./vendor-fix.sh} "$PWD" ${ed.bindgenPatch}
     # mk-src-pkg's cc/c++ wrappers put every dep's include dir FIRST (-I), ahead of the tree's own -I: mesa's EGL/eglext.h
     # shadowed ANGLE's gfx/angle/checkout/include (PackedEnums.cpp: EGL_TEXTURE_RECTANGLE_ANGLE undeclared; gcc -H shows
     # mesa's egl.h), and the system harfbuzz/cairo headers shadowed the bundled ones in dist/include. -isystem is NixOS's
@@ -90,7 +108,7 @@ mkSrcPkg {
     # bundled NSS 3.125 / NSPR 4.39 (as OI's recipe): 153 needs nss >= 3.125 and solnix's base nss is OI's 3.98 (measured);
     # NixOS links nss_latest. A system nss_latest would let the base move independently: later.
     ac_add_options --with-libclang-path=${llvm-clang}/lib --with-clang-path=${llvm-clang}/bin/clang
-    ac_add_options --host=x86_64-pc-solaris2.11 --target=x86_64-pc-solaris2.11
+    ac_add_options --host=${ed.triple} --target=${ed.triple}
     ac_add_options --disable-install-strip --disable-strip
     ac_add_options CC=$CC CXX=$CXX
     mk_add_options MOZ_OBJDIR=$MOZ_OBJDIR
@@ -142,7 +160,7 @@ mkSrcPkg {
       "$out/share/applications/firefox.desktop" > "$TMPDIR/neg.desktop"
     n=$(python3 ${./desktop-entry-check.py} "$TMPDIR/neg.desktop" "$out/bin" "$out/share/icons/hicolor" 2>&1 | grep -c -e 'not in' -e 'is in no') || true
     [ "$n" -eq 2 ] || { echo "FATAL: desktop-entry-check negative control found $n of 2 problems" >&2; exit 1; }
-    "$out/lib/firefox/firefox" --version | grep -q 'Mozilla Firefox 153.6.0esr' || { echo "FATAL: firefox --version" >&2; exit 1; }
+    "$out/lib/firefox/firefox" --version | grep -q 'Mozilla Firefox ${ed.tag}' || { echo "FATAL: firefox --version" >&2; exit 1; }
     # every shipped ELF that links libc must carry NODEFLIB (a stray link without the wrapper would reopen the host-lib hole)
     for f in "$out"/lib/firefox/*.so "$out"/lib/firefox/firefox; do
       elfdump -d "$f" | grep -q 'NODEFLIB' || { echo "FATAL: $f lacks -z nodefaultlib" >&2; exit 1; }
