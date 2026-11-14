@@ -187,6 +187,25 @@ for c in ${REQUIRED:-}; do have $c || { echo "FATAL: required crate $c not vendo
 #     no /dev/i2c-N DDC route: no backend, so Display::enumerate() lists nothing.
 edit ddc-hi build.rs "'\t} else if var(\"CARGO_CFG_UNIX\").is_ok() {'" "'\t} else if var(\"CARGO_CFG_UNIX\").is_ok() && var(\"CARGO_CFG_TARGET_OS\") != Ok(\"illumos\".into()) {'"
 
+# 14. cosmic-config watch(): settings changed on disk never reached a running app (BE 52: the dock's anchor and
+#     autohide were written, the panel never moved). notify has no illumos backend, so RecommendedWatcher is its
+#     PollWatcher (30 s by default), which reports a file whose mtime moved as Modify(Metadata(WriteTime)), and watch()
+#     drops every Modify(Metadata(_)) as "data not mutated" (that is right for inotify's IN_ATTRIB, wrong here): every
+#     change was thrown away. Keep WriteTime, poll each config dir every second, and compare contents, because
+#     PollWatcher's mtime has 1 s resolution and two writes in one second would look like one.
+#     shortcut: 1 s polling (41 poll threads in a session, each a stat + read of ~30 small files); upgrade to an
+#     illumos file-event-port (PORT_SOURCE_FILE) backend in notify if its cost shows.
+edit cosmic-config src/lib.rs "'            notify::recommended_watcher(move |event_res: Result<notify::Event, notify::Error>| {'" \
+  "'            RecommendedWatcher::new(move |event_res: Result<notify::Event, notify::Error>| {'"
+edit cosmic-config src/lib.rs "'                            | EventKind::Modify(ModifyKind::Metadata(_))\n'" \
+  "'                            | EventKind::Modify(ModifyKind::Metadata(\n                                notify::event::MetadataKind::Any\n                                | notify::event::MetadataKind::AccessTime\n                                | notify::event::MetadataKind::Permissions\n                                | notify::event::MetadataKind::Ownership\n                                | notify::event::MetadataKind::Extended\n                                | notify::event::MetadataKind::Other,\n                            ))\n'"
+edit cosmic-config src/lib.rs "'            })?;\n        watcher.watch(user_path, notify::RecursiveMode::Recursive)?;'" \
+  "'            }, notify::Config::default().with_poll_interval(std::time::Duration::from_secs(1)).with_compare_contents(true))?;\n        watcher.watch(user_path, notify::RecursiveMode::Recursive)?;'"
+#     PollWatcher also reports the config dir itself (its mtime moves when a key is renamed into it): key "", which
+#     inotify never delivers (its dir event is IN_ATTRIB, a Metadata(Any) still dropped above). Skip it.
+edit cosmic-config src/lib.rs "'                                        if key.starts_with(\".atomicwrite\") {'" \
+  "'                                        if key.is_empty() || key.starts_with(\".atomicwrite\") {'"
+
 # re-stamp checksums of every edited file
 sort -u "$V/.illumos-edited" | while read -r c f; do
   new=$(sha256sum "$c/$f" | cut -d' ' -f1); sum="$c/.cargo-checksum.json"
