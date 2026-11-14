@@ -12,7 +12,7 @@
 # Config comes from the SMF method environment (see the module).
 PATH=/usr/sbin:/usr/bin:/sbin
 : ${NETD_TICK:=3} ${NETD_MISS:=3} ${NETD_OK:=5} ${NETD_DHCP_ALL:=0} ${NETD_RESOLV:=0}
-typeset -A media state wjoin wst wpid wnext wback seen miss okc dgw fdef armed pnext dpid
+typeset -A media state ifst wjoin wst wpid wnext wback seen miss okc dgw fdef armed pnext dpid
 log() { printf '%(%Y-%m-%dT%H:%M:%S)T %s\n' now "$*"; }
 [ -n "$NETD_TRACE" ] && { exec 2>>"$NETD_TRACE"; PS4='+${SECONDS%.*} '; set -x; }	# a test aid: timed xtrace
 for w in $NETD_WIFI; do wjoin[${w%%=*}]=${w#*=}; done
@@ -21,6 +21,8 @@ scan_links() {	# media[] and state[] of every datalink
 	unset media state; typeset -A media state
 	dladm show-phys -p -o link,media,state 2>/dev/null |
 	    while IFS=: read l m s; do media[$l]=$m state[$l]=$s; done
+	unset ifst; typeset -A ifst	# IP interface state per link; none = not plumbed
+	ipadm show-if -p -o ifname,state 2>/dev/null | while IFS=: read i s; do ifst[$i]=$s; done
 }
 
 managed() {	# is DHCP on link $1 ours to run?
@@ -32,6 +34,15 @@ managed() {	# is DHCP on link $1 ours to run?
 
 # an address that is not disabled (RCM leaves "usbecm1/dhcp disabled" after a forced detach)
 hasaddr() { ipadm show-addr -p -o addrobj,state "$1/" 2>/dev/null | grep -v ':disabled$' | grep -q .; }
+
+plumb() {	# $1 managed wired link: IP-plumbed whatever its state, so that its driver reports carrier. usbecm marks a link
+	# up only when IP opens it (usbecm_m_start: ECM can't ask the device), so an unplumbed dongle with a cable in stayed
+	# "down" and never got DHCP (measured 2026-11-14: 31 min, until a manual create-if). dhcpcd brings up every link it manages.
+	case "${ifst[$1]}" in
+	"") ipadm create-if -t "$1" 2>/dev/null && log "$1: plumbed, so its driver reports carrier" ;;
+	disabled) ipadm enable-if -t "$1" 2>/dev/null && log "$1: enabled its persistent ipadm config (plumbed)" ;;
+	esac
+}
 
 ensure_dhcp() {	# $1 link: an IPv4 DHCP address, unless it has an address already
 	hasaddr "$1" && return
@@ -130,6 +141,7 @@ wireless() { [ -n "${wjoin[$1]}" ] || [ "${media[$1]}" = WiFi ]; }
 apply() {
 	scan_links
 	for l in "${!state[@]}"; do
+		! wireless "$l" && managed "$l" && plumb "$l"
 		[ "${state[$l]}" = up ] && managed "$l" && ensure_dhcp "$l"
 		[ -n "${seen[$l]}" ] && [ "${seen[$l]}" != "${state[$l]}" ] && log "$l: link ${state[$l]}"
 		seen[$l]=${state[$l]}

@@ -2,7 +2,9 @@
 # one long-running SMF service (contract model; svc.startd respawns it) that follows links as they come and go.
 # What it does, and why each piece is needed on illumos, is in ./solnix-netd.sh. In short:
 #   - DHCP on every managed link that is up (networking.useDHCP: every Ethernet link the config does not name;
-#     networking.interfaces.<n>.dhcp: that link), so a USB NIC that re-enumerates as usbecmN on another port works;
+#     networking.interfaces.<n>.dhcp: that link), so a USB NIC that re-enumerates as usbecmN on another port works.
+#     Every managed wired link is IP-plumbed, up or not, as dhcpcd brings up the links it manages: usbecm reports
+#     carrier only once its link is open, so an unplumbed dongle reads "down" with its cable in;
 #   - wired preferred: dhcpagent ignores the router option on wireless leases (PARAM_IGNORE_LIST=3 below) and the
 #     daemon installs the wireless default only while no wired default exists. dhcpcd uses metrics for this; illumos
 #     has none and round-robins equal default routes (ire_round_robin), which is what lost 68% on lixi;

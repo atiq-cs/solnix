@@ -8,6 +8,11 @@
 #      smf.networkOnline waits for), when the daemon dies, or after 60 s, and drops a marker left from before.
 #      NEG: OLD_REV's method returns at once. The SMF side (svccfg services on dixi, 2026-11-12): net2 in
 #      floki /scratch/solnix/net2/dixi-svc-test.log.
+#  (d) apply() plumbs every managed wired link, up or not: usbecm reports carrier only once IP opens the link
+#      (usbecm_m_start), so a dongle nobody plumbed stayed "down" with its cable in and never got DHCP (2026-11-14, 31 min).
+#      With a fake usbecm (create-if brings its link up), two applies plumb usbecm0, then DHCP it; skipped, wifi,
+#      unmanaged and already-plumbed links are left alone; a disabled persistent config is enabled. NEG: OLD_REV's apply()
+#      (DHCP only on a link already up, the same loop to 72d2cda7) never plumbs it. Needs ksh93 (NETD_KSH, else on PATH).
 #
 #   sh scripts/test-netd.sh [repo]   # floki: functions from the tree and OLD_REV (git), the start methods by nix eval
 #   NETD_FILES=dir sh scripts/test-netd.sh   # dir holds new.sh old.sh new.m old.m (an illumos host: NETD_SH=/sbin/sh)
@@ -120,6 +125,61 @@ meth new 999 1
 [ "$n" -lt 60 ] && grep -q 'solnix-netd: not online after' "$T/log" && ok "(c) the daemon dies: returns at once ($n s)" || no "(c) daemon died (sleeps $n)"
 meth old 5 0
 [ "$n" = 0 ] && [ $alive = yes ] && ok "(c) NEG $OLD_REV's method returns at once (online before the network)" || no "(c) NEG old method (sleeps $n, daemon $alive)"
+
+# (d) apply() against a fake dladm/ipadm. $NB/phys: "link:media:state"; $NB/ifs: "ifname:state"; $NB/carrier/<link>: the
+# cable is in, so create-if (the driver's m_start) brings the link up; $NB/calls: every ipadm action.
+KSH=${NETD_KSH:-$(command -v ksh93 || command -v ksh)}
+if [ -z "$KSH" ]; then no "(d) needs ksh93: set NETD_KSH"; else
+mkdir -p "$T/dbin"
+cat > "$T/dbin/dladm" <<'E'
+#!/bin/sh
+case "$*" in
+"show-phys -p -o link,media,state") cat "$NB/phys" ;;
+"show-wifi -p -o status "*) echo connected ;;
+*) exit 1 ;;
+esac
+E
+cat > "$T/dbin/ipadm" <<'E'
+#!/bin/sh
+set_if() { grep -v "^$1:" "$NB/ifs" > "$NB/ifs.n"; echo "$1:$2" >> "$NB/ifs.n"; mv "$NB/ifs.n" "$NB/ifs"; }
+case "$*" in
+"show-if -p -o ifname,state") cat "$NB/ifs" ;;
+"show-addr -p -o "*) grep "^${5%/}/" "$NB/addrs" ;;	# "<addrobj>:<state>": hasaddr's shape
+"create-if -t "*) echo "$*" >> "$NB/calls"; grep -q "^$3:" "$NB/ifs" && exit 1; set_if "$3" ok
+  [ -e "$NB/carrier/$3" ] && sed "s/^$3:\([^:]*\):down\$/$3:\1:up/" "$NB/phys" > "$NB/phys.n" && mv "$NB/phys.n" "$NB/phys" ;;
+"enable-if -t "*) echo "$*" >> "$NB/calls"; grep -q "^$3:disabled\$" "$NB/ifs" || exit 1; set_if "$3" ok ;;
+"create-addr "*) echo "$*" >> "$NB/calls" ;;
+*) echo "fake ipadm: $*" >&2; exit 1 ;;
+esac
+E
+for c in netstat route dhcpinfo ping; do printf '#!/bin/sh\nexit 0\n' > "$T/dbin/$c"; done
+chmod +x "$T/dbin"/*
+for v in new old; do sed '/^trap /,$d; /^PATH=/d' "$T/$v.sh" > "$T/$v.d"; done
+plumbrun() { # plumbrun <new|old> <name> <DHCP_ALL> <SKIP>; $NB/phys, ifs, carrier set by the caller; two applies
+  ( cd "$NB" && NB=$NB NETD_WIFI=iwx0=/bin/true NETD_DHCP_ALL=$3 NETD_SKIP_LINKS=$4 NETD_DHCP_LINKS= PATH="$T/dbin:$PATH" \
+    "$KSH" -c ". '$T/$1.d'; PATH=$T/dbin:\$PATH; apply; wait; apply; wait" > "$NB/log" 2>&1 ) ; }
+dset() { st "d-$1"; mkdir -p "$NB/carrier"; : > "$NB/calls"
+  printf '%s\n' iwx0:WiFi:up usbecm0:Ethernet:down e1000g0:Ethernet:down igb0:Ethernet:down usbecm1:Ethernet:down > "$NB/phys"
+  printf '%s\n' lo0:ok igb0:ok usbecm1:disabled > "$NB/ifs"	# iwx0 unplumbed: plumbing wifi is its join script's job
+  : > "$NB/carrier/usbecm0"
+  echo 'iwx0/dhcp:ok' > "$NB/addrs"; }
+has() { grep -qx "$1" "$NB/calls"; }
+dset new; plumbrun new new 1 e1000g0; cp "$NB/log" "$T/log"; cat "$NB/calls" >> "$T/log"
+has 'create-if -t usbecm0' && grep -q 'usbecm0: plumbed, so its driver reports carrier' "$NB/log" &&
+  grep -qx 'usbecm0:Ethernet:up' "$NB/phys" && ok "(d) a down, unplumbed managed link is plumbed, and its carrier comes up" ||
+  no "(d) usbecm0 not plumbed"
+has 'create-addr -t -T dhcp -w 30 usbecm0/dhcp' && grep -q 'usbecm0: up with no address: DHCP' "$NB/log" &&
+  ok "(d) the next apply runs DHCP on it" || no "(d) no DHCP on usbecm0 after plumbing"
+has 'enable-if -t usbecm1' && grep -q 'usbecm1: enabled its persistent ipadm config (plumbed)' "$NB/log" &&
+  ok "(d) a disabled persistent config is enabled" || no "(d) usbecm1's disabled config"
+grep -E -q '(create|enable)-if -t (e1000g0|iwx0|igb0)$' "$NB/calls" && no "(d) plumbed a skipped, wifi or already-plumbed link" ||
+  ok "(d) skipped, wifi and already-plumbed links are left alone"
+dset un; plumbrun new un 0 ""; [ -s "$NB/calls" ] && { cat "$NB/calls" > "$T/log"; no "(d) plumbed with useDHCP off"; } ||
+  ok "(d) unmanaged links (no useDHCP, not named) are left alone"
+dset old; plumbrun old old 1 e1000g0; cat "$NB/calls" > "$T/log"
+! has 'create-if -t usbecm0' && grep -qx 'usbecm0:Ethernet:down' "$NB/phys" && ! grep -q create-addr "$NB/calls" &&
+  ok "(d) NEG $OLD_REV's apply() leaves usbecm0 unplumbed, down, with no DHCP" || no "(d) NEG the old apply() plumbed usbecm0"
+fi
 
 [ $bad = 0 ] && echo "RESULT PASS" || echo "RESULT FAIL"
 exit $bad
