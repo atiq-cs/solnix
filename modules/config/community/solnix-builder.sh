@@ -39,6 +39,9 @@
 # A newer out refused here (memo'd) holds the job: `held: newest <out> refused here (...)`, for a human to fix or retire the row.
 # Deps first (fleet9): an unserved reference of a first publish that a served row names, whose drv is here, is first-published
 # in the same tick, before the out that waits for it (pcre2 10.48 -> A2's zlib, which no job lists once the job voted the older).
+# Deps first on the drv graph (pub8, 2026-11-13): a first publish whose dry run would build non-fixed-output inputs here, each
+# with an output a served row names, publishes those first, bottom-up, each only once its own dry run builds nothing here (cand);
+# at most BUILDER_DEPS_MAX (8) such builds a tick. An input no served row names is never built here: the job declines (it waits).
 # BUILDER_SKIP: pnames (ksh93 patterns) plan() never builds: SKIP (the seed rows; module solnix.cache.build.skipPnames).
 # Eval-anchored (protocol v2 (B), fleet4; BUILDER_EVAL=1, or dry: every step up to the signed /begin): a job that NO served row
 # has at its (pname, target version) for this system (an older served version does not stop it: a version bump), but whose
@@ -74,7 +77,7 @@ PATH=${BUILDER_PATH:-/usr/bin:/usr/sbin}
 # BUILDER_PUBLISH_POLL_FIRST: s a new submission polls its status before the tick goes on (later ticks: one request each);
 # BUILDER_PUBLISH_POLL: the ceiling: a submission validation has not answered counts in flight for at most this long
 : ${BUILDER_GATES:=} ${BUILDER_PYTHON:=${GATE_PYTHON:-python3}} ${BUILDER_PUBLISH_POLL:=1800} ${BUILDER_PUBLISH_SLOTS:=4}
-: ${BUILDER_PUBLISH_POLL_FIRST:=30}
+: ${BUILDER_PUBLISH_POLL_FIRST:=30} ${BUILDER_DEPS_MAX:=8}
 : ${BUILDER_CACHE_KEY:=cache.solnix.io-1:8UNrVAOSOrI9PGHc8/pD2Yqp265ZeYb3OId+gv4+wm8=}
 # eval-anchored jobs: off unless set (module solnix.cache.build.evalAnchored); the branches whose heads are evaluated, in order
 : ${BUILDER_EVAL:=0} ${BUILDER_EVAL_BRANCHES:=main 26.11}
@@ -324,8 +327,9 @@ evattr() {	# evattr <flake URL> <attr>, in $(...): one "<out> <drv>^<output>" li
 cand() {	# cand <out> <drv>^<output> <rev> [root], run in $(...): rc 0 and the served NarHash when this candidate can be rebuilt here
 	# from served inputs alone (its drv then rooted in $J/<root>, root-drv), else why not, and rc 1: <out> is served but cannot be
 	# rebuilt here (an older candidate may be); 2: <out> is not served and cannot be published here now (no key, or inputs
-	# to wait for); 3: <out> is not served and was refused here (memo'd: a human fixes or retires the row). Never memo'd here.
-	typeset d=$2 m x f ins h y=$J/dry-${3:0:12} e=1
+	# to wait for); 3: <out> is not served and was refused here (memo'd: a human fixes or retires the row); 4: <out> is not served
+	# and its dry run would build inputs here that served rows name: deps() publishes them first ($J/deps-<rev>). Never memo'd here.
+	typeset d=$2 m x f ins h y=$J/dry-${3:0:12} e=1 xl= xd xo xn t
 	h=$(served "$1") || { pubok || { print -r -- "$1 is not served (a first build is a submission: needs the submit key)"; return 2; }; h=first e=2; }
 	# hold the evaluated drv (and the drvs it references) until the job ends: an eval's temporary root dies with it
 	nix-instantiate --add-root "$J/${4:-root-drv}" --expr "import ${d%^*}" > /dev/null 2>&1 || { print -r -- "cannot root $d"; return $e; }
@@ -343,10 +347,24 @@ cand() {	# cand <out> <drv>^<output> <rev> [root], run in $(...): rc 0 and the s
 	x=0; for f in $(nawk -v d="${d%^*}" '/will be built/ {b=1; next} /will be fetched/ {b=0} b && $1 ~ /\.drv$/ && $1 != d {print $1}' "$y"); do
 		# a builtin:unpack-channel drv (go.nix srcTree) only unpacks its one FOD input in the daemon: as fetchable as that FOD
 		bounded 120 nix derivation show "$f" 2> /dev/null | jq -e '[.[] | ([.outputs[] | has("hash") or has("hashAlgo")] | all) or
-		    (.builder == "builtin:unpack-channel" and (.inputDrvs | length) <= 1)] | all' > /dev/null || x=$((x + 1))
+		    (.builder == "builtin:unpack-channel" and (.inputDrvs | length) <= 1)] | all' > /dev/null || { x=$((x + 1)) xl="$xl $f"; }
 	done
-	(( x == 0 )) || { print -r -- "the dry run would build $x non-fixed-output derivations here first ($y)"; return $e; }
-	print -r -- "$h"
+	(( x == 0 )) && { print -r -- "$h"; return 0; }
+	x="the dry run would build $x non-fixed-output derivations here first ($y)"
+	[[ $h == first ]] || { print -r -- "$x"; return $e; }
+	# a first publish (pub8): the drvs with an output a served row names are published here first (rc 4), bottom-up: in
+	# $J/deps-<rev>, "<out> <drv>^<output>" per rowed output, fewest to-build drvs in its closure first. Any other drv must lie in
+	# the closure of such a drv (nix substitutes it once that is published; its own cand says whether IT may be built): else this
+	# out needs it built here and no served row names it, a plain decline (it waits) naming it, never built here.
+	t=$J/tb-${3:0:12}; print -r -- "$xl" | tr ' ' '\n' | sed '/^$/d' > "$t"; : > "$t.c"
+	for xd in $xl; do bounded 120 nix derivation show "$xd" 2> /dev/null | jq -r --arg d "$xd" '.[].outputs | to_entries[] | select(.value.path) | .value.path + " " + $d + "^" + .key'
+	done | while read -r xo xd; do rowed "$xo" || continue
+		nix-store -qR "${xd%^*}" 2> /dev/null | nawk 'NR == FNR {t[$1]; next} $1 in t' "$t" - > "$t.1"; cat "$t.1" >> "$t.c"
+		print -r -- "$(nawk 'END {print NR}' "$t.1") $xo $xd"
+	done | sort -n | cut -d' ' -f2- > "$J/deps-${3:0:12}"
+	xn=; for xd in $xl; do grep -qxF -- "$xd" "$t.c" || xn="$xn ${xd#/nix/store/}"; done; rm -f "$t" "$t".*
+	[[ -s $J/deps-${3:0:12} && -z $xn ]] || { print -r -- "$x (no served row names:${xn:- any of them})"; return 2; }
+	print -r -- "$x: the ones served rows name are published here first (deps first)"; return 4
 }
 rown() { print -r -- "$2" | nawk -v o="$1" 'BEGIN {n = split(o, a, ","); for (i = 1; i <= n; i++) p[a[i]] = i} {if (p[$1] > k) k = p[$1]} END {print k + 0}'; }	# rown <outs> <drv_for lines>: the newest row (index in <outs>) of the lines' outs
 pubok() {	# may this host first-publish? BUILDER_PUBLISH=1 (with the bearer: it claims after) or dry; the key; the gates; never site-team
@@ -583,6 +601,34 @@ fdep() {	# fdep <pname> <ref>: may firsts() first-publish <ref>, an unserved ref
 	*) log "$1: its reference $2 cannot be published here yet: $xc"; return 1 ;;
 	esac
 }
+deps() {	# deps <pname> <cand's $J/deps-<rev>>: deps first on the drv graph (pub8). One pass, bottom-up: first-publish (firsts) each
+	# unserved out listed whose own dry run builds nothing here now (cand: served inputs only), so an input published in the pass
+	# lets the next one go in it. One that waits (its inputs are pending, or have no row) is passed over by every job for the rest of
+	# the tick (pub/lock.wait.<out>), and at most BUILDER_DEPS_MAX new builds start a tick (pub/lock.dep.<n>); the tick-start sweep
+	# removes both. A BUILDER_SKIP row's out (a seed row) is never built here: it waits for the seed builder.
+	# rc 0: an out was published (the caller dry-runs again); 3: one is refused here (`held`); 1: none.
+	typeset ux ul uc ud=1 ui us=${BUILDER_SKIP:-} up	# u*: name() functions share the caller's scope (ready's, firsts' and fbuild's differ)
+	us=${us// /'|'}; mkdir -p "$BUILDER_STATE/pub"
+	for ux in $(nawk '{print $1 "=" $2}' "$2"); do ul=${ux#*=} ux=${ux%%=*}	# a list, not `read`: nothing below may eat it from stdin
+		unserved "$ux" && [[ ! -d $BUILDER_STATE/pub/lock.${ux##*/} && ! -d $BUILDER_STATE/pub/lock.wait.${ux##*/} ]] || continue
+		up=$(nawk -F'\t' -v o="$ux" 'NR > 1 && $9 == o {print $1; exit}' "$BUILDER_STATE/recipes.tsv")
+		[[ -n $us && $up == @($us) ]] && { mkdir "$BUILDER_STATE/pub/lock.wait.${ux##*/}" 2> /dev/null &&
+		    log "$1: deps first: its input $ux is $up's, a BUILDER_SKIP row: never built here (it waits)"; continue; }
+		uc=$(cand "$ux" "$ul" "dep-${ux:11:12}" "root-dep.${ux:11:32}"); case $? in
+		0) [[ $uc == first ]] || continue ;;	# served now
+		3) log "held $1: its input $ux refused here ($uc)"; return 3 ;;
+		*) mkdir "$BUILDER_STATE/pub/lock.wait.${ux##*/}" 2> /dev/null && log "$1: deps first: its input $ux waits: $uc"; continue ;;
+		esac
+		if [[ ! -s $BUILDER_STATE/pub/${ux##*/} ]]; then	# a new build (a pending submission is only polled): one of this tick's
+			ui=0; while (( (ui += 1) <= BUILDER_DEPS_MAX )); do mkdir "$BUILDER_STATE/pub/lock.dep.$ui" 2> /dev/null && break; done
+			(( ui <= BUILDER_DEPS_MAX )) || { mkdir "$BUILDER_STATE/pub/lock.wait.${ux##*/}" 2> /dev/null &&
+			    log "$1: deps first: this tick's BUILDER_DEPS_MAX=$BUILDER_DEPS_MAX input builds are taken: $ux waits for a later tick"; break; }
+		fi
+		log "$1: deps first: first-publishing its input $ux ($ul), the out of a served row"
+		firsts "$1" "$ux $ul"; (( $? == 1 )) || ud=0
+	done
+	return $ud
+}
 ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is the NAR cache.solnix.io serves ($nar); else log why not.
 	# A job lists every served out of its (pname, version), from several batches. Each commit (revs) that evaluates to one of
 	# them is a candidate, tried newest row first (fleet9: <outs> is in recipes.tsv order): a served one whose dry run builds no
@@ -601,6 +647,8 @@ ready() {	# ready <pname> <outs>: 0 when the out ($out) was rebuilt here and is 
 		c=$(cand "${d%% *}" "${d#* }" "$r"); kj=$?
 		# past a newer SERVED candidate (why is set only by those), an unserved older one is superseded: never published or waited for
 		[[ -n $why ]] && (( kj >= 2 || kj == 0 )) && [[ $kj != 0 || $c == first ]] && kj=1 c="${d%% *} is not served, a newer row's out is: superseded"
+		# its inputs first (pub8): publish them (deps), then dry-run again; still unpublished ones (pending, capped) make the job wait
+		while (( kj == 4 )); do deps "$1" "$J/deps-${r:0:12}"; case $? in 0) c=$(cand "${d%% *}" "${d#* }" "$r"); kj=$? ;; 3) return 1 ;; *) kj=2 c="$c: it waits for them" ;; esac; done
 		(( kj == 0 )) && { nar=$c; break; }
 		why="$why${why:+; }$c [${r:0:12}]" d=
 		(( kj == 1 )) && continue	# served, but not rebuildable here: an older candidate may be

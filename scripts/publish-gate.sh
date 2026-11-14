@@ -19,7 +19,8 @@
 # Linux package manager (scripts/linux-package-hints.tsv names each with its solnix answer). And the mirror of the server's NAR content gate (infra
 # k8s/validate-nar-content.py; enforced for tier 1): S1 DT_RUNPATH/DT_RPATH under /nix/store or $ORIGIN, S2 PT_INTERP the
 # store or the illumos ld.so.1, S3 no *.compute.internal / *.ec2.internal / solnix-builder-build (any case, files and
-# symlink targets; NO DOF exemption there, unlike the host-name check above), S4 no dixi dixa dixr lixi floki as a word.
+# symlink targets; NO DOF exemption there, unlike the host-name check above), S4 no dixi dixa dixr lixi floki as a word in a
+# host context (gate-checks.py HOSTNAME_RE: user@host, host.domain, /host/, key=host, `built on host`; not a bare word in prose).
 # GATE_PYTHON: a python3 >= 3.9 (a solnix host has none on PATH: a store python3).
 # shortcut: the reference scan greps /nix/store/<hash>- strings in the NAR, so a reference
 # written without the /nix/store/ prefix would go unseen; Nix's own scan is per-hash.
