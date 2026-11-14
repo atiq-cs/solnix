@@ -55,6 +55,10 @@
 #    which nix refuses: "some outputs ... are not valid"), an input that fails before the drv starts (a FOD download, a stalled
 #    substitution) is not memo'd, the leaf's own failure still is; an eval job first-publishes an unserved input a served row names.
 #    ID1_BUILDER=<origin/main's solnix-builder.sh, before this change>: it memos both (else SKIPped, not passed).
+# 17. gatefix1 (pub8): deps first on the drv graph. A first publish whose dry run would build inputs here that served rows name
+#    publishes them first, bottom-up, in the same tick (gfa <- gfb <- gfc), at most BUILDER_DEPS_MAX new builds a tick; an input
+#    no served row names (directly, or under a rowed one) is never built: the job waits; one refused here holds it.
+#    GF1_BUILDER=<origin/main's solnix-builder.sh, before this change>: it declines gfc "would build 2" (else SKIPped, not passed).
 S=${1:-$(dirname "$0")/../modules/config/community/solnix-builder.sh}
 W=$(mktemp -d /tmp/bld.XXXXXX); trap 'find "$W" -depth -delete' EXIT
 bad=0; ok() { print "ok: $1"; }; no() { print "FAIL: $1"; bad=1; }
@@ -1498,6 +1502,62 @@ tk16e BUILDER_STATE=$W/st16e; print -r -- "$out" | grep -E ' ev(df|nr)[: ]' | se
   no "16e evdf: $(print -r -- "$out" | grep ' evdf') $(print -r -- "$sl" | grep BEGIN)"
 [[ $(begun evnrdep) == 0 && $(begun evnr) == 0 ]] && has "evnr: eval evnr waits for non-FOD inputs to be published first: .*qb-evnrdep-.* \(no served row names: .*qb-evnrdep-" &&
   ok "NEG an input no served row names: never published from here; the eval job waits and says the input has no row" || no "16e evnr: $(print -r -- "$out" | grep ' evnr')"
+# --- 17. gatefix1 (pub8, 2026-11-13): deps first on the drv graph. dixi/melody declined every BUILD job of wave8 "the dry run would
+# build N non-fixed-output derivations here first": a served row's inputs, unserved and not in this store, were never built, as
+# fdep only first-publishes a reference already here. Repo17: gfa <- gfb <- gfc and gka <- gkb <- gkc (each with a row, none served,
+# none here); gnx (no row) <- gnm (row) <- gnn; gnp (no row) <- gno; gra (row, refused here: a memo) <- grc; gsa (a BUILDER_SKIP
+# row: a seed) <- gsc.
+print x > "$W/bearer"; mkdir -p "$W/gflake"
+sed "s|@TAG@|${W##*/}|g" > "$W/gflake/flake.nix" <<'GF'
+{ outputs = { self }: let
+    mk = n: s: derivation { name = "qb-${n}-@TAG@"; system = "x86_64-solaris"; builder = "/usr/bin/bash"; args = [ "-c" "echo building ${n}; ${s}" ]; };
+    t = n: mk n "echo ${n}-@TAG@ > $out"; p = n: z: mk n "echo ${z} > $out";
+    gfa = t "gfa"; gfb = p "gfb" gfa; gka = t "gka"; gkb = p "gkb" gka; gra = t "gra"; gnx = t "gnx"; gnm = p "gnm" gnx; gnp = t "gnp";
+    gsa = t "gsa";
+  in { packages.x86_64-solaris = { inherit gfa gfb gka gkb gra gnx gnm gnp gsa;
+    gfc = p "gfc" gfb; gkc = p "gkc" gkb; grc = p "grc" gra; gnn = p "gnn" gnm; gno = p "gno" gnp; gsc = p "gsc" gsa; }; }; }
+GF
+GFL=path:$W/gflake; typeset -A GO GD
+nix eval --json "$GFL#packages.x86_64-solaris" --apply 'builtins.mapAttrs (n: d: d.outPath + " " + d.drvPath)' > "$W/gouts.json" 2> "$W/geval.err" ||
+  no "fixture 17: $(tail -3 "$W/geval.err")"
+for a in gfa gfb gfc gka gkb gkc gra grc gnx gnm gnn gnp gno gsa gsc; do x=$(jq -r --arg a $a '.[$a]' "$W/gouts.json"); GO[$a]=${x% *} GD[$a]=${x#* }; done
+for a in gfa gfb gfc gka gkb gkc gra grc gnm gnn gno gsa gsc; do rec $a 1 y "${GO[$a]}"; done >> "$W/p.tsv"; cp "$W/p.tsv" "$W/hc/registry/recipes.tsv"	# gnx, gnp: no row
+gv() { typeset a n=0; for a; do [[ -e ${GO[$a]} ]] && n=$((n + 1)); done; print $n; }	# how many of those outs are in this store
+(( $(gv gfa gfb gfc gka gkb gkc gra grc gnx gnm gnn gnp gno gsa gsc) == 0 )) || no "fixture 17: an out is in the store before any tick"
+tk17() { tk7 FKROWS=$W/p17.json BUILDER_FLAKE=$GFL "$@"; }
+# NEG control: origin/main's builder declines gfc before any build (the wave8 deadlock: nothing served, so nothing is built)
+if [[ -n ${GF1_BUILDER:-} ]]; then r7 gfc > "$W/p17.json"; S0=$S S=$GF1_BUILDER; tk17 BUILDER_STATE=$W/st17o; S=$S0
+  print -r -- "$out" | grep ' gfc' | sed 's/^/   17o /'
+  has "decline gfc: the dry run would build 2 non-fixed-output derivations here first" && [[ -z $(print -r -- "$sl" | grep '^BEGIN') && $(cl7 gfc) == 0 && $(gv gfa gfb gfc) == 0 ]] &&
+    ok "NEG origin/main's builder ($GF1_BUILDER): gfc declined 'would build 2 non-fixed-output derivations here first', gfa/gfb never built or published" ||
+    no "GF1_BUILDER: $(print -r -- "$out" | grep ' gfc') $(print -r -- "$sl" | grep BEGIN)"
+else print "SKIP origin/main BUILD-path deps-first negative control: GF1_BUILDER unset (not counted as a pass)"; fi
+mkdir -p "$W/st17/tried"; print -r -- "pre-submit-check.sh --leaf failed: gate (a test memo)" > "$W/st17/tried/${GD[gra]##*/}^out.pub"
+r7 gfc gnn gno grc gsc > "$W/p17.json"; tk17 BUILDER_STATE=$W/st17 BUILDER_SKIP="gs[a-b]"; print -r -- "$out" | grep -E ' g(fc|nn|no|rc|sc)[: ]' | sed 's/^/   17 /'
+[[ $(bg9 "${GO[gfa]}") == 1 && $(bg9 "${GO[gfb]}") == 1 && $(bg9 "${GO[gfc]}") == 1 && $(cl7 gfc) == 1 ]] &&
+  (( $(ln9 "${GO[gfa]}") < $(ln9 "${GO[gfb]}") && $(ln9 "${GO[gfb]}") < $(ln9 "${GO[gfc]}") )) &&
+  has "gfc: deps first: first-publishing its input ${GO[gfa]} " && has "gfc: published ${GO[gfb]} " && has "gfc: published ${GO[gfc]} " &&
+  ok "deps first on the drv graph: gfc's unserved inputs (served rows, not here) first-published bottom-up in one tick (gfa, gfb), then gfc; one claim" ||
+  no "17 gfc: $(print -r -- "$out" | grep ' gfc') $(print -r -- "$sl" | grep BEGIN)"
+[[ $(begun gnx) == 0 && $(begun gnm) == 0 && $(begun gnn) == 0 && $(cl7 gnn) == 0 && $(gv gnx gnm gnn) == 0 ]] &&
+  has "gnn: deps first: its input ${GO[gnm]} waits: .*\(no served row names: ${GD[gnx]#/nix/store/}\)" && has "decline gnn: .*it waits for them" &&
+  ok "NEG a rowed input whose own input has no row (gnm <- gnx): nothing built or begun, the job waits and names gnx" || no "17 gnn: $(print -r -- "$out" | grep ' gnn')"
+[[ $(begun gnp) == 0 && $(begun gno) == 0 && $(cl7 gno) == 0 && $(gv gnp gno) == 0 ]] &&
+  has "decline gno: the dry run would build 1 non-fixed-output derivations here first .*\(no served row names: ${GD[gnp]#/nix/store/}\)" &&
+  ok "NEG an input no served row names (gnp): never built here, the job declines naming it" || no "17 gno: $(print -r -- "$out" | grep ' gno')"
+[[ $(begun gra) == 0 && $(begun grc) == 0 && $(cl7 grc) == 0 && $(gv gra grc) == 0 ]] && has "held grc: its input ${GO[gra]} refused here \(pre-submit-check.sh --leaf failed: gate \(a test memo\)\)" &&
+  ok "an input refused here (memo'd): 'held grc: its input <out> refused here (...)', nothing built" || no "17 grc: $(print -r -- "$out" | grep ' grc')"
+[[ $(begun gsa) == 0 && $(begun gsc) == 0 && $(cl7 gsc) == 0 && $(gv gsa gsc) == 0 ]] &&
+  has "gsc: deps first: its input ${GO[gsa]} is gsa's, a BUILDER_SKIP row: never built here \(it waits\)" && has "decline gsc: .*it waits for them" &&
+  ok "NEG an input of a BUILDER_SKIP row (a seed): never built here, the job waits" || no "17 gsc: $(print -r -- "$out" | grep ' gsc')"
+# the cap: BUILDER_DEPS_MAX=1 new input build a tick. Tick 1 publishes gka (gkb waits for a later tick), tick 2 gkb then gkc.
+r7 gkc > "$W/p17.json"; tk17 BUILDER_STATE=$W/st17k BUILDER_DEPS_MAX=1; print -r -- "$out" | grep ' gkc' | sed 's/^/   17k /'
+[[ $(bg9 "${GO[gka]}") == 1 && $(bg9 "${GO[gkb]}") == 0 && $(bg9 "${GO[gkc]}") == 0 && $(cl7 gkc) == 0 ]] &&
+  has "gkc: deps first: this tick's BUILDER_DEPS_MAX=1 input builds are taken: ${GO[gkb]} waits for a later tick" && has "decline gkc: .*it waits for them" &&
+  ok "BUILDER_DEPS_MAX=1: one input built and published (gka) this tick; gkb waits for the next, gkc is not claimed" || no "17k: $(print -r -- "$out" | grep ' gkc') $(print -r -- "$sl" | grep BEGIN)"
+tk17 BUILDER_STATE=$W/st17k BUILDER_DEPS_MAX=1; print -r -- "$out" | grep ' gkc' | sed 's/^/   17k2 /'
+[[ $(bg9 "${GO[gka]}") == 0 && $(bg9 "${GO[gkb]}") == 1 && $(bg9 "${GO[gkc]}") == 1 && $(cl7 gkc) == 1 ]] && (( $(ln9 "${GO[gkb]}") < $(ln9 "${GO[gkc]}") )) &&
+  ok "the next tick: gkb (its slot back), then gkc published and claimed; gka not submitted again" || no "17k2: $(print -r -- "$out" | grep ' gkc') $(print -r -- "$sl" | grep BEGIN)"
 rm -f "$W/bearer"
 (( bad )) && print "RESULT: FAIL" || print "RESULT: PASS"
 exit $bad

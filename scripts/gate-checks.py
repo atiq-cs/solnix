@@ -1070,12 +1070,20 @@ def check_nar(out, src=None):
 #     /.SUNWnative/usr/lib/... (the sn1 brand)
 #  S3 build-host strings in any file or symlink target, case-insensitive: *.compute.internal, *.ec2.internal,
 #     solnix-builder-build
-#  S4 host names, case-sensitive, not inside a longer word: dixi dixa dixr lixi floki
+#  S4 host names, case-sensitive, not inside a longer word: dixi dixa dixr lixi floki, in a host context only (gl1 2026-11-13: goLorem's
+#     Latin word list holds `\ndixi\n`, gotemplate's bin/gotemplate; wiki-go's UTF-8 `dixi\xc3\xa8me`): after . @ / = : NUL or a quote,
+#     `= `/`: ` (key = value), a banner word and a space (on at from by host hostname node sunos linux: `built on dixi`, uname -a),
+#     a digit and a blank (a hosts line); or before .label :port NUL -x or a quote; or the whole text (`dixi\n`). A bare word in
+#     prose or a word list is not a host. Bytes >= 0x80 are word bytes: no UTF-8 word is cut into a host name.
 INTERP_OK = re.compile(r"^(/nix/store/.*|(/lib|/usr/lib)/(64/|amd64/|sparcv9/|aarch64/)?ld\.so\.1|\$ORIGIN.*|/\.SUNWnative/usr/lib/.*|)$")
 # DNS label boundaries: no letter, digit or - on either side of the domain, so `rec2.internalFuncName`, a JavaScript
 # property access in V8's tick processor (inside node's bin/node), is not a host (node6 2026-11-12).
 BUILDHOST_RE = re.compile(rb"(?<![A-Za-z0-9-])(?:compute|ec2)\.internal(?![A-Za-z0-9-])|solnix-builder-build", re.I)
-HOSTNAME_RE = re.compile(rb"(?<![A-Za-z0-9_])(dixi|dixa|dixr|lixi|floki)(?![A-Za-z0-9_])")
+_S4W, _S4N = rb"A-Za-z0-9_\x80-\xff", rb"(?:dixi|dixa|dixr|lixi|floki)"
+_S4L = b"|".join([rb"(?<=[.@/=:\x00\x22\x27])", rb"(?<=[=:] )", rb"(?<=[0-9] )", rb"(?<=[0-9]\t)"] +
+                 [rb"(?<=(?<![" + _S4W + rb"])(?i:" + w + rb") )" for w in (b"on", b"at", b"from", b"by", b"host", b"hostname", b"node", b"sunos", b"linux")])
+HOSTNAME_RE = re.compile(rb"(?<![" + _S4W + rb"])(?:(?:" + _S4L + rb")" + _S4N + rb"|" + _S4N + rb"(?=\.[A-Za-z0-9]|:|\x00|-[A-Za-z0-9]|[\x22\x27])|\A"
+                         + _S4N + rb"(?=\r?\n?\Z))(?![" + _S4W + rb"])")
 
 def elf_dynamic(data):
     """(runpath entries [(tag, value)], interp or None) for an ELF of either class/endianness, or None if unparseable."""
@@ -1569,10 +1577,20 @@ def selftest():
     deep = fake_drv("bideep"); mid = fake_drv("bimid", idrvs=[deep, fod])
     bir = fake_drv("biroot", idrvs=[mid, unp, tools])
     po = lambda d: parse_drv(FAKE[d])["outputs"]["out"]["path"]
-    got = build_inputs(bir); want = sorted({po(mid), po(deep), T})
+    none = lambda p: False   # nothing served: every non-FOD input is built, so its inputs count too (and no network here)
+    got = build_inputs(bir, served=none); want = sorted({po(mid), po(deep), T})
     ok = got == want; bad += not ok
     print(f"{'ok ' if ok else 'BAD'} drv  build_inputs: non-FOD inputs at any depth, FOD + unpack-channel excluded" + ("" if ok else f": {got} != {want}"))
-    unp2 = fake_drv("biunp2", builder="builtin:unpack-channel", idrvs=[deep]); got = build_inputs(fake_drv("biroot2", idrvs=[unp2]))
+    # a served input is substituted, so its build inputs are not needed (python3 served -> sqlite -> its build-only test tcl, never
+    # rowed: a64w); an unserved one is built, so its inputs are; an unknown served state walks in (fails closed)
+    bitcl = fake_drv("bitcl"); bisq = fake_drv("bisq", idrvs=[bitcl]); bipy = fake_drv("bipy", idrvs=[bisq])
+    bix = fake_drv("bix"); biu = fake_drv("biu", idrvs=[bix]); bir3 = fake_drv("biroot3", idrvs=[bipy, biu])
+    for label, srv, want in (("a served input's inputs are not listed", {po(bipy): True}, {po(bipy), po(biu), po(bix)}),
+                             ("an unserved input's inputs are listed", {}, {po(bipy), po(bisq), po(bitcl), po(biu), po(bix)}),
+                             ("an input whose served state is unknown is walked into", {po(bipy): None}, {po(bipy), po(bisq), po(bitcl), po(biu), po(bix)})):
+        got = build_inputs(bir3, served=lambda p, srv=srv: srv.get(p, False)); ok = got == sorted(want); bad += not ok
+        print(f"{'ok ' if ok else 'BAD'} drv  build_inputs: {label}" + ("" if ok else f": {got} != {sorted(want)}"))
+    unp2 = fake_drv("biunp2", builder="builtin:unpack-channel", idrvs=[deep]); got = build_inputs(fake_drv("biroot2", idrvs=[unp2]), served=none)
     ok = po(unp2) in got and po(deep) in got; bad += not ok
     print(f"{'ok ' if ok else 'BAD'} drv  build_inputs: unpack-channel of a NON-fixed input counts (and its input)" + ("" if ok else f": {got}"))
     # zlib 63big3dz: path-info narHash (SRI) and its narinfo NarHash name the same stamp
@@ -2011,6 +2029,16 @@ def selftest_out():
         ("B16 a compressed section that is not valid zlib: FAIL (never skipped)", mut("lib/debug/c.debug", R(mk_elf_zsec(b"x").replace(__import__("zlib").compress(b"x"), b"\x78\x9c" + b"\xff" * 7))), False, "FAIL B16-compressed"),
         ("S4 not hit: dixi inside a longer word (dixie)", mut("etc/conf2", R(b"dixieland floki_x lixir")), True, None),
         ("S4 case-sensitive: DIXI is not a host name", mut("etc/conf3", R(b"DIXI FLOKI")), True, None),
+        # S4 host contexts (gl1 2026-11-13): a host name where a build bakes one in FAILs; the same word in running text does not
+        *[(f"S4 host context: {b!r}", mut(f"etc/s4h{i}", R(b)), False, "FAIL S4-hostname") for i, b in enumerate((
+            b"\0dixi\0", b"floki\0", b"dixi.ts.burd.me", b"/home/gburd@dixi", b"HOSTNAME=dixi", b"Host: dixi\n", b"node = lixi\n",
+            b'{"host": "dixi"}', b"built on dixi at 2026-11-13", b"10.0.0.12 dixi", b"/var/tmp/dixi/x", b"ssh://lixi:22/", b"dixi-builder-1",
+            b"dixi\n", b"SunOS dixi 5.11 illumos-1 i86pc", b"cc -DHOST='dixa' x.c"))],
+        *[(f"S4 not a host context: {b!r}", mut(f"etc/s4w{i}", R(b)), True, None) for i, b in enumerate((
+            b"a\nab\ndixerit\ndixi\ndixit\ndoce\n", b"...iae dixeris dixerit dixi dixit doce docebat ...", b"Lorem ipsum dixi, inquit.",
+            b"x\ndixi\ny", b"(dixi)", b"user gburd dixi 2026", b"un dixi\xc3\xa8me", b"\xc3\xa9dixi\0", b"xon dixi"))],
+        ("S4 goLorem's word list inside an ELF (gotemplate 3.12.1 bin/gotemplate)", mut("bin/gotemplate", R(b"\x7fELF\0" + b"\n".join(
+            [b"dixeris", b"dixerit", b"dixi", b"dixit", b"doce"] * 3) + b"\0", True)), True, None),
         # B15: config records (LOOPHOLES class 2: perl Configure recorded -L/usr/gnu/lib; served perl-5.42.0 fwpxqmsj)
         ("B15 perl Config_heavy.pl lddlflags -L/usr/gnu/lib", mut("lib/perl5/5.42.0/i86pc/Config_heavy.pl", R(b"# perl config\nlddlflags='-shared -m64 -L/usr/gnu/lib'\nperl5='/usr/bin/perl'\n")), False, "FAIL B15-config"),
         ("B15 perl glibpth with host dirs", mut("lib/perl5/5.42.0/i86pc/Config_heavy.pl", R(b"# perl\nglibpth='/usr/shlib /usr/lib /usr/ccs/lib'\n")), False, "FAIL B15-config"),
@@ -2143,18 +2171,33 @@ def source_path(narhash, name):
     for i, x in enumerate(d): c[i % 20] ^= x
     return f"/nix/store/{nix32(bytes(c))}-{name}"
 
-def build_inputs(root):
+def build_inputs(root, served=None):
     """The non-fixed-output outs a build of root takes from its closure (each input drv's outputs some dependent names),
     for the eval-anchored rule: every one must be published, or in the same batch (deps first on the drv graph). Fixed:
-    a pinned-hash output, or builtin:unpack-channel of fixed inputs only (it unpacks them, as the builder's cand() counts it)."""
-    clo = drv_closure([root]); need = {}
-    for d in clo.values():
-        for idp, onames in d["inputDrvs"].items(): need.setdefault(idp, set()).update(onames)
+    a pinned-hash output, or builtin:unpack-channel of fixed inputs only (it unpacks them, as the builder's cand() counts it).
+    The walk stops at a non-fixed input whose needed outputs are all served: Nix substitutes it, so its own build inputs are never
+    needed (a64w: aarch64 python3 is served, its sqlite's build-only test tcl is not and never will be). An input whose
+    served state is unknown (None: cache unreachable) is walked into, so the list only grows (fails closed)."""
+    served = served or served_narinfo
+    clo = {}
+    def drv(dp):
+        if dp not in clo: clo[dp] = read_drv(dp)
+        return clo[dp]
     def fixed(dp):
-        d = clo[dp]
+        d = drv(dp)
         return all(o["hash"] for o in d["outputs"].values()) or (
             d["builder"] == "builtin:unpack-channel" and len(d["inputDrvs"]) <= 1 and all(fixed(x) for x in d["inputDrvs"]))
-    return sorted({clo[dp]["outputs"][o]["path"] for dp, ons in need.items() if not fixed(dp) for o in ons if o in clo[dp]["outputs"]})
+    need, built, todo = {}, set(), [root]
+    while todo:
+        p = todo.pop()
+        if p in built: continue
+        built.add(p)
+        for idp, onames in drv(p)["inputDrvs"].items():
+            need.setdefault(idp, set()).update(onames)
+            if idp in built: continue
+            outs = drv(idp)["outputs"]   # a fixed-output input is walked as before (its fetch tools); a served non-fixed one is not
+            if fixed(idp) or any(served(outs[o]["path"]) is not True for o in need[idp] if o in outs): todo.append(idp)
+    return sorted({drv(dp)["outputs"][o]["path"] for dp, ons in need.items() if not fixed(dp) for o in ons if o in drv(dp)["outputs"]})
 
 def stamp_key(nar_hash):
     """sha256-<base64> (path-info) or sha256:<nix32> (narinfo) -> the nix32 digest, the stamp file's name."""
