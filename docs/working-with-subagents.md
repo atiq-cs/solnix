@@ -88,6 +88,10 @@ tracing the actual dependency or measuring the actual value.
   statement: `bash -n x.sh || exit 1; setsid nohup bash x.sh > out 2>&1 < /dev/null &`.
   Spot it with `get_subagent_result`'s "Last progress: N s ago" and a long-lived `ssh ... nohup`
   on the orchestrator host; killing that ssh pid frees the agent.
+* **`$(...)` inside a double-quoted remote command runs on the LOCAL host.** desk7 wedged 4.8 h on
+  `lx.sh "... prstat -m -p $(ps -eo pid,comm | awk ...) 1 2"`: werk ran the `ps`, found no cosmic-comp, and lixi got
+  `prstat -m -p 1 2`, which samples forever. Put remote logic in a script file, or single-quote it, and bound every
+  sampling tool with a count (`prstat ... 1 1`) and an outer `timeout`.
 * **The provider's content filter ends an agent with no output and no handoff.** It has killed
   agents that printed offensive-security tools' source, large drm/Linux compat headers, package
   source files and READMEs (rl2, 2026-11-14), and a table of 120 package descriptions that
