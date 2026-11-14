@@ -81,3 +81,20 @@ nvidia_drm_glue.c). `drm_gem_objects_lookup` and `drm_show_memory_stats`,
 - `i915_gem_mman.c`'s mmap offset lookups take `get_rcu` inside
   `drm_vma_offset_lock_lookup`, which is the Linux pattern, and they are safe
   under that lock.
+
+## Defence in depth: Linux refcount_t semantics
+
+`obsd-refcount.patch` (`linux/kref.h`, `linux/refcount.h`) plus
+`obsd_refcount_warn` in `obsd-compat/obsd_kern.c`. Linux's kref is a
+`refcount_t`: an increment from 0 or a decrement below 0 prints a WARN and
+pins the count at `REFCOUNT_SATURATED`, so the object leaks instead of being
+released twice. OpenBSD's kref has no such check. The port now does what Linux
+does. The first event logs the caller's stack (`getpcstack` +
+`kobj_getsymname`) to /var/adm/messages, so the next stray put names its
+culprit instead of corrupting the heap.
+
+`make -C src/drm-port/i915 test-kref OBSD=...` builds the two headers as the
+driver build patches them and runs the vmdump.4 sequence through them: a
+stray put to 0, then a get from 0 and a put. It must release the object once
+and report. The negative control, the headers without obsd-refcount.patch,
+releases the object twice and must fail.
