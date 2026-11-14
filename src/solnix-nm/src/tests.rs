@@ -163,7 +163,7 @@ async fn short_passphrase_rejected_before_any_write() {
 
 // ---- signal volume: NetworkManager emits PropertiesChanged only for values that changed. nmrs (COSMIC's client) turns
 // every AccessPoint Strength change into a NetworkEvent, and the network applet and Settings answer EACH event with a
-// full snapshot of calls (lixi BE solnix-51: ~3500 "maximum number of pending replies (128)" dbus refusals for one user
+// full snapshot of calls (measured: ~3500 "maximum number of pending replies (128)" dbus refusals for one user
 // process during a Wi-Fi reconnect). A refresh that changes nothing must announce nothing.
 fn dest_of(tag: &str) -> String { std::env::var(format!("NMTEST_{tag}")).unwrap() }
 

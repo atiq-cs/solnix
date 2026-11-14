@@ -651,7 +651,7 @@ impl AgentMgr {
 // `Seen` also keeps every property value publish has announced: it emits PropertiesChanged only for a value that changed,
 // as NetworkManager does. nmrs (COSMIC's client) turns each announcement into a NetworkEvent, and the network applet and
 // Settings answer every event with a full snapshot of calls. Announcing each AP's Strength and each active connection's
-// State on every 5 s tick, changed or not, flooded the bus: on lixi (BE solnix-51, 18 APs) the system bus refused one
+// State on every 5 s tick, changed or not, flooded the bus: on a laptop seeing 18 APs the system bus refused one
 // Settings process ~3500 times in 2 minutes ("maximum number of pending replies ... (max_replies_per_connection=128)").
 #[derive(Default, PartialEq, Clone)]
 struct Seen { devs: Vec<(u32, bool, u32)>, aps: Vec<(u32, u32)>, active: Vec<(u32, u32)>, conns: Vec<u32>, ips: Vec<u32>, wifi_on: bool, connectivity: u32,

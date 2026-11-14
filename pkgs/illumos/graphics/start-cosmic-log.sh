@@ -1,5 +1,5 @@
 # solnix: keep the session's output. greetd hands the session its VT and there is no journald, so cosmic-session, the
-# compositor and every applet wrote into nothing, and a frozen session left no evidence (lixi, 2026-11-13). Each login
+# compositor and every applet wrote into nothing, and a frozen session left no evidence (measured 2026-11-13). Each login
 # appends to its own $XDG_STATE_HOME/cosmic-session/session-<time>.log; the newest 5 are kept.
 d="${XDG_STATE_HOME:-$HOME/.local/state}/cosmic-session"
 if mkdir -p "$d" 2>/dev/null && [ -w "$d" ]; then
