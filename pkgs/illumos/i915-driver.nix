@@ -123,6 +123,9 @@ derivation {
     ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-idrlock.patch" ) >&2
     ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-rculookup.patch" ) >&2
     [ "$(grep -c 'mtx_enter(&obsd_idr_mtx)' "$O/drm_linux.c")" -ge 20 ] || { echo "FATAL: obsd-idrlock.patch not applied" >&2; exit 1; }
+    # Linux refcount_t semantics for kref: a get from 0 or a put below 0 WARNs once with the caller's stack and
+    # saturates, so a stray put leaks the object instead of freeing it again (obsd_refcount_warn, obsd_kern.c).
+    ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-refcount.patch" ) >&2
     grep -q '^#define ETIME' "$O/include/linux/errno.h" && { echo "FATAL: linux/errno.h still aliases ETIME" >&2; exit 1; }
 
     echo "obsd drm $(cat "$O/OPENBSD_REV")" >&2

@@ -80,6 +80,7 @@ derivation {
     ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-errno.patch" ) >&2
     ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-idrlock.patch" ) >&2
     ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-rculookup.patch" ) >&2
+    ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-refcount.patch" ) >&2
 
     # nvidia-drm: the pinned kernel-open/{nvidia-drm,common/inc} with patches/0001
     mkdir -p "$W/ko"

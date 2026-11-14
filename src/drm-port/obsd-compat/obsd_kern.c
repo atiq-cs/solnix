@@ -531,6 +531,40 @@ obsd_vprintf(const char *fmt, va_list ap)
 	return (0);
 }
 
+/*
+ * solnix: Linux refcount_t's WARN (linux/refcount.h): a reference count
+ * moved from 0, below 0, or into saturation. Name the caller (the culprit
+ * of an over-release is whoever drops a reference it does not own) and pin
+ * the count at OBSD_REFCOUNT_SATURATED: the object then leaks instead of
+ * being released again. The first stack is logged; later ones are counted.
+ */
+extern char *kobj_getsymname(uintptr_t, ulong_t *);	/* sys/kobj.h */
+volatile uint_t obsd_refcount_warnings;
+
+void
+obsd_refcount_warn(volatile uint32_t *p, const char *what)
+{
+	pc_t stack[16];
+	ulong_t off;
+	char *sym;
+	int i, depth;
+
+	*p = OBSD_REFCOUNT_SATURATED;
+	if (atomic_inc_uint_nv(&obsd_refcount_warnings) != 1)
+		return;
+	cmn_err(CE_WARN, "drm: refcount_t: %s (refcount %p)", what, (void *)p);
+	depth = getpcstack(stack, 16);
+	for (i = 1; i < depth; i++) {
+		/* kobj_getsymname takes mod_lock for loadable modules */
+		sym = servicing_interrupt() ? NULL :
+		    kobj_getsymname(stack[i], &off);
+		if (sym != NULL)
+			cmn_err(CE_CONT, "!  %s+%lx\n", sym, off);
+		else
+			cmn_err(CE_CONT, "!  %p\n", (void *)stack[i]);
+	}
+}
+
 /* ------------------------------------------------------------- firmware */
 /* loadfirmware(name) -> firmware(9F) "obsd-drm/<name>". The buffer comes
  * from malloc(M_DEVBUF) because drm frees it with free(). */

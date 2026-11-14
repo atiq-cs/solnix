@@ -85,10 +85,29 @@ test-console:
 	 else echo "negative control (same-mode callback assumed to repaint): FAILS as required"; \
 	    grep ^FAIL test/test_console_tem_neg.out; fi
 
+# test-kref: linux/kref.h + linux/refcount.h as the build patches them
+# (obsd-norcu.patch, obsd-refcount.patch): the vmdump.4 over-release
+# sequence must release once and report. The negative control (without
+# obsd-refcount.patch) releases twice and must fail.
+test-kref: test/test_kref.c obsd-norcu.patch obsd-refcount.patch
+	for v in a b; do mkdir -p test/kref/$$v/include/linux test/kref/$$v/inc/linux test/kref/$$v/inc/sys; \
+	  cp $(OBSD)/include/linux/kref.h $(OBSD)/include/linux/refcount.h test/kref/$$v/include/linux/; \
+	  for h in linux/atomic.h linux/spinlock.h sys/rwlock.h; do : > test/kref/$$v/inc/$$h; done; done
+	cd test/kref/a && sed -n '/^--- a\/include\/linux\/kref.h/,$$p' ../../../obsd-norcu.patch | patch -s -p1 -F0
+	cd test/kref/b && sed -n '/^--- a\/include\/linux\/kref.h/,$$p' ../../../obsd-norcu.patch | patch -s -p1 -F0
+	cd test/kref/a && patch -s -p1 -F0 < ../../../obsd-refcount.patch
+	for v in a b; do cp test/kref/$$v/include/linux/kref.h test/kref/$$v/include/linux/refcount.h test/kref/$$v/inc/linux/; done
+	$(CC) -m64 -O2 -Wall -Werror -Wno-pointer-sign -Itest/kref/a/inc -o test/test_kref test/test_kref.c
+	$(CC) -m64 -O2 -Wall -Werror -Wno-pointer-sign -Itest/kref/b/inc -o test/test_kref_neg test/test_kref.c
+	./test/test_kref
+	@if ./test/test_kref_neg > test/kref/neg.out; then echo "NEGATIVE CONTROL (kref) DID NOT FAIL"; exit 1; \
+	 else echo "negative control (no obsd-refcount.patch) FAILS as required:"; grep ^FAIL test/kref/neg.out; fi
+
 clean:
 	rm -f $(OBJS) test_pciid test_pciid_neg test_pciid_neg.out \
 	    test_pciid_neg2 test_pciid_neg2.out \
 	    test/test_console test/test_console_neg test/test_console_neg.out \
-	    test/test_console_tem_neg test/test_console_tem_neg.out
+	    test/test_console_tem_neg test/test_console_tem_neg.out \
+	    test/test_kref test/test_kref_neg test/kref/neg.out
 
-.PHONY: obj test test-ioc test-console probe clean
+.PHONY: obj test test-ioc test-console test-kref probe clean

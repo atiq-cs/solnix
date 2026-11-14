@@ -325,6 +325,10 @@ extern void yield(void);	/* REAL: illumos kernel export, same signature */
 #define atomic_dec_int_nv(p)		atomic_dec_uint_nv((volatile uint_t *)(p))
 #define atomic_inc_long(p)		atomic_inc_ulong((volatile ulong_t *)(p))
 #define atomic_dec_long(p)		atomic_dec_ulong((volatile ulong_t *)(p))
+/* REAL: linux/refcount.h's refcount_t checks (obsd-refcount.patch) report
+ * here and pin the count at Linux's REFCOUNT_SATURATED (INT_MIN / 2). */
+#define OBSD_REFCOUNT_SATURATED		0xc0000000U
+extern void obsd_refcount_warn(volatile uint32_t *, const char *);
 #define __membar(_f)	do { __asm volatile(_f ::: "memory"); } while (0)
 #define membar_sync()	__membar("mfence")
 #define membar_enter_after_atomic()	__membar("")

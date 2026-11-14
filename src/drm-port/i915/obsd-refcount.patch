@@ -1,0 +1,101 @@
+--- a/include/linux/kref.h
++++ b/include/linux/kref.h
+@@ -42,7 +42,13 @@
+ static inline void
+ kref_get(struct kref *ref)
+ {
+-	atomic_inc_int(&ref->refcount);
++	uint32_t o = atomic_inc_int_nv(&ref->refcount) - 1;
++
++	/* solnix: refcount_t, see linux/refcount.h */
++	if (__predict_false(o == 0))
++		obsd_refcount_warn(&ref->refcount, "addition on 0; use-after-free");
++	else if (__predict_false((int32_t)o < 0 || (int32_t)(o + 1) < 0))
++		obsd_refcount_warn(&ref->refcount, "saturated; leaking memory");
+ }
+ 
+ static inline int
+@@ -55,7 +61,7 @@
+ static inline int
+ kref_put(struct kref *ref, void (*release)(struct kref *ref))
+ {
+-	if (atomic_dec_int_nv(&ref->refcount) == 0) {
++	if (obsd_refcount_dec_and_test(&ref->refcount)) {
+ 		release(ref);
+ 		return 1;
+ 	}
+@@ -66,9 +72,9 @@
+ kref_put_mutex(struct kref *kref, void (*release)(struct kref *kref),
+     struct rwlock *lock)
+ {
+-	if (!atomic_add_unless(&kref->refcount, -1, 1)) {
++	if (!obsd_refcount_dec_not_one(&kref->refcount)) {
+ 		rw_enter_write(lock);
+-		if (likely(atomic_dec_and_test(&kref->refcount))) {
++		if (likely(obsd_refcount_dec_and_test(&kref->refcount))) {
+ 			release(kref);
+ 			return 1;
+ 		}
+@@ -83,9 +89,9 @@
+ kref_put_lock(struct kref *kref, void (*release)(struct kref *kref),
+     struct mutex *lock)
+ {
+-	if (!atomic_add_unless(&kref->refcount, -1, 1)) {
++	if (!obsd_refcount_dec_not_one(&kref->refcount)) {
+ 		mtx_enter(lock);
+-		if (likely(atomic_dec_and_test(&kref->refcount))) {
++		if (likely(obsd_refcount_dec_and_test(&kref->refcount))) {
+ 			release(kref);
+ 			return 1;
+ 		}
+--- a/include/linux/refcount.h
++++ b/include/linux/refcount.h
+@@ -8,10 +8,47 @@
+ 
+ typedef atomic_t refcount_t;
+ 
++/*
++ * solnix: Linux refcount_t semantics (lib/refcount.c). An increment from 0
++ * or a decrement below 0 means someone dropped a reference they did not
++ * own: obsd_refcount_warn (obsd_kern.c) logs the caller's stack and
++ * saturates the count, so the object leaks instead of being released (and
++ * freed) a second time.
++ */
++static inline bool
++obsd_refcount_dec_and_test(volatile uint32_t *p)
++{
++	uint32_t o = atomic_dec_int_nv(p) + 1;
++
++	if (o == 1)
++		return true;
++	if (__predict_false(o == 0 || (int32_t)o < 0))
++		obsd_refcount_warn(p, "underflow; use-after-free");
++	return false;
++}
++
++/* atomic_add_unless(p, -1, 1), refusing to go below 0 */
++static inline bool
++obsd_refcount_dec_not_one(volatile uint32_t *p)
++{
++	uint32_t o;
++
++	do {
++		o = *p;
++		if (o == 1)
++			return false;
++		if (__predict_false(o == 0 || (int32_t)o < 0)) {
++			obsd_refcount_warn(p, "underflow; use-after-free");
++			return true;
++		}
++	} while (__sync_val_compare_and_swap(p, o, o - 1) != o);
++	return true;
++}
++
+ static inline bool
+ refcount_dec_and_test(uint32_t *p)
+ {
+-	return atomic_dec_and_test(p);
++	return obsd_refcount_dec_and_test(p);
+ }
+ 
+ static inline bool
