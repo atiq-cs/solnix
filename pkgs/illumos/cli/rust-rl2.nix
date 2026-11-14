@@ -138,6 +138,9 @@ in {
   # cargo-run-bin (MIT): build, cache and run the binaries a Cargo.toml pins, rather than installing them globally (cargo bin).modrun, and allows your teams to always be running the same tooling versions.
   cargo-run-bin = pkg { vendorHash = "sha256-42BrJgGnbibJXLVXvM8qq8mdDi5/Xk6zjZ0p0kLLBqE="; pname = "cargo-run-bin"; version = "1.7.5"; src = crate "cargo-run-bin" "1.7.5" "1ba4ea665f68a2042470ec6e27a36755783ebd3367b90bec2fb100f9d5012fd8";
     bins = "cargo-bin"; check = chk ''"$out/bin/cargo-bin" bin --version; "$out/bin/cargo-bin" --version'' "1\\.7\\.5"; };
+  # krabby (GPL-3.0): print pokemon sprites in your terminal.
+  krabby = pkg { vendorHash = "sha256-GMobdgQDTOl7XYLIs73CpT7MJgnJsbI/+hqc9BDCBpU="; pname = "krabby"; version = "0.3.0"; src = crate "krabby" "0.3.0" "b4453736d55a3fd2f8121fd4ebe38fb53d9b2a2ccc4c19c76c801ccb04af961b";
+    bins = "krabby"; check = ver "krabby" "0\\.3\\.0"; };
   # clang-tidy-sarif (MIT): CLI tool to convert clang-tidy diagnostics into SARIF.
   clang-tidy-sarif = pkg { vendorHash = "sha256-AHb8OU1XjiDCu55sDOJvQcW3td58+YSxByCDISNFCyA="; pname = "clang-tidy-sarif"; version = "0.8.0"; src = crate "clang-tidy-sarif" "0.8.0" "4a9fd2d1f9ba37e767283228fef33d53c136e81a570800f0531da1986e595079";
     bins = "clang-tidy-sarif"; check = ver "clang-tidy-sarif" "0\\.8\\.0"; };
@@ -153,4 +156,212 @@ in {
   # basilk (MIT OR Apache-2.0): a terminal kanban task manager.
   basilk = pkg { vendorHash = "sha256-juz4TAPJdQqzCORjPWeDc3b672gktRSc/LjXKtiA29E="; pname = "basilk"; version = "0.2.1"; src = gh "gabalpha/basilk" "refs/tags/0.2.1" "d82fd61004c806359d79b0acd4e38943e505d27e666cec1cc6bbe82de08c0ccd";
     bins = "basilk"; check = ver "basilk" "0\\.2\\.1"; };
+  # xre (MIT OR Apache-2.0): fast regex extraction tool with pattern matching, replacement, and configurable sorting.
+  xre = pkg { vendorHash = "sha256-9kIEWLZdIVzEEo+wZ4ZBIkTIDLx1Gs4evrGUHJIjEtg="; pname = "xre"; version = "0.1.1"; src = gh "wfxr/xre" "refs/tags/v0.1.1" "8b5c2c1f136e191bdae81d0828f9ebe5bc9d863f88264783f4df56ca4e253534";
+    bins = "xre"; check = ver "xre" "0\\.1\\.1"; };
+  # sarif-fmt (MIT): CLI tool to pretty print SARIF diagnostics.
+  sarif-fmt = pkg { vendorHash = "sha256-iEm67wsceIx7yG6b7mEzhBKw9BWDxXKYzQwEMPCAbw0="; pname = "sarif-fmt"; version = "0.8.0"; src = crate "sarif-fmt" "0.8.0" "6b321c640131597cc816b62d334b79dd86753e5a0145dfac50dae430b2834a64";
+    bins = "sarif-fmt"; check = ver "sarif-fmt" "0\\.8\\.0"; };
+  # uesave (MIT): reading and writing Unreal Engine save files (commonly referred to as GVAS).
+  uesave = pkg { vendorHash = "sha256-SjygQWkJuy7yiWDmvCxL7yLXru73Js3ROeofAl2e9y4="; pname = "uesave"; version = "0.7.1"; src = gh "trumank/uesave" "v0.7.1" "400793de0601075c964c73f699d14c6be6ec249c9f6758c75f286a7f5b33ade9";
+    bins = "uesave"; check = ver "uesave" "0\\.7\\.1"; };
+  # mdbook-mermaid (MPL-2.0): preprocessor for mdbook to add mermaid.js support.
+  mdbook-mermaid = pkg { vendorHash = "sha256-JZf/RkqUdGFndJaMPpj35LBUn0qU2X6xCtO00ex8rTk="; pname = "mdbook-mermaid"; version = "0.17.1"; src = gh "badboy/mdbook-mermaid" "refs/tags/v0.17.1" "5b0242092325a383c46ad9fcd15f2f6972ccc549b640fcb74bc02cf3d2cf45d4";
+    bins = "mdbook-mermaid"; check = ver "mdbook-mermaid" "0\\.17\\.1"; };
+  # ren-find (MIT): command-line utility that takes find-formatted lines and batch renames them.
+  ren-find = pkg { vendorHash = "sha256-O3N/teGxDVbEVLqj5v23HCf6DjrkHe/b4fUzG2BsG6Q="; pname = "ren-find"; version = "0.0.4"; src = gh "robenkleene/ren-find" "refs/tags/0.0.4" "9f1d7e20773985a3dbdd707a409585ea686d95949b0a02bffda2000207e21267";
+    bins = "ren"; check = ver "ren" "0\\.0\\.4"; };
+  # when-cli (Apache-2.0): command line tool for converting between timezones.
+  when-cli = pkg { vendorHash = "sha256-ltg9uoKQgAjjdGGaeI6m2+8aaW4A2BnJOKpfIdfeya4="; pname = "when-cli"; version = "0.4.0"; src = crate "when-cli" "0.4.0" "c4dee7f535c2a00583e134f2cb54f97ace2d860dce238a50551024e201e5426e";
+    bins = "when"; check = ver "when" "0\\.4\\.0"; };
+  # zet (MIT OR Apache-2.0): CLI utility to find the union, intersection, set difference, etc of files considered as sets of lines.
+  zet = pkg { vendorHash = "sha256-JY/LrE55TBgW/gvUj0YkOsguEwjTTE7SzBsy+3tAVoE="; pname = "zet"; version = "2.0.1"; src = gh "yarrow/zet" "refs/tags/v2.0.1" "a6f431927c16b22516e78a9ec7864d99e2676abae3acb46101df1c287e16f267";
+    env = ''export RUSTFLAGS="$RUSTFLAGS -Amismatched_lifetime_syntaxes"'';   # as nixpkgs: its deny(warnings) meets rustc 1.99's new lint
+    bins = "zet"; check = ver "zet" "2\\.0\\.1"; };
+  # ngrrram (GPL-3.0-only): TUI tool to help you type faster and learn new layouts. Includes a free cat (its Cargo.toml says 0.1.0).
+  ngrrram = pkg { vendorHash = "sha256-Qehef8yIWv6he+1CcgyNwVR7l9TyUt26wJo/1W8BcLI="; pname = "ngrrram"; version = "1.0.3"; src = gh "wintermute-cell/ngrrram" "v1.0.3" "6979fe829e773489cc22e45e37784565f2b8e514047e48e64909fa5ff93696af";
+    bins = "ngrrram"; check = chk ''"$out/bin/ngrrram" --version'' "^Usage: ngrrram"; };
+  # bagr (Apache-2.0): command line utility for interacting with BagIt bags (RFC 8493).
+  bagr = pkg { vendorHash = "sha256-MImRo6GcGP6lucXeY7kOsNb+YVjGu3z8JrPHp1Hh0GA="; pname = "bagr"; version = "0.3.0"; src = gh "pwinckles/bagr" "refs/tags/v0.3.0" "2c35784582277523efcfde0699b9303321c79eee640b19f9d3620b0c8108f7c3";
+    bins = "bagr"; check = ver "bagr" "0\\.3\\.0"; };
+  # confy-tui (GPL-3.0-or-later): config manager tui for linux/unix systems (its Cargo.toml says 3.1.0).
+  confy-tui = pkg { vendorHash = "sha256-sNv1Ub+AkhMBEbirlxSITVVAwOvaBPFt4UIOOVvFPrI="; pname = "confy-tui"; version = "3.1.1"; src = gh "phluxjr/confy" "v3.1.1" "ec717f749715d90290976aa371f54b43588403a2e9ea9fe6a6c3a43ac89c0787";
+    bins = "confy"; man = ''mkdir -p "$out/share/man/man1" && cp confy.1 "$out/share/man/man1/"''; check = chk ''"$out/bin/confy" --version'' "No such device or address"; };
+  # nomino (MIT OR Apache-2.0): batch rename utility for developers.
+  nomino = pkg { vendorHash = "sha256-fMmx5jpIxbP6nBitGu8+JeVxZg3NekYwUiM36fn9NtU="; pname = "nomino"; version = "1.6.4"; src = gh "yaa110/nomino" "1.6.4" "e83d9a62163f9faaff4c6650284de3dbe92e546ac09e3717c0bb9cde8352d005";
+    bins = "nomino"; check = ver "nomino" "1\\.6\\.4"; };
+  # psleep (Apache-2.0): like sleep but shows a live progress bar.
+  psleep = pkg { vendorHash = "sha256-bxaZ9iBNR2KkBu5IWpU9x8KMgxShTB5ABcXyn2tNkAw="; pname = "psleep"; version = "0.3.0"; src = gh "Yesh-02/psleep" "refs/tags/v0.3.0" "c154df5855155698013976d5dd623df668352930bc6874cac44eef06bdc268fc";
+    bins = "psleep"; check = ver "psleep" "0\\.3\\.0"; };
+  # cargo-fuzz (MIT OR Apache-2.0): command line helpers for fuzzing.
+  cargo-fuzz = pkg { vendorHash = "sha256-Crhp7zXW1ZjCqsKwcqNqp4etgq5IKRPDzqS43RPvTF4="; pname = "cargo-fuzz"; version = "0.13.2"; src = gh "rust-fuzz/cargo-fuzz" "refs/tags/0.13.2" "88e179805e4fe4c9903720a004ef6903b0f28b27a22e74660cd72f58612f6b46";
+    bins = "cargo-fuzz"; check = chk ''"$out/bin/cargo-fuzz" fuzz --version; "$out/bin/cargo-fuzz" --version'' "0\\.13\\.2"; };
+  # cargo-license (MIT): cargo subcommand to see license of dependencies.
+  cargo-license = pkg { vendorHash = "sha256-azc/FAs3Yg6VWjNycdYJbmM74kszYosANh3czccsrMo="; pname = "cargo-license"; version = "0.7.0"; src = crate "cargo-license" "0.7.0" "662dc8581a263e6330eefdfff955851edcbffcd6d6d96e79384f6fe7a31a1d80";
+    bins = "cargo-license"; check = chk ''"$out/bin/cargo-license" --version'' "^Usage: cargo license"; };
+  # arwen (MIT): cross-platform patching of shared libraries in Rust (its Cargo.toml says 0.1.0).
+  arwen = pkg { vendorHash = "sha256-mfb9NgtZvPQdjAW0eOfQZ8EGhsZDj15hT9zUkfl4tFU="; pname = "arwen"; version = "0.0.5-unstable-2026-04-07"; src = gh "nichmor/arwen" "696351a8c208315b0dfd4a1e5c37288a689ccd2e" "4acc2f2eec5ac57086886032099ba0b3a5df1b248d15ce4d2eb2171792cef3f8";
+    bins = "arwen"; check = chk ''"$out/bin/arwen" --version'' "^Usage: arwen <COMMAND>"; };
+  # rep-grep (MIT): command-line utility that takes grep-formatted lines and performs a find-and-replace on them.
+  rep-grep = pkg { vendorHash = "sha256-mnEi2DOqJgAbuQ/rhCj6SMMMKvzPwtoxJ8VEOO00uzo="; pname = "rep-grep"; version = "0.0.8"; src = gh "robenkleene/rep-grep" "refs/tags/0.0.8" "929be5ef42384b68931978056104d1be429df38dea1487987de4da9f5045565d";
+    bins = "rep"; check = ver "rep" "0\\.0\\.8"; };
+  # hayagriva (MIT OR Apache-2.0): work with references: Literature database management, storage, and citation formatting.
+  hayagriva = pkg { vendorHash = "sha256-A08EtDlbaaQkiE7iv0crS7dnyVN+F0B1Ya8GKsIYfOA="; pname = "hayagriva"; version = "0.10.1"; src = crate "hayagriva" "0.10.1" "7b6c185c5c72546d50b25b70187f01ab9a1a2fa21c4db8691e2426fa5fce805c";
+    features = "cli"; bins = "hayagriva"; check = ver "hayagriva" "0\\.10\\.1"; };
+  # koto-ls (MIT): language server for Koto.
+  koto-ls = pkg { vendorHash = "sha256-HtZ2opI4uv+2N0vbiCKNILdPrem31wKjFzLlCYQIIr0="; pname = "koto-ls"; version = "0.16.1"; src = gh "koto-lang/koto-ls" "refs/tags/v0.16.1" "8571abfd3058473a3bd9ca54bb02f38bf47fe42e3cd304d8e6cd6227aeb7bcf6";
+    bins = "koto-ls"; check = chk ''"$out/bin/koto-ls" --version < /dev/null; echo "rc=$?"'' "^rc=0$"; };
+  # melody (MIT OR Apache-2.0): language that compiles to regular expressions.
+  melody = pkg { vendorHash = "sha256-bsP9EzQzmB53s6wf7ech/Hh876iCCFoI4p6teOlYYUo="; pname = "melody"; version = "0.20.0"; src = crate "melody_cli" "0.20.0" "eb2d46e086975982cc62cc84ca9a2c891f486a2a909ae8ffa86530896f945a7b";
+    bins = "melody"; check = ver "melody" "0\\.20\\.0"; };
+  # minefair (MIT): fair and infinite implementation of Minesweeper.
+  minefair = pkg { vendorHash = "sha256-on9cSyu1zlMSKF8fvtE8nIVLleGoZ+sK74T6T1aUTVg="; pname = "minefair"; version = "1.5.0"; src = gh "LyricLy/minefair" "refs/tags/1.5.0" "62ebaa9d6e7a9a7e3915785b421da044a9291d85855daccf3f703370a5096132";
+    bins = "minefair"; check = ver "minefair" "1\\.5\\.0"; };
+  # obsidian-export (BSD-2-Clause-Patent): export an Obsidian vault to regular Markdown.
+  obsidian-export = pkg { vendorHash = "sha256-LhQ0N0yyvllA15a6gxDSJBfXU+VIxH7FsY51Mfg7Igs="; pname = "obsidian-export"; version = "25.3.0"; src = gh "zoni/obsidian-export" "v25.3.0" "1649e066741c2a9fa009799d2635bf6867646f34f5ed402b7909b432b11cca70";
+    bins = "obsidian-export"; check = ver "obsidian-export" "25\\.3\\.0"; };
+  # tex-fmt (MIT): a LaTeX formatter.
+  tex-fmt = pkg { vendorHash = "sha256-T1CokFaug9P7rcbhMyEgDK+CIj4q+qTwBEFIcaYo1XY="; pname = "tex-fmt"; version = "0.5.7"; src = gh "WGUNDERWOOD/tex-fmt" "refs/tags/v0.5.7" "fee9ccd8f13be00cf437ce73928892eb0b55349bd4c81e226bc3fd3cb9de644c";
+    bins = "tex-fmt"; man = ''mkdir -p "$out/share/man/man1" && cp man/tex-fmt.1 "$out/share/man/man1/"''; check = ver "tex-fmt" "0\\.5\\.7"; };
+  # fastmod (Apache-2.0): utility that makes sweeping changes to large, shared code bases.
+  fastmod = pkg { vendorHash = "sha256-v+QWpaYrSUGl5Jwksy8Mey6QEgxKdPJ1a9dc3rYbr88="; pname = "fastmod"; version = "0.4.4"; src = gh "facebookincubator/fastmod" "v0.4.4" "b438cc7564ef34d01f27cdd3cd50ee66a9915b9c50939ca021c6bee2e9c1f069";
+    bins = "fastmod"; check = ver "fastmod" "0\\.4\\.4"; };
+  # rust-script (MIT OR Apache-2.0): run Rust files and expressions as scripts without any setup or compilation step.
+  rust-script = pkg { vendorHash = "sha256-YHPh53v+mIq9AQbvuIwW1JxfY2dJcP0aZxNnUV/64ZM="; pname = "rust-script"; version = "0.36.0"; src = gh "fornwall/rust-script" "0.36.0" "9b6d04ad4dd34838c1b55a8ec4b69e8d7f3008a67d85ef1c35b49502c359b6d8";
+    bins = "rust-script"; check = ver "rust-script" "0\\.36\\.0"; };
+  # svgbob (Apache-2.0): convert your ascii diagram scribbles into happy little SVG.
+  svgbob = pkg { vendorHash = "sha256-90orEsaRNL7ge0peHvMU6TMJhbpjiqMEWy5Iv7t1vtM="; pname = "svgbob"; version = "0.7.6"; src = crate "svgbob_cli" "0.7.6" "6470b0303c95dbc84977e65e976ad730b27aaea2d1318b6f9add12c1c1da1f30";
+    bins = "svgbob_cli"; man = ''mv "$out/bin/svgbob_cli" "$out/bin/svgbob"''; check = ver "svgbob" "0\\.7\\.6"; };
+  # lspmux (EUPL-1.2): share one language server instance between multiple LSP clients to save resources.
+  lspmux = pkg { vendorHash = "sha256-xEXaceX+0Uw+dytBJ6ud0bJlFVQkh3Z/xBk+E4LgWSc="; pname = "lspmux"; version = "0.3.0"; src = cb "p2502/lspmux" "v0.3.0" "28caab4a2f74dc4b8117ac5eed3af2b30258eab1affb47f47363afece0982243";
+    bins = "lspmux"; check = ver "lspmux" "0\\.3\\.0"; };
+  # chirpstack-packet-multiplexer (MIT): forward Semtech packet-forwarder data to multiple servers.
+  chirpstack-packet-multiplexer = pkg { vendorHash = "sha256-m6knKJRyFk76PZdncJyPDarPbZ5FFjVhMEiTs7wB4sQ="; pname = "chirpstack-packet-multiplexer"; version = "4.0.1"; src = gh "chirpstack/chirpstack-packet-multiplexer" "refs/tags/v4.0.1" "709903b039e7aa28a854b97e3a590970e38d450b842440f72e37843133dbe0a4";
+    bins = "chirpstack-packet-multiplexer"; check = ver "chirpstack-packet-multiplexer" "4\\.0\\.1"; };
+  # svd2rust (MIT OR Apache-2.0): generate Rust register maps (`struct`s) from SVD files.
+  svd2rust = pkg { vendorHash = "sha256-QPhJi2xDMZcbDWVgCHT6c0I6av0ONeXLLDYno7l5I9o="; pname = "svd2rust"; version = "0.37.1"; src = crate "svd2rust" "0.37.1" "1eaf6a040bfbc04e7b946a6a373b24aab09e1feb875bb0e20c929946c4b7bfc4";
+    bins = "svd2rust"; check = ver "svd2rust" "0\\.37\\.1"; };
+  # bttf (Unlicense OR MIT): command line tool for datetime arithmetic, parsing, formatting and more. Replacement for biff.
+  bttf = pkg { vendorHash = "sha256-9Iiuy2i0ezkDeLwMCxhmjXea9aaVFfBmW3xo2sRWFnI="; pname = "bttf"; version = "0.1.4"; src = gh "BurntSushi/bttf" "refs/tags/0.1.4" "21b265959403c02406137adac1012f676a25ad67d6fbf29a553b9e459c7bbc73";
+    bins = "bttf"; check = ver "bttf" "0\\.1\\.4"; };
+  # changelogging (MIT): CLI tool for building changelogs from fragments.
+  changelogging = pkg { vendorHash = "sha256-VivT2h/bP6twSKsTS8N/6pGMhFRKoo8ii291UvnBLOQ="; pname = "changelogging"; version = "0.7.0"; src = crate "changelogging" "0.7.0" "6fcfa4129ca45df8051b9db1f025d2c2062bf1ff5c6b8b0808235da707fce729";
+    bins = "changelogging"; check = ver "changelogging" "0\\.7\\.0"; };
+  # cargo-pretty (MIT): cargo build wrapper with a live, animated status view.
+  cargo-pretty = pkg { vendorHash = "sha256-LZ1bVTnRJRHr3bdQNBM7CLxnnriiXdPFVIrDdIO0rQM="; pname = "cargo-pretty"; version = "0.3.1"; src = gh "romancitodev/cargo-pretty" "refs/tags/v0.3.1" "06670be4226531feb0f0fb7c77b65d9a0e853309cea3f21132f0eff2fd56fb75";
+    bins = "cargo-pretty"; check = chk ''"$out/bin/cargo-pretty" --version'' "No such device or address"; };
+  # flavours (MIT): easy to use base16 scheme manager/builder that integrates with any workflow.
+  flavours = pkg { vendorHash = "sha256-8bDD3VAy3pVtKBVIIsmYSLTCk1IDlcefDZosece/nhQ="; pname = "flavours"; version = "0.7.1"; src = gh "Misterio77/flavours" "v0.7.1" "207002728cc270d92f4cd437384925e767c611d30520ec8a29816dfe600d7f61";
+    bins = "flavours"; check = ver "flavours" "0\\.7\\.1"; };
+  # precious (MIT OR Apache-2.0): one code quality tool to rule them all.
+  precious = pkg { vendorHash = "sha256-fq1kJdHF+mhZr0GkJHWI2sio7+m9Z0dmX4dE7HBBL4c="; pname = "precious"; version = "1.0.0"; src = gh "houseabsolute/precious" "refs/tags/v1.0.0" "2de1f5ed8d9013065577d51e6ec3762e6cb1db7aff20e0495f312416728e2e07";
+    bins = "precious"; check = ver "precious" "1\\.0\\.0"; };
+  # t-lang (MIT): text processing language and utility (its Cargo.toml says 0.1.0).
+  t-lang = pkg { vendorHash = "sha256-bJUV8K3hTgvgeh34D6swAFDuvb92jAfuw2pnkaBk1As="; pname = "t-lang"; version = "0.3.1"; src = gh "alecthomas/t" "refs/tags/v0.3.1" "e7b357b358e910171d0e273ae4fd2d34abb29a2a326c33dad076b607ac0f5f91";
+    bins = "t"; check = chk ''"$out/bin/t" --version'' "^parse error: unexpected character"; };
+  # ttyper (MIT): terminal-based typing test.
+  ttyper = pkg { vendorHash = "sha256-mUzAZn5JKDRLE7kiEk57AqmLZq+ka1u5oaWDI7GpLm0="; pname = "ttyper"; version = "1.6.0"; src = gh "max-niederman/ttyper" "v1.6.0" "f7e4ff2f803483b17f35aa0c02977326a0546a95f5b465b4dd34ff17e45b4021";
+    bins = "ttyper"; check = ver "ttyper" "1\\.6\\.0"; };
+  # uwu-colors (Unlicense): simple LSP server made to display colors via textDocument/documentColor.
+  uwu-colors = pkg { vendorHash = "sha256-yeVIX3sT5Ana0yRzZ8tCMPNrQgS/h3wUHWa0gMm6JfI="; pname = "uwu-colors"; version = "0.4.0"; src = cb "q60/uwu_colors" "refs/tags/0.4.0" "54fd1298af43e5665957eed4dec69df3bc8c5908591bbea4cb6501070c838d42";
+    bins = "uwu_colors"; check = ver "uwu_colors" "0\\.4\\.0"; };
+  # git-upstream (MIT): shortcut for `git push --set-upstream`.
+  git-upstream = pkg { vendorHash = "sha256-1kJYCJ9yPoKZwUhf1tn0/fHSKNr8b8evZ++QlvK1Pmo="; pname = "git-upstream"; version = "1.6.0"; src = gh "9999years/git-upstream" "refs/tags/v1.6.0" "9a0867fbdbdc80a1c7c0a0c3462994137a930207b2d92b55e39d864a727cc8c5";
+    bins = "git-upstream"; check = ver "git-upstream" "1\\.6\\.0"; };
+  # kdlfmt (MIT): formatter for kdl documents.
+  kdlfmt = pkg { vendorHash = "sha256-RUanUCOlcjclwEYCw9WaWfJkFud8TGGLT+O6dzVuXyo="; pname = "kdlfmt"; version = "0.1.7"; src = gh "hougesen/kdlfmt" "refs/tags/v0.1.7" "a3d3487d382af8b7372bec21a67e54f92f4674c31f9f781093d3c0ad3f08fc80";
+    bins = "kdlfmt"; check = ver "kdlfmt" "0\\.1\\.7"; };
+  # md-lsp (MIT): language server implementation for markdown files made in Rust.
+  md-lsp = pkg { vendorHash = "sha256-DFLA4rkeePV2qopfp9hjkEmxhr6HjR+6c65m1jZba1c="; pname = "md-lsp"; version = "0.1.1"; src = gh "matkrin/md-lsp" "refs/tags/v0.1.1" "a103a2a98f6e4951ab8b3aa65ecec5b76bac1838c301fe96bcef8d0a7faa37ec";
+    bins = "md-lsp"; check = ver "md-lsp" "0\\.1\\.1"; };
+  # pastel (MIT OR Apache-2.0): command-line tool to generate, analyze, convert and manipulate colors.
+  pastel = pkg { vendorHash = "sha256-/zuC1Z4ETlvikEqlUOvAaIidoTla7y8Xo+q+dh8krVE="; pname = "pastel"; version = "0.12.0"; src = gh "sharkdp/pastel" "v0.12.0" "2903853f24d742fe955edd9bea17947eb8f3f44000a8ac528d16f2ea1e52b78b";
+    bins = "pastel"; check = ver "pastel" "0\\.12\\.0"; };
+  # microserver (MIT): simple ad-hoc server with SPA support.
+  microserver = pkg { vendorHash = "sha256-QAx6D9J0IhcgTW3IZ4p8w9qUybFW2ZebysznzNG1j+g="; pname = "microserver"; version = "0.2.1"; src = gh "robertohuertasm/microserver" "v0.2.1" "9a2b4acf0db61717f1c57376a9f660c27ac485d3d47effc6febda2af67be6ac7";
+    bins = "microserver"; check = ver "microserver" "0\\.2\\.1"; };
+  # deff (MIT): side-by-side review of git diffs in the terminalnting.
+  deff = pkg { vendorHash = "sha256-zLYooFE22FrEDD1SX6Gd1SrqE6HD+J5x0fp8ZvWSN8Q="; pname = "deff"; version = "0.4.2"; src = gh "flamestro/deff" "refs/tags/v0.4.2" "bc85896b93ecec2afe9fbe3cddb8d9f8e520b07fededa80b437dca58caec6f3b";
+    bins = "deff"; check = chk ''"$out/bin/deff" --version'' "^Usage: deff"; };
+  # sizelint (MIT): lint your file tree based on file sizes.
+  sizelint = pkg { vendorHash = "sha256-uJDbjwDfWEFugprdjrshK4micTlmFO8Rwrrrl5hazsM="; pname = "sizelint"; version = "0.1.6"; src = gh "a-kenji/sizelint" "refs/tags/v0.1.6" "742710d5540230e553cb3288e62aecdfabc89916ba1d9bae71787fb9a214928b";
+    bins = "sizelint"; check = ver "sizelint" "0\\.1\\.6"; };
+  # volt (MIT): ergonomic terminal settings editor for the Amp coding agent (its Cargo.toml says 0.1.0).
+  volt = pkg { vendorHash = "sha256-QR447RSpMqV7tJKBRiQm8LuDyK1/LGjlC55Rl2mtKxY="; pname = "volt"; version = "1.5.1"; src = gh "hqnna/volt" "refs/tags/v1.5.1" "b0acea190f6a28b1902cd4a38864305df69fc8ca82c5ec1aef37ec57b42f3573";
+    bins = "volt"; check = ver "volt" "0\\.1\\.0"; };
+  # tomlq (MIT): tool for getting data from TOML files on the command line.
+  tomlq = pkg { vendorHash = "sha256-QVPbvJhII0H1jvxIFTKle8lKcMajcPTjjjeurJTNIyY="; pname = "tomlq"; version = "0.2.2"; src = gh "cryptaliagy/tomlq" "refs/tags/0.2.2" "2a9cff8827dd0d3213470e9a333645492c4d8fe0a733439cc42db4c7b1fc6292";
+    bins = "tq"; check = ver "tq" "0\\.2\\.2"; };
+  # shellclear (Apache-2.0): secure shell history commands by finding sensitive data.
+  shellclear = pkg { vendorHash = "sha256-ZrJerL+C9p7TwZp3xAVZQMyTrg3seZjV7w8w2pjgS7c="; pname = "shellclear"; version = "0.4.8"; src = gh "rusty-ferris-club/shellclear" "refs/tags/v0.4.8" "423cbaf41c5071d41e72a168fcd542f86310e61e061b81b6c0a0be7f136c56e3";
+    pkg = "shellclear"; bins = "shellclear"; check = ver "shellclear" "0\\.4\\.8"; };
+  # tuckr (GPL-3.0-or-later): super powered replacement for GNU Stow.
+  tuckr = pkg { vendorHash = "sha256-kHA61MSwry55pQYKEJE5dMJVlexii3Q/WxTjsA9+nQc="; pname = "tuckr"; version = "0.13.1"; src = gh "RaphGL/Tuckr" "0.13.1" "4b3bdc51e5de5961d89021f28e5aa1ae976fe37330ffafaa5042ed7d6ee2c7c7";
+    bins = "tuckr"; check = ver "tuckr" "0\\.13\\.1"; };
+  # newdoc (GPL-3.0-or-later): generate pre-populated module files formatted with AsciiDoc.
+  newdoc = pkg { vendorHash = "sha256-Pb7/JX215a6/Eh3JCgLLiplsmkto5ZIt+FIN1wF7R4E="; pname = "newdoc"; version = "2.18.7"; src = gh "redhat-documentation/newdoc" "refs/tags/v2.18.7" "cf67e8eb3c5496e4611f795e7134110e9f634852218192627f1d9620200d8783";
+    bins = "newdoc"; check = ver "newdoc" "2\\.18\\.7"; };
+  # sig (MIT): interactive grep (for streaming).
+  sig = pkg { vendorHash = "sha256-WI6wnPk8GqxVIdU5pHDQzjnbt9+sDcecUYGc+q5BxaY="; pname = "sig"; version = "0.3.0"; src = gh "ynqa/sig" "v0.3.0" "dddd088437bed79432642d88782126ea23062ad52752eabb7724d32686db2d8b";
+    bins = "sig"; check = ver "sig" "0\\.3\\.0"; };
+  # color-lsp (MIT): a document colour language server supporting HEX, RGB, HSL, and named colors.
+  color-lsp = pkg { vendorHash = "sha256-1ieJ3H+ADijL3nRtxWmlMe4vS4G2zAvevaOdNsUe5KE="; pname = "color-lsp"; version = "0.3.0"; src = gh "huacnlee/color-lsp" "v0.3.0" "20ba8dd970d6d1dd15b96d31670a6202a42e76fedb2f390080dae686421a11b7";
+    pkg = "color-lsp"; bins = "color-lsp"; check = ver "color-lsp" "0\\.3\\.0"; };
+  # nbping (MIT): ping with live charts in the terminal.
+  nbping = pkg { vendorHash = "sha256-tS8W69AmfWTdQ/ZsDFNeL9f0jNALND691CC7X9UogEw="; pname = "nbping"; version = "0.7.1"; src = gh "hanshuaikang/NBping" "refs/tags/v0.7.1" "1a73f125601cac5ddc456b15d58b5145b859c46da24ce2024288fe4343050e5d";
+    bins = "nbping"; check = ver "nbping" "0\\.7\\.1"; };
+  # strace-tui (MIT OR Apache-2.0): explore strace output in a TUI.
+  strace-tui = pkg { vendorHash = "sha256-GjU7/co740Ehwd5TbTowJCTx9ATP3U1wMJR+MwZ18QE="; pname = "strace-tui"; version = "1.0.1"; src = gh "Rodrigodd/strace-tui" "refs/tags/v1.0.1" "da3ee283c3e293392ddba9a8608c5fe045537ae700c34b4582fedefa5bd808dd";
+    bins = "strace-tui"; check = chk ''"$out/bin/strace-tui" --version'' "^Usage: strace-tui <COMMAND>"; };
+  # ginko (MIT): device-tree source parser, analyzer and language server.
+  ginko = pkg { vendorHash = "sha256-WzfdK0mIq09GvdHUlRgrOkHyPKoeOet8M6KZQyldq9E="; pname = "ginko"; version = "0.0.8"; src = gh "Schottkyc137/ginko" "refs/tags/v0.0.8" "cf70dce67a0e3d4f759eb29952096bb9b0a4e46d3438059ba425eca2fc7a2d47";
+    bins = "ginko ginko_ls"; check = ver "ginko" "0\\.0\\.8"; };
+  # cargo-chef (Apache-2.0 OR MIT): cargo-subcommand to speed up Rust Docker builds using Docker layer caching.
+  cargo-chef = pkg { vendorHash = "sha256-o1VW7A+W+bnsaLg4/Pvz1ShKMR0cNpalC1Tib0vImzw="; pname = "cargo-chef"; version = "0.1.78"; src = crate "cargo-chef" "0.1.78" "ada7988681f22918824509059546e0f7bc937eef4f857e30e23d871fa2ef76fc";
+    bins = "cargo-chef"; check = chk ''"$out/bin/cargo-chef" chef --version; "$out/bin/cargo-chef" --version'' "0\\.1\\.78"; };
+  # envoluntary (MIT): automatic Nix development environments for your shell.
+  envoluntary = pkg { vendorHash = "sha256-9dKtdp6f46oNDKVjE1igdisl89u30EKtDKHUcItmOX8="; pname = "envoluntary"; version = "0.1.4"; src = gh "dfrankland/envoluntary" "refs/tags/envoluntary-v0.1.4" "c21fe4efeabcaa4bad4653fb74cb4fe75f279144b081c5b25dede46c502ea401";
+    bins = "envoluntary"; check = ver "envoluntary" "0\\.1\\.4"; };
+  # tukai (MIT): terminal-based touch typing application.
+  tukai = pkg { vendorHash = "sha256-YdkH/VzUgJ1mTVk7weaJOl+AHxVuNfntpTAn0JTKbZY="; pname = "tukai"; version = "0.2.3"; src = gh "hlsxx/tukai" "refs/tags/v0.2.3" "d14ab87bfdfb8312cd12c6f671486ae0afde0036441cf0d1df0f425f7278d9bd";
+    bins = "tukai"; check = chk ''"$out/bin/tukai" --version'' "failed to initialize terminal"; };
+  # turtle-build (MIT OR Apache-2.0): ninja-compatible build system for high-level programming languages written in Rust.
+  turtle-build = pkg { vendorHash = "sha256-k0JZJUaV4LBP8BdMJYaNuVqhRlgus/A4Htt4+ejil6U="; pname = "turtle-build"; version = "0.5.15"; src = gh "raviqqe/turtle-build" "v0.5.15" "62965afe8c17d7bf3fe6122e1f023635c6316f3acd87a3949c6411c9cce10831";
+    bins = "turtle"; check = ver "turtle" "0\\.5\\.15"; };
+  # sfz (MIT OR Apache-2.0): simple static file serving command-line tool written in Rust.
+  sfz = pkg { vendorHash = "sha256-OD6aeoSX3Zg3Z3fGc00AmIfemEEtQXsp7VjCnVhNGnE="; pname = "sfz"; version = "0.7.1"; src = gh "weihanglo/sfz" "v0.7.1" "b9c7f280e08d1c6f4c103ca35ed289bdc004a9773e0af44f39bf7530d2f46602";
+    bins = "sfz"; check = ver "sfz" "0\\.7\\.1"; };
+  # metapac (GPL-3.0-or-later): multi-backend declarative package manager.
+  metapac = pkg { vendorHash = "sha256-t4JxQ07YTwZ9+8mAE+/2D528DyN4joZXMSBgT/qjbfs="; pname = "metapac"; version = "0.10.2"; src = gh "ripytide/metapac" "refs/tags/v0.10.2" "066736aaa87988d833a01ecbe285c12f647b1a222731cdb7c739279aecc80546";
+    bins = "metapac"; check = ver "metapac" "0\\.10\\.2"; };
+  # git-gone (EUPL-1.2): cleanup stale Git branches of merge requests.
+  git-gone = pkg { vendorHash = "sha256-2nleedX9eycbIvdnnddBl/VdtHal0tIcNLUOsCS8+a4="; pname = "git-gone"; version = "1.3.1"; src = cb "swsnr/git-gone" "refs/tags/v1.3.1" "7db6465c4b4026d57fd1507ed48346f837a8cd92db01746b63470c8efbf9a68f";
+    bins = "git-gone"; check = ver "git-gone" "1\\.3\\.1"; };
+  # egglog (MIT): a fixpoint reasoning system unifying Datalog and equality saturation (its bin needs the default "bin" feature).
+  egglog = pkg { vendorHash = "sha256-iO98AEC8oje1hseCinC+Z0M0bbRnOpLKr/q0IKtVCrs="; pname = "egglog"; version = "0.4.0"; src = gh "egraphs-good/egglog" "v0.4.0" "9cbce5886daf770a1e2d699701dad3d61c8e5b3b0d6b9707e9e7080234d6a761";
+    bins = "egglog"; check = ver "egglog" "0\\.4\\.0"; };
+  # nerdfix (MIT OR Apache-2.0): helps you to find/fix obsolete nerd font icons in your project.
+  nerdfix = pkg { vendorHash = "sha256-Hh9sEb+mJ/gf/uNaVA+xXTxCpu9hCFlYUM38LdIVwdY="; pname = "nerdfix"; version = "0.4.2"; src = gh "loichyan/nerdfix" "v0.4.2" "e56f648db6bfa9a08d4b2adbf3862362ff66010f32c80dc076c0c674b36efd3c";
+    bins = "nerdfix"; check = ver "nerdfix" "0\\.4\\.2"; };
+  # pest-ide-tools (Apache-2.0): IDE support for Pest, via the LSP (its Cargo.toml says 0.3.12).
+  pest-ide-tools = pkg { vendorHash = "sha256-ARBAz7hZDzgHqMQrf6li+4aI4euAmo9YafzC4kCdP+Q="; pname = "pest-ide-tools"; version = "0.13.2"; src = gh "pest-parser/pest-ide-tools" "v0.13.2" "e46ecd38eba90ea575738a7bd82420ca951894c80dc02e1059e68e4d78199c3a";
+    bins = "pest-language-server"; check = ver "pest-language-server" "0\\.3\\.12"; };
+  # cargo-rdme (MIT): cargo command to create the README.md from your crate's documentation.
+  cargo-rdme = pkg { vendorHash = "sha256-DKj7JkyoOjEVqOB7UsHaUEAM4hajopxDLQwaJQL+LmY="; pname = "cargo-rdme"; version = "2.2.3"; src = crate "cargo-rdme" "2.2.3" "012f23c1c1631027df4500fd0ba02622b25706629029afa6eb30c8779fe27452";
+    bins = "cargo-rdme"; check = chk ''"$out/bin/cargo-rdme" rdme --version; "$out/bin/cargo-rdme" --version'' "2\\.2\\.3"; };
+  # fsel (BSD-2-Clause): fast TUI app launcher and fuzzy finder for GNU/Linux and *BSD (its Cargo.toml says 3.6.0-kiwicrab).
+  fsel = pkg { vendorHash = "sha256-xsqW/n0pIVayF4ysPQJYWPjLPwVNN1bNV5+rBR5kz7A="; pname = "fsel"; version = "3.6.0"; src = gh "Mjoyufull/fsel" "refs/tags/3.6.0" "04e17dd71a16a51c5927e1473f741d1539bfcbd8c47d9fb513d6e453e296068f";
+    bins = "fsel"; man = ''mkdir -p "$out/share/man/man1" && cp fsel.1 "$out/share/man/man1/"''; check = ver "fsel" "3\\.6\\.0\\-kiwicrab"; };
+  # sneakerweb (MIT OR Apache-2.0): a parallel web carried on physical media.
+  sneakerweb = pkg { vendorHash = "sha256-R157kh077dQyVfs87f+ICdKULpKxpj8wevRBMfE38W4="; pname = "sneakerweb"; version = "1.0.1"; src = cb "worm-blossom/sneakerweb" "5b26074b7db7bd5c5200b2ad5263cd79b29134e6" "16c389cd1b76f61284c4be3ba552e69b647a7a8348b177763600953fef72b0fb";
+    bins = "sneakerweb"; check = ver "sneakerweb" "1\\.0\\.1"; };
+  # cargo-bazel (Apache-2.0): part of the `crate_universe` collection of tools which use Cargo to generate build targets for Bazel.
+  cargo-bazel = pkg { vendorHash = "sha256-RgSzc8jaLQ4dfslSDW8ncFMOAxh9+noVh5+np3kLl8U="; pname = "cargo-bazel"; version = "0.17.0"; src = crate "cargo-bazel" "0.17.0" "e2f5d8136d5b223dae2908fb7dfe55b383271bac4ec9fd043426dbd8dd7997ba";
+    bins = "cargo-bazel"; check = chk ''"$out/bin/cargo-bazel" bazel --version; "$out/bin/cargo-bazel" --version'' "0\\.17\\.0"; };
+  # cargo-cyclonedx (Apache-2.0): creates CycloneDX Software Bill of Materials (SBOM) from Rust (Cargo) projects.
+  cargo-cyclonedx = pkg { vendorHash = "sha256-7si19eHD9XP9PY+mFk4bPU+RCfWHZyxEmUGaB4P+H54="; pname = "cargo-cyclonedx"; version = "0.5.9"; src = gh "CycloneDX/cyclonedx-rust-cargo" "cargo-cyclonedx-0.5.9" "36f0dbdd203424cdcb2d73d71093a2795494c776ca5ff9039d5002e4b7785da7";
+    bins = "cargo-cyclonedx"; check = chk ''"$out/bin/cargo-cyclonedx" cyclonedx --version; "$out/bin/cargo-cyclonedx" --version'' "0\\.5\\.9"; };
+  # wit-bindgen (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT): language binding generator for WebAssembly interface types.
+  wit-bindgen = pkg { vendorHash = "sha256-H/Z30zJYhs6QhPmJ3sYS5JpjxJ5ZSVSqnkfcfDn0q8A="; pname = "wit-bindgen"; version = "0.63.0"; src = gh "bytecodealliance/wit-bindgen" "v0.63.0" "077478a50147c75a75fa91bd6a6f3648234679fba44026f6ed4740f3d81d247c";
+    bins = "wit-bindgen"; check = ver "wit-bindgen" "0\\.63\\.0"; };
 }
