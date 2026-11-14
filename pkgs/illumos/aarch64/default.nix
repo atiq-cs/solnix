@@ -392,10 +392,16 @@ let
       rhash = { build = rep1 "rhash" "./configure --prefix=\"$out\" --libdir=\"$out/lib/amd64\" --mandir" "./configure --libdir=\"$out/lib/amd64\" --prefix=\"$out\" --mandir" args.build; };
       # a64x: discount's SONAME check runs a bare elfdump, which the store-only PATH lacks: /usr/bin/elfdump, as the other checks here.
       discount = { build = rep1 "discount" "( elfdump -d \"$out/lib/amd64/libmarkdown.so" "( /usr/bin/elfdump -d \"$out/lib/amd64/libmarkdown.so" args.build; };
+      # a64x: libopus' run-time CPU detection has no illumos aarch64 method (armcpu.c #error, the a64x host); NEON is the aarch64
+      # baseline, so the intrinsics build without it (nixpkgs: intrinsics on aarch64; rtcd only picks among them).
+      libopus = { build = rep1 "libopus" "-Drtcd=enabled" "-Drtcd=disabled" args.build; };
+      # a64x: tk's libtk8.6.so and wish NEED libz (via freetype's link line); x86's world provides it, aarch64's has none, so it bound
+      # the host /lib/libz.so.1 (closure gate, the a64x host): the set's zlib as a dep (link path + RUNPATH), as lsof.
+      tk = { deps = args.deps ++ [ srcPkgs.zlib ]; };
     } // builtins.listToAttrs (map (n: { name = n; value = cmakePP; })   # a64x: the new cmake attrs with store deps (cmakePP below)
       [ "aws-c-compression" "aws-c-sdkutils" "aws-checksums" "cfitsio" "gflags" "libzip" "plutosvg" "taglib" "uriparser"
         "aws-c-cal" "uvwasi" "rtrlib" "lunasvg" "primecount" "capnproto" "msgpack-cxx"
-        "miniupnpc" "protobuf" "srt" "hdrhistogram_c" ])
+        "miniupnpc" "protobuf" "srt" "hdrhistogram_c" "woff2" "libebml" ])
     ).${args.pname} or { };
       # a64x: the a64h path exports CMAKE_PREFIX_PATH ';'-joined, which cmake splits on ':' on Unix, so find_package sees no store dep
       # (game-music-emu: "ZLib library not found", dixa). x86's cmakeX joins with ':'; per recipe here, so no served aarch64 drv moves.

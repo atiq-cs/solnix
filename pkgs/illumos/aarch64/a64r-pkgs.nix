@@ -142,6 +142,15 @@ in
   inherit (cliQ) byacc miniupnpc zlib-ng eigen imath libev loguru protobuf libidn2 libtasn1 lzo termcolor libssh2 jansson
     jemalloc libxcrypt srt cli11 verdict exprtk asio robin-map vo-amrwbenc hdrhistogram_c uavs3d http-parser rhash yyjson nbytes nghttp3
     argtable heatshrink linenoise msgpack-c libz celt bbe cadical chmlib dash discount fcgi judy kytea;
+  # a64x p1 (python3 in the build closure: eval-closable once inputs stop at served, gatefix1)
+  inherit (cliQ) xcb-proto libxcb libx11 libxext libxrender libxft woff2 libglvnd liblc3 zix libxfixes libxcvt unzip zip libxrandr
+    libopus libxinerama libxcb-util libxv libxcb-render-util lv2 libice wayland-scanner libxcb-keysyms libxxf86vm libxcb-wm
+    libxkbfile libxi libxcb-image libxcursor libxcomposite libxdamage opusfile libxtst inih libxscrnsaver libxres libvdpau
+    spice-protocol;
+  # a64x p2 (python3 closure, as p1)
+  inherit (cliQ) libxcb-cursor xinput bcftools fonttosfnt cmark-gfm libopusenc mkfontscale cherry libsysprof-capture libxvmc libxpresent
+    libmpdclient re2c tk libspnav libsixel bstring canfigger cgif frozen libebml libmicrodns lyra lzop parson pystring directx-headers
+    simde;
   inherit (cli) which;   # c-recipes3.nix: wdiff's test suite runs it (./default.nix perPkg); its own aarch64 job
 } // builtins.mapAttrs (_: retarget) {
   inherit (desk) sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts noto-fonts-color-emoji cosmic-wallpapers;
