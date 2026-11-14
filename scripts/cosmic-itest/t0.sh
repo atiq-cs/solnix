@@ -88,6 +88,15 @@ a=$(ls /run/current-system/sw/share/applications/*.desktop 2>/dev/null | wc -l)
 [ "$a" -ge 50 ] && r PASS xdg-applications "$a desktop entries" || r FAIL xdg-applications "$a desktop entries (< 50)"
 ls /run/current-system/sw/share/applications/com.system76.CosmicTerm.desktop > /dev/null 2>&1 && r PASS cosmic-term-desktop "present" || r FAIL cosmic-term-desktop "no CosmicTerm.desktop: COSMIC Terminal is not in the launcher"
 
+# 7a. default key bindings (desk7): cosmic-comp reads its shortcuts from share/cosmic/com.system76.CosmicSettings.Shortcuts/v1/
+# defaults (data/keybindings.ron); without the file every default shortcut is unbound (BE 52: Alt+Tab did nothing). The
+# WindowSwitcher action must also map to cosmic-launcher's alt-tab mode (system_actions, cosmic-settings-daemon).
+sc=${ITEST_SHORTCUTS:-/run/current-system/sw/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1}
+if ! [ -f "$sc/defaults" ]; then r FAIL shortcuts-alt-tab "no $sc/defaults: no default shortcut is bound"
+elif ! grep -q 'modifiers: \[Alt\], key: "Tab"): System(WindowSwitcher)' "$sc/defaults"; then r FAIL shortcuts-alt-tab "Alt+Tab is not WindowSwitcher in $sc/defaults"
+elif ! grep -q 'WindowSwitcher: "cosmic-launcher alt-tab"' "$sc/system_actions" 2>/dev/null; then r FAIL shortcuts-alt-tab "WindowSwitcher does not run cosmic-launcher alt-tab ($sc/system_actions)"
+else r PASS shortcuts-alt-tab "Alt+Tab -> WindowSwitcher -> cosmic-launcher alt-tab"; fi
+
 # 7b. help on the desktop (help1): the man: URI handler is the default for x-scheme-handler/man, it refuses a URI that
 # is not a page name, and the launcher's man plugin answers "man ls" from the whatis index. Files only, no window.
 # Negative controls: ITEST_HELP_SHARE=<a share dir without the handler>, ITEST_HELP_PLUGIN=<a plugin.ron naming no plugin>.

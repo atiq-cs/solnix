@@ -59,6 +59,13 @@ in import ./cosmic-apps.nix { inherit src vendorOf cargoApp graphics vendorHashe
     stubs = true; bins = "cosmic-comp"; realInput = realLibinput;
     required = "rustix rustix-0.38.44 wayland-backend reis winit smithay";
     prep = "python3 $fixups/cosmic-comp-src-fixup.py $PWD";
+    # the justfile's install (NixOS runs it): the default key bindings and the tiling exceptions. Without the bindings file
+    # cosmic-settings-config's shortcuts() falls back to an empty map, so no default shortcut (Alt+Tab, Super) was bound.
+    install = ''
+      install -Dm0644 data/keybindings.ron "$out/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1/defaults"
+      install -Dm0644 data/tiling-exceptions.ron "$out/share/cosmic/com.system76.CosmicSettings.WindowRules/v1/tiling_exception_defaults"
+      grep -q 'key: "Tab"): System(WindowSwitcher)' "$out/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1/defaults"
+    '';
   };
 
   # The reference COSMIC client (solnix-pkgs cosmic-term.nix), built here instead of on the

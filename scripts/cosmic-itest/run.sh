@@ -18,6 +18,9 @@ if [ "$1" = --negctl ] || [ "$2" = --negctl ]; then
   neg ITEST_HELP_SHARE "$e" help-man-uri; neg ITEST_HELP_PLUGIN "$e/plugin.ron" help-launcher-man; find "$e" -depth -delete
   neg ITEST_LOGINDEFS /nonexistent users-uid-range   # no /etc/login.defs: COSMIC's 1000..60000 fallback (pre-desk1)
   neg ITEST_ACCOUNTS_DEST org.solnix.itest.nobody users-admin   # no Accounts service: ServiceUnknown, as before desk2
+  # desk7: a Shortcuts dir with system_actions and no defaults: BE 52's profile, every default shortcut unbound
+  e=$(mktemp -d /tmp/itest-sc.XXXXXX); cp /run/current-system/sw/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1/system_actions "$e/" 2>/dev/null
+  neg ITEST_SHORTCUTS "$e" shortcuts-alt-tab; find "$e" -depth -delete
   echo "cosmic-itest negctl: $ok of $n failed as expected"; [ $ok -eq $n ] || rc=1
 fi
 echo "results: $J"; exit $rc
