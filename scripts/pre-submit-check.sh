@@ -14,7 +14,8 @@
 #              the NAR cannot carry them, so only the exporting host can see them
 #   6. closure B12: nothing in the runtime closure is in scripts/not-for-cache.tsv
 #   7. log     the deriver's build log (nix log): configure/cmake/meson found no host tool, perl Configure ignored no
-#              -D (LOOPHOLES.md classes 1-3, 5); a missing log FAILs (only the building host has it)
+#              -D (LOOPHOLES.md classes 1-3, 5); a missing log FAILs (only the building host has it). A bootstrap-exempt
+#              deriver (the drv gate's bootstrap-exempt.tsv) gets L1/L3/L4/L5 as WARN: its proof is step 3's --check SAME
 #   8. deps    every reference has a narinfo on the cache, or is in this batch AHEAD of it (deps first); cache-submit.py
 #              then re-checks each reference under the 8UNr key before it submits
 # --eval <attr> <system> <commit> <branch> (protocol v2 (B), fleet4): ONE out with no served row, anchored instead to what
@@ -113,8 +114,9 @@ for p in "$@"; do
   # has the log at all (1: "not available", never built here); an EMPTY log of a build that ran here is a log: a builder that
   # prints nothing (gtk-build-tools: mkdir + ln -s) has no configure, cmake or meson output for the L-rules to find.
   if [ -n "$d" ] && nix log "$d" > "$T/log" 2>/dev/null; then
-    "$py" "$here/gate-checks.py" log "$p" "$T/log" > "$T/logc" 2>&1 && step log "PASS $(tail -1 "$T/logc" | sed 's/^PASS [^ ]* //')" \
+    "$py" "$here/gate-checks.py" log "$p" "$T/log" "$d" > "$T/logc" 2>&1 && step log "PASS $(tail -1 "$T/logc" | sed 's/^PASS [^ ]* //')" \
       || { step log FAIL; grep '^FAIL L' "$T/logc" | head -6 | cut -c1-260 | sed 's/^/    /'; why="$why build log;"; }
+    grep '^EXEMPT' "$T/logc" | cut -c1-400 | sed 's/^/    /'
   else step log "FAIL (no build log for $d here: pre-submit runs on the host that built it)"; why="$why no build log;"; fi
   # 8 deps first: each reference is served under 8UNr, or appears earlier in this batch
   miss=""

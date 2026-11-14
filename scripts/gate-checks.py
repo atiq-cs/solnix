@@ -6,7 +6,8 @@
   gate-checks.py nar <out> [<nar>]       B. the published bytes: walk the NAR (nix-store --dump <out>, or a .nar/.nar.xz)
   gate-checks.py store <out>...          B5/B11 on the host's store copy (the NAR cannot carry them; see below)
   gate-checks.py closure <out>...        B12. no path of the runtime closure is marked not-for-cache
-  gate-checks.py log <out> <log|->       L. the build log shows no host tool found or used (LOOPHOLES classes 1-3, 5)
+  gate-checks.py log <out> <log|-> [<drv>]  L. the build log shows no host tool found or used (LOOPHOLES classes 1-3, 5);
+                                         <drv> = the out's deriver: if bootstrap-exempt, L1/L3/L4/L5 are WARN, not FAIL
   gate-checks.py stampkey <NarHash>      the stamp name pre-submit-check.sh writes and cache-submit.py --stamps requires
   gate-checks.py inputs <drv>            the non-fixed-output input outs a build of <drv> needs (pre-submit-check.sh --eval)
   gate-checks.py selftest                every check against a crafted bad input (must FAIL) and a good one (must PASS)
@@ -1190,7 +1191,7 @@ PINNED_PROBES = {
     "ipv6 stack type": "cf_cv_ipv6type", "for remote shell": "tar_cv_path_RSH",
     # pinned in pkgs/illumos/config.site, which gcc-src.nix (gcc 14.3.0, x86 + aarch64) never loads (no CONFIG_SITE: it builds outside
     # mk-src-pkg). Harmless: its autoconf 2.69 answers from <limits.h> (endian1: serial re-runs 28/28 "no"; the "yes" lines were
-    # splices). A gcc14 log would still show the probe (WARN when spliced, else L4 FAIL): gcc14 is the seed's stage0, built once.
+    # splices). A gcc14 log still shows the probe: WARN when spliced, or when its deriver is bootstrap-exempt (log <out> <log> <drv>).
     "whether byte ordering is bigendian": "ac_cv_c_bigendian",
     "endianness": "gnupg_cv_c_endian",
 }
@@ -1242,8 +1243,14 @@ def _pinnable(msg, text):
     r = PINNED_ONLY_IF.get(msg)
     return r is None or bool(r.search(text))
 
-def check_log(text):
-    r, seen, spliced = [], {}, {}
+# A bootstrap-exempt deriver (bootstrap_class: the drv gate's closed list + markers) builds on the host's tools by design (the seed,
+# sv9gccseed: OI's /usr/gcc/13 compiles sparcv9's gcc 14), so its log names host tools and runs host probes: L1/L3/L4/L5 are WARN,
+# with the class named; its proof is the host's --check SAME (pre-submit step 3). L2 (perl Configure) stays strict (sv9q3, 11-14).
+LOG_BOOTSTRAP_WARN = ("L1-", "L3-", "L4-", "L5-")
+
+def check_log(text, cls=None):
+    """cls: the deriver's bootstrap_class() reason, or None (strict)."""
+    r, seen, spliced, relaxed = [], {}, {}, {}
     for n, line in enumerate(text.splitlines(), 1):
         line = re.sub(r"^[\w.+-]+> ", "", line).rstrip()   # nix-build's "<name>> " prefix
         for lv, chk, why in _log_line(line):
@@ -1257,11 +1264,29 @@ def check_log(text):
                                                   for mm in [_PINNED.match(l)] if mm and mm.group(1) == m.group(1) and not mm.group(2))
                     if spliced[m.group(1)]:
                         lv, chk, why = "WARN", "L4-spliced", why + " (this log splices the probe's output: not attributable)"
+            if cls and lv == "FAIL" and chk.startswith(LOG_BOOTSTRAP_WARN):
+                lv, why = "WARN", why + f" (bootstrap-exempt {cls.split(':')[0]})"; relaxed[chk] = relaxed.get(chk, 0) + 1
             k = (lv, chk); seen[k] = seen.get(k, 0) + 1
             if seen[k] <= 5: r.append((lv, chk, f"line {n}: {why}: {line.strip()[:160]}"))
     for (lv, chk), k in seen.items():
         if k > 5: r.append(("INFO", chk, f"... {k - 5} more {lv} lines"))
+    if relaxed:
+        r.append(("EXEMPT", "class", f"{cls}: {', '.join(f'{v} {k}' for k, v in sorted(relaxed.items()))} reported as WARN "
+                                     "(a bootstrap build on the host's tools; its proof is the host's --check SAME)"))
     return r
+
+def run_log(o, text, drv=None, out=print):
+    """gate-checks.py log <out> <logfile|-> [<drv>]: <drv> must be a deriver of <out>; its bootstrap class (if any) relaxes check_log."""
+    cls = None
+    if drv is not None:
+        try:
+            if not (drv.startswith(STORE) and drv.endswith(".drv") and (drv in FAKE or os.path.exists(drv))): raise ValueError("not an existing .drv")
+            d = read_drv(drv)
+            if o not in {x["path"] for x in d["outputs"].values()}: raise ValueError(f"{o} is not one of its outputs")
+            cls = bootstrap_class(d["env"].get("name", drv[44:-4]), d, drv_closure([drv]))
+        except (OSError, ValueError) as e:
+            return report(o, [("FAIL", "L0-deriver", f"{drv}: {e}")], out)
+    return report(o, check_log(text, cls), out, f" (log: {len(text.splitlines())} lines{'; deriver bootstrap-exempt' if cls else ''})")
 
 # ---- B15: configuration records that bake link/include dirs (LOOPHOLES class 2: perl Config_heavy.pl) -------------------
 # A tool's recorded build config is what downstream builds read back (ExtUtils::MakeMaker uses perl's ldflags/libpth,
@@ -1597,6 +1622,28 @@ def selftest():
         ok = got_pass == want_pass and hit
         bad += not ok
         print(f"{'ok ' if ok else 'BAD'} drv  {label}: {'PASS' if got_pass else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
+    # log + deriver (sv9q3): a bootstrap-exempt deriver's host-tool/host-probe lines are WARN with the class named; the same log
+    # FAILs for any other deriver and in the 2-arg form; L2 stays strict; the deriver must be the out's
+    GL14 = ("gcc-14.3.0> checking for gcc... /usr/gcc/13/bin/gcc\nchecking for a BSD-compatible install... /usr/gnu/bin/install -c\n"
+            "checking whether byte ordering is bigendian... yes\nchecking for working iconv... yes\n"
+            "-- Found PkgConfig: /usr/bin/pkg-config (found version \"0.29.2\")")   # L1 x2, L4 x2, L5 (real lines: c33zj0d4's log, fortune-mod)
+    L2L = "Checking compatibility between /usr/gnu/bin/echo and builtin echo (if any)..."
+    svx = SV("svlog"); svb = SV("svlb", extra={"btPath": T + "/bin"}); x86 = D("x86log", env={"PATH": T + "/bin"})
+    sdzl = D("sdzl", name="coreutils-9.7", env={"PATH": "/usr/bin", "btPath": "", "system": SV9}, system=SV9)   # a sparcv9 seed tool
+    for label, drv, o, text, want_pass, musts in (
+            ("exempt sv9gccseed gcc 14: L1 + L4 + L5 are WARN, class named", svx, po(svx), GL14, True,
+             ["WARN L1-configure", "WARN L4-probe-ran", "WARN L5-cmake", "EXEMPT class", "sv9gccseed:", "2 L1-configure, 2 L4-probe-ran, 1 L5-cmake"]),
+            ("exempt seed coreutils (sparcv9 seed tool): L1 WARN, class seed", sdzl, po(sdzl), GL14.split("\n")[1], True, ["WARN L1-configure", "EXEMPT class", " seed:"]),
+            ("NEG the same log, plain gcc-14.3.0 on sparcv9 (btPath set): L1 + L4 FAIL", svb, po(svb), GL14, False, ["FAIL L1-configure", "FAIL L4-probe-ran", "!WARN L1-", "!EXEMPT"]),
+            ("NEG the same log, an x86 store-only drv: L1 + L4 FAIL", x86, po(x86), GL14, False, ["FAIL L1-configure", "FAIL L4-probe-ran", "!WARN L1-", "!EXEMPT"]),
+            ("NEG the same log, 2-arg form (no deriver): L1 + L4 FAIL", None, po(svx), GL14, False, ["FAIL L1-configure", "FAIL L4-probe-ran", "!WARN L1-", "!EXEMPT"]),
+            ("NEG exempt sv9gccseed, L2 perl Configure host probe: still FAIL", svx, po(svx), GL14 + "\n" + L2L, False, ["FAIL L2-configure-host", "WARN L1-configure", "EXEMPT class"]),
+            ("NEG exempt drv that is not the out's deriver: L0 FAIL", svx, po(x86), GL14, False, ["FAIL L0-deriver", "!WARN L1-"]),
+            ("NEG a deriver path that does not exist: L0 FAIL", STORE + "9" * 32 + "-gcc-14.3.0.drv", po(svx), GL14, False, ["FAIL L0-deriver"])):
+        lines = []; rc = run_log(o, text, drv, out=lines.append)
+        ok = (rc == 0) == want_pass and all(not any(m[1:] in l for l in lines) if m[0] == "!" else any(m in l for l in lines) for m in musts)   # "!x": x absent
+        bad += not ok
+        print(f"{'ok ' if ok else 'BAD'} log+drv  {label}: {'PASS' if rc == 0 else 'FAIL'}" + ("" if ok else "\n    " + "\n    ".join(lines)))
     return bad
 
 
@@ -2215,10 +2262,10 @@ def main(argv):
     if cmd == "selftest":
         bad = selftest(); print(f"SELFTEST {'PASS' if bad == 0 else 'FAIL'} ({bad} bad)"); return 1 if bad else 0
     if cmd in ("nar", "store", "closure") and rest: return run_out(cmd, rest)
-    if cmd == "log" and rest:
-        # gate-checks.py log <out> <logfile|->: the build log of the out's deriver (nix log <drv>)
+    if cmd == "log" and len(rest) in (2, 3):
+        # gate-checks.py log <out> <logfile|-> [<drv>]: the build log of the out's deriver <drv> (nix log <drv>)
         text = sys.stdin.read() if rest[1] == "-" else open(rest[1], errors="replace").read()
-        return report(rest[0], check_log(text), extra=f" (log: {len(text.splitlines())} lines)")
+        return run_log(rest[0], text, rest[2] if len(rest) == 3 else None)
     print(__doc__); return 2
 
 if __name__ == "__main__":
