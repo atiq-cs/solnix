@@ -117,6 +117,12 @@ derivation {
     # Linux errnos at their illumos (= Linux-meaning) values, not OpenBSD's aliases: userland (Mesa, libdrm) is built
     # against illumos <errno.h>. ETIME -> ETIMEDOUT made iris_bo_busy() never see a busy BO (rcs0 CS errors, lixi).
     ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-errno.patch" ) >&2
+    # KERNEL_LOCK is a no-op here and drm ioctls run in parallel: a leaf lock over the idr/xarray splay trees (a lookup
+    # rotates them) and the shared idr preload entry, and the RCU-only object/context/vma lookups take their writers' lock
+    # (the compat has no RCU). Lixi vmdump.4: a GEM object over-released and freed ~10.5M times (drmobj bufctl panic).
+    ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-idrlock.patch" ) >&2
+    ( cd "$O" && patch -p1 --no-backup-if-mismatch -F0 < "$P/i915/obsd-rculookup.patch" ) >&2
+    [ "$(grep -c 'mtx_enter(&obsd_idr_mtx)' "$O/drm_linux.c")" -ge 20 ] || { echo "FATAL: obsd-idrlock.patch not applied" >&2; exit 1; }
     grep -q '^#define ETIME' "$O/include/linux/errno.h" && { echo "FATAL: linux/errno.h still aliases ETIME" >&2; exit 1; }
 
     echo "obsd drm $(cat "$O/OPENBSD_REV")" >&2
