@@ -104,7 +104,13 @@ async fn refresh(ctx: &Ctx, scan: bool) {
             if let Some(list) = bss {
                 let now = m.boot.get_or_insert_with(Instant::now).elapsed().as_secs() as i32;
                 let mut keep = Vec::new();
-                for b in list {
+                for mut b in list {
+                    // a hidden BSS (empty ESSID) is not listed, as NetworkManager lists only what it can name: COSMIC
+                    // showed each as "<Hidden Network>" (7 of 16 BSSes in one scan). The one we are connected to is,
+                    // named by the association (show-wifi), as NM names a hidden AP from its active connection.
+                    if b.essid.is_empty() {
+                        if w.connected && b.bssid == w.bssid && !w.essid.is_empty() { b.essid = w.essid.clone(); } else { continue; }
+                    }
                     let key = (l.name.clone(), b.bssid.clone());
                     let i = match m.ap_key.get(&key) { Some(&i) => i, None => { m.next_ap += 1; let i = m.next_ap; m.ap_key.insert(key, i); i } };
                     m.aps.insert(i, Ap { bss: b, last_seen: now });

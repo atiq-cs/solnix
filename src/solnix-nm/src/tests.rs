@@ -7,7 +7,8 @@ use std::sync::Mutex as StdMutex;
 
 #[derive(Default)]
 struct Rec { joins: StdMutex<Vec<(String, String, Option<String>, Option<String>)>>, disconnects: StdMutex<Vec<String>>,
-             holds: StdMutex<Vec<(String, bool)>>, uid: StdMutex<u32>, connected: StdMutex<Option<String>>, strength: StdMutex<u8> }
+             holds: StdMutex<Vec<(String, bool)>>, uid: StdMutex<u32>, connected: StdMutex<Option<String>>, strength: StdMutex<u8>,
+             hidden: StdMutex<Vec<String>> }   // BSSIDs the scan also returns with an empty ESSID
 
 struct RecBe(Arc<Rec>);
 impl backend::Backend for RecBe {
@@ -16,9 +17,15 @@ impl backend::Backend for RecBe {
     }
     fn scan<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, Option<Vec<sys::Bss>>> {
         let st = match *self.0.strength.lock().unwrap() { 0 => 80, v => v };
-        Box::pin(async move { Some(vec![
+        let hidden = self.0.hidden.lock().unwrap().clone();
+        Box::pin(async move { let mut v = vec![
             sys::Bss { essid: "cafe".into(), bssid: "00:00:5E:00:53:F3".into(), sec: "wpa".into(), strength: st, mode: "a".into(), speed_mbps: 54 },
-            sys::Bss { essid: "open-net".into(), bssid: "00:00:5E:00:53:F4".into(), sec: "none".into(), strength: 60, mode: "g".into(), speed_mbps: 54 }]) })
+            sys::Bss { essid: "open-net".into(), bssid: "00:00:5E:00:53:F4".into(), sec: "none".into(), strength: 60, mode: "g".into(), speed_mbps: 54 }];
+            for b in hidden {   // a hidden BSS: dladm prints an empty ESSID (and the connected one's ESSID too when it hides it)
+                v.retain(|x| x.bssid != b);
+                v.push(sys::Bss { essid: String::new(), bssid: b, sec: "wpa".into(), strength: 50, mode: "n".into(), speed_mbps: 54 });
+            }
+            Some(v) })
     }
     fn wifi_status<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, sys::WifiStatus> {
         let c = self.0.connected.lock().unwrap().clone();
@@ -50,10 +57,13 @@ impl backend::Backend for RecBe {
 
 async fn daemon(tag: &str) -> (Arc<Rec>, Connection, std::path::PathBuf) { let (r, c, d, _) = daemon_ctx(tag).await; (r, c, d) }
 
-async fn daemon_ctx(tag: &str) -> (Arc<Rec>, Connection, std::path::PathBuf, Arc<Ctx>) {
+async fn daemon_ctx(tag: &str) -> (Arc<Rec>, Connection, std::path::PathBuf, Arc<Ctx>) { daemon_with(tag, Rec::default()).await }
+
+/// daemon_ctx with the radio's state set before the daemon's first scan (serve runs one)
+async fn daemon_with(tag: &str, rec: Rec) -> (Arc<Rec>, Connection, std::path::PathBuf, Arc<Ctx>) {
     let d = std::env::temp_dir().join(format!("solnix-nm-it-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
-    let rec = Arc::new(Rec::default());
+    let rec = Arc::new(rec);
     let conn = zbus::connection::Builder::session().unwrap().build().await.expect("a session bus: run under dbus-run-session");
     let name = format!("org.solnix.nmtest.t{}{}", std::process::id(), tag.replace('-', ""));
     let ctx = Arc::new(Ctx { m: Mutex::new(Model { wireless_enabled: true, ..Default::default() }),
@@ -230,5 +240,51 @@ async fn a_refresh_that_changes_nothing_announces_nothing() {
                  "org.freedesktop.NetworkManager.Device.Wireless.ActiveAccessPoint"] {
         assert!(o.iter().any(|p| p == want), "a disconnect must announce {want}: {o:?}");
     }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+// A BSS with an empty ESSID (a hidden network: 7 of 16 in one scan on a laptop) is not listed: NetworkManager lists only
+// the networks it can name, and COSMIC drew each as "<Hidden Network>". The AP we are connected to stays listed, hidden
+// or not, so ActiveAccessPoint always names a listed object. NEG: drop the filter in refresh() and the first assert fails.
+#[tokio::test(flavor = "current_thread")]
+async fn hidden_bsses_are_not_listed_unless_connected() {
+    let (rec, client, d, ctx) = daemon_ctx("hidden").await;
+    *rec.hidden.lock().unwrap() = vec!["00:00:5E:00:53:A1".into(), "00:00:5E:00:53:A2".into()];
+    refresh(&ctx, true).await; publish(&ctx).await;
+    let dest = dest_of("hidden");
+    let dev: zbus::Proxy = zbus::proxy::Builder::new(&client).destination(dest.clone()).unwrap().path(format!("{NM}/Devices/1")).unwrap()
+        .interface("org.freedesktop.NetworkManager.Device.Wireless").unwrap()
+        .cache_properties(zbus::proxy::CacheProperties::No).build().await.unwrap();
+    let ssids = |paths: Vec<OwnedObjectPath>| { let (c, d) = (client.clone(), dest.clone()); async move {
+        let mut v = Vec::new();
+        for p in paths {
+            let ap: zbus::Proxy = zbus::proxy::Builder::new(&c).destination(d.clone()).unwrap().path(p).unwrap()
+                .interface("org.freedesktop.NetworkManager.AccessPoint").unwrap()
+                .cache_properties(zbus::proxy::CacheProperties::No).build().await.unwrap();
+            v.push(String::from_utf8(ap.get_property::<Vec<u8>>("Ssid").await.unwrap()).unwrap());
+        }
+        v.sort(); v } };
+    let prop: Vec<OwnedObjectPath> = dev.get_property("AccessPoints").await.unwrap();
+    assert_eq!(ssids(prop).await, vec!["cafe", "open-net"], "the AccessPoints property lists no hidden BSS");
+    let all: Vec<OwnedObjectPath> = dev.call("GetAllAccessPoints", &()).await.unwrap();
+    assert_eq!(ssids(all).await, vec!["cafe", "open-net"], "neither does GetAllAccessPoints");
+    let _ = std::fs::remove_dir_all(&d);
+    // a daemon that starts connected to "cafe", whose BSS ...F3 hides its ESSID in every scan: listed, named "cafe", active
+    let rec = Rec { connected: StdMutex::new(Some("cafe".into())),
+                    hidden: StdMutex::new(vec!["00:00:5E:00:53:F3".into(), "00:00:5E:00:53:A1".into()]), ..Default::default() };
+    let (_rec, client, d, ctx) = daemon_with("hidden2", rec).await;
+    refresh(&ctx, true).await; publish(&ctx).await;
+    let dest = dest_of("hidden2");
+    let dev: zbus::Proxy = zbus::proxy::Builder::new(&client).destination(dest.clone()).unwrap().path(format!("{NM}/Devices/1")).unwrap()
+        .interface("org.freedesktop.NetworkManager.Device.Wireless").unwrap()
+        .cache_properties(zbus::proxy::CacheProperties::No).build().await.unwrap();
+    let prop: Vec<OwnedObjectPath> = dev.get_property("AccessPoints").await.unwrap();
+    let active: OwnedObjectPath = dev.get_property("ActiveAccessPoint").await.unwrap();
+    assert!(prop.contains(&active), "the active AP {active:?} is listed: {prop:?}");
+    assert_eq!(prop.len(), 2, "the connected hidden BSS and open-net, not the other hidden one: {prop:?}");
+    let ap: zbus::Proxy = zbus::proxy::Builder::new(&client).destination(dest.clone()).unwrap().path(active.clone()).unwrap()
+        .interface("org.freedesktop.NetworkManager.AccessPoint").unwrap()
+        .cache_properties(zbus::proxy::CacheProperties::No).build().await.unwrap();
+    assert_eq!(ap.get_property::<Vec<u8>>("Ssid").await.unwrap(), b"cafe".to_vec(), "the connected hidden AP is named by its association");
     let _ = std::fs::remove_dir_all(&d);
 }
