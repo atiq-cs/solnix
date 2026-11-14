@@ -133,6 +133,11 @@ in
     libexif scdoc minizip fast-float hiredis lmdb range-v3 cmark cfitsio geoip libiscsi dotconf jpegoptim sfsexp uriparser plutosvg
     libimobiledevice-glue taglib libzip pugixml snappy bdftopcf libmaxminddb rpcsvc-proto opencore-amr aws-checksums aws-c-compression
     aws-c-sdkutils;
+  # a64x b3
+  inherit (cliQ) aws-c-cal gsl mtools potrace libasyncns libltc libmspack peg xbitmaps libdeflate htslib libhwy libuv uvwasi xfs
+    libunibreak libdivsufsort pegtl libssh rtrlib libyubikey clipper2 codec2 lunasvg seqtk protozero enet sparsehash libmpcdec samtools
+    immer libb64 jsoncons small primesieve primecount qrcodegen fstrm libedit capnproto msgpack-cxx abseil-cpp muparser libunistring
+    jsoncpp;
   inherit (cli) which;   # c-recipes3.nix: wdiff's test suite runs it (./default.nix perPkg); its own aarch64 job
 } // builtins.mapAttrs (_: retarget) {
   inherit (desk) sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts noto-fonts-color-emoji cosmic-wallpapers;

@@ -374,8 +374,19 @@ let
       # a64x: libvpx's configure has no arm64-solaris target; x86_64-solaris-gcc adds -m64 and x86 asm (configure: "Unable to invoke
       # compiler", dixa). generic-gnu: the plain C build, as nixpkgs picks for targets libvpx does not know.
       libvpx = { build = rep1 "libvpx" "--target=x86_64-solaris-gcc" "--target=generic-gnu" args.build; };
+      # a64x: gsl's -mno-fma is an x86 flag (aarch64 gcc rejects it); nixpkgs sets it on x86_64 only, so none here. configure picks
+      # fp-solaris.c for *-solaris*, whose <ieeefp.h> FP_X_* trap macros illumos has on x86/sparc only: the generic interface (fp.c's
+      # fallback), as on a host gsl does not know (gsl_ieee_set_mode reports unsupported; GSL_IEEE_MODE unset is the default).
+      gsl = { build = rep1 "gsl" "CFLAGS=\"-O2 -g -mno-fma\"" "CFLAGS=\"-O2 -g\" ac_cv_c_ieee_interface=unknown" args.build; };
+      # a64x: libhwy's in-build check asks for SSE2, x86's baseline target. aarch64's is NEON_WITHOUT_AES (NEON proper needs AES
+      # detected): either NEON target (dixa: "ok 1 0" for SSE2 and for NEON alone).
+      libhwy = { build = rep1 "libhwy" "(hwy::SupportedTargets() & HWY_SSE2) != 0" "(hwy::SupportedTargets() & (HWY_NEON | HWY_NEON_WITHOUT_AES)) != 0" args.build; };
+      # a64x: libssh's cmake runs find_package(Python) for the optional abimap symbol-map tool (not installed, so unused): it found the
+      # stage0 devroot's /bin/python3.13 (gate L5, the a64x host), as opencl-headers. Off; plus cmakePP's export (store deps).
+      libssh = { build = "export CMAKE_PREFIX_PATH=\"\${CMAKE_PREFIX_PATH//;/:}\"\n" + rep1 "libssh" "-DUNIT_TESTING=OFF" "-DUNIT_TESTING=OFF -DCMAKE_DISABLE_FIND_PACKAGE_Python=ON" args.build; };
     } // builtins.listToAttrs (map (n: { name = n; value = cmakePP; })   # a64x: the new cmake attrs with store deps (cmakePP below)
-      [ "aws-c-compression" "aws-c-sdkutils" "aws-checksums" "cfitsio" "gflags" "libzip" "plutosvg" "taglib" "uriparser" ])
+      [ "aws-c-compression" "aws-c-sdkutils" "aws-checksums" "cfitsio" "gflags" "libzip" "plutosvg" "taglib" "uriparser"
+        "aws-c-cal" "uvwasi" "rtrlib" "lunasvg" "primecount" "capnproto" "msgpack-cxx" ])
     ).${args.pname} or { };
       # a64x: the a64h path exports CMAKE_PREFIX_PATH ';'-joined, which cmake splits on ':' on Unix, so find_package sees no store dep
       # (game-music-emu: "ZLib library not found", dixa). x86's cmakeX joins with ':'; per recipe here, so no served aarch64 drv moves.
