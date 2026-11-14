@@ -98,3 +98,13 @@ driver build patches them and runs the vmdump.4 sequence through them: a
 stray put to 0, then a get from 0 and a put. It must release the object once
 and report. The negative control, the headers without obsd-refcount.patch,
 releases the object twice and must fail.
+
+## Test
+
+`src/drm-port/i915/test/test_idr_race.c` (`make -C src/drm-port/i915
+test-idr OBSD=...`) compiles the idr/xarray section of the patched
+`drm_linux.c` into a userland program and hammers it from threads sharing one
+idr: handle alloc/find/remove, `idr_for_each`, and two other "files" sharing
+the preload entry. The negative control is the same test built from the
+unpatched `drm_linux.c`, and it must fail (a lost or duplicated entry, a handle
+that names another file's object, or a broken tree).

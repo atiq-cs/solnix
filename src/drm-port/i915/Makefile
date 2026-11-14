@@ -103,11 +103,40 @@ test-kref: test/test_kref.c obsd-norcu.patch obsd-refcount.patch
 	@if ./test/test_kref_neg > test/kref/neg.out; then echo "NEGATIVE CONTROL (kref) DID NOT FAIL"; exit 1; \
 	 else echo "negative control (no obsd-refcount.patch) FAILS as required:"; grep ^FAIL test/kref/neg.out; fi
 
+# test-idr: the idr/xarray section of drm_linux.c (OBSD = the pinned OpenBSD
+# tree) under threads that share drm files, as drm ioctls run here with
+# KERNEL_LOCK a no-op. With obsd-idrlock.patch it must pass every run; the
+# negative control, the same section without the patch, must fail every run.
+# IDR_RUNS runs of IDR_SECS seconds each.
+IDR_RUNS ?= 8
+IDR_SECS ?= 3
+# from the idr_cmp prototype to sg_alloc_table, less its return-type line
+IDR_CUT = awk '/^sg_alloc_table/ && p {exit} p {print prev} {prev = $$0} /^int idr_cmp\(struct idr_entry \*, struct idr_entry \*\);/ {p = 1}'
+test-idr: test/test_idr_race.c obsd-idrlock.patch
+	mkdir -p test/idr/a test/idr/sys
+	: > test/idr/sys/_null.h
+	cp $(OBSD)/drm_linux.c test/idr/a/drm_linux.c
+	cd test/idr/a && patch -s -p1 -F0 < ../../../obsd-idrlock.patch
+	$(IDR_CUT) test/idr/a/drm_linux.c > test/idr/fixed.c
+	$(IDR_CUT) $(OBSD)/drm_linux.c > test/idr/orig.c
+	@test "`awk '/mtx_enter\(&obsd_idr_mtx\)/{n++} END{print n+0}' test/idr/fixed.c`" -ge 20 || { echo "FAIL: no idr lock in the cut"; exit 1; }
+	@test "`awk '/^(idr_alloc|__xa_load|idr_find)\(/{n++} END{print n+0}' test/idr/orig.c`" -eq 3 || { echo "FAIL: the region cut moved"; exit 1; }
+	$(CC) $(UFLAGS) -Itest/idr -Wno-unused-function '-DIDR_REGION="idr/fixed.c"' -o test/test_idr test/test_idr_race.c -lpthread
+	$(CC) $(UFLAGS) -Itest/idr -Wno-unused-function '-DIDR_REGION="idr/orig.c"' -o test/test_idr_neg test/test_idr_race.c -lpthread
+	@i=0; while [ $$i -lt $(IDR_RUNS) ]; do i=$$((i+1)); \
+	  IDR_SECS=$(IDR_SECS) ./test/test_idr || { echo "FAIL: run $$i of $(IDR_RUNS)"; exit 1; }; done
+	@i=0; neg=0; while [ $$i -lt $(IDR_RUNS) ]; do i=$$((i+1)); \
+	  if IDR_SECS=$(IDR_SECS) ./test/test_idr_neg > test/idr/neg$$i.out 2>&1; then :; else neg=$$((neg+1)); fi; done; \
+	  echo "negative control (no obsd-idrlock.patch): $$neg of $(IDR_RUNS) runs FAIL"; \
+	  cat test/idr/neg*.out | grep '^FAIL' | sed 's/[0-9][0-9]*/N/g' | sort | uniq -c | sort -rn | head -8; \
+	  test $$neg -eq $(IDR_RUNS) || { echo "NEGATIVE CONTROL DID NOT FAIL EVERY RUN"; exit 1; }
+
 clean:
 	rm -f $(OBJS) test_pciid test_pciid_neg test_pciid_neg.out \
 	    test_pciid_neg2 test_pciid_neg2.out \
 	    test/test_console test/test_console_neg test/test_console_neg.out \
 	    test/test_console_tem_neg test/test_console_tem_neg.out \
-	    test/test_kref test/test_kref_neg test/kref/neg.out
+	    test/test_kref test/test_kref_neg test/kref/neg.out \
+	    test/test_idr test/test_idr_neg test/idr/*.c test/idr/*.out test/idr/a/* test/idr/sys/_null.h
 
-.PHONY: obj test test-ioc test-console test-kref probe clean
+.PHONY: obj test test-ioc test-console test-kref test-idr probe clean
