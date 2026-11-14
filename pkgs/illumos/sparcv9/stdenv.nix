@@ -14,8 +14,10 @@ let
   sv9 = d: let
       # illumos-bin.sh finds elfedit/elfdump/digest in x86's world (a nativeTools entry); sparcv9 has no world and its gate proto no
       # binaries, so IB stays the host's /usr/bin, as on aarch64 (bootstrap tools by absolute path, never on PATH: drv-gate A1)
-      from = [ "*/amd64|" "lib/amd64" "$gccLib/amd64" "${../config-x86.site}" "${../config.site}" ". ${../illumos-bin.sh}" ];
-      to = [ "*/sparcv9|" "lib/sparcv9" "$gccLib/sparcv9" "${./config.site}" "${./config.site}" "IB=/usr/bin" ];
+      # ../split-debug-od.sh (store-only text only; the seed's is ../split-debug.sh) writes the build-id note little-endian: sparcv9's
+      # copy writes it in the ELF's byte order (readelf rejected the LE note on jansson's big-endian .so, sv9q2)
+      from = [ "*/amd64|" "lib/amd64" "$gccLib/amd64" "${../config-x86.site}" "${../config.site}" ". ${../illumos-bin.sh}" "${../split-debug-od.sh}" ];
+      to = [ "*/sparcv9|" "lib/sparcv9" "$gccLib/sparcv9" "${./config.site}" "${./config.site}" "IB=/usr/bin" "${./split-debug-od.sh}" ];
       r = builtins.replaceStrings from to;
       a = builtins.removeAttrs d.drvAttrs [ "buildKey" ];
       a' = a // { args = map r a.args; build = r a.build; } // (if a ? PATH then { PATH = r a.PATH; } else { });
@@ -163,7 +165,12 @@ let
         [ -x $out/bin/$t ] || { echo "FATAL: no $t" >&2; exit 1; }; done
     '' ];
   };
-  finalMk = mk { buildTools = [ farm ]; storeOnly = true; defaultNativeTools = [ seed.coreutils seed.findutils ]; };
+  finalMk0 = mk { buildTools = [ farm ]; storeOnly = true; defaultNativeTools = [ seed.coreutils seed.findutils ]; };
+  # the store-only text must run sparcv9's split-debug-od.sh (a rewrite that found nothing would ship x86's little-endian note)
+  has = s: x: builtins.replaceStrings [ x ] [ "" ] s != s;
+  finalMk = args: let d = finalMk0 args; t = toString d.drvAttrs.args; in
+    if !(has t "${./split-debug-od.sh}") || has t "${../split-debug-od.sh}"
+    then throw "sparcv9 stdenv: the store-only text does not run ./split-debug-od.sh" else d;
 in {
   inherit seed farm;
   seedMkSrcPkg = seedMk;   # the seed instance's (host PATH): a leaf built on it FAILs drv-gate A1, the negative control for mkSrcPkg
