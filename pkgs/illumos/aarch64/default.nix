@@ -384,9 +384,18 @@ let
       # a64x: libssh's cmake runs find_package(Python) for the optional abimap symbol-map tool (not installed, so unused): it found the
       # stage0 devroot's /bin/python3.13 (gate L5, the a64x host), as opencl-headers. Off; plus cmakePP's export (store deps).
       libssh = { build = "export CMAKE_PREFIX_PATH=\"\${CMAKE_PREFIX_PATH//;/:}\"\n" + rep1 "libssh" "-DUNIT_TESTING=OFF" "-DUNIT_TESTING=OFF -DCMAKE_DISABLE_FIND_PACKAGE_Python=ON" args.build; };
+      # a64x: libz's hand-written configure finds its archiver with `which`, which the store-only PATH lacks ("no library archiver",
+      # the a64x host): the store which, as wdiff.
+      libz = { nativeTools = [ homePkgs.cliSet.which ] ++ args.nativeTools; };
+      # a64x: rhash's hand-written configure rejects the autoconf --build lp64Fix adds to every `./configure --prefix=` ("unknown
+      # option", the a64x host): --libdir first escapes that rewrite; it detects the host by uname, as on x86.
+      rhash = { build = rep1 "rhash" "./configure --prefix=\"$out\" --libdir=\"$out/lib/amd64\" --mandir" "./configure --libdir=\"$out/lib/amd64\" --prefix=\"$out\" --mandir" args.build; };
+      # a64x: discount's SONAME check runs a bare elfdump, which the store-only PATH lacks: /usr/bin/elfdump, as the other checks here.
+      discount = { build = rep1 "discount" "( elfdump -d \"$out/lib/amd64/libmarkdown.so" "( /usr/bin/elfdump -d \"$out/lib/amd64/libmarkdown.so" args.build; };
     } // builtins.listToAttrs (map (n: { name = n; value = cmakePP; })   # a64x: the new cmake attrs with store deps (cmakePP below)
       [ "aws-c-compression" "aws-c-sdkutils" "aws-checksums" "cfitsio" "gflags" "libzip" "plutosvg" "taglib" "uriparser"
-        "aws-c-cal" "uvwasi" "rtrlib" "lunasvg" "primecount" "capnproto" "msgpack-cxx" ])
+        "aws-c-cal" "uvwasi" "rtrlib" "lunasvg" "primecount" "capnproto" "msgpack-cxx"
+        "miniupnpc" "protobuf" "srt" "hdrhistogram_c" ])
     ).${args.pname} or { };
       # a64x: the a64h path exports CMAKE_PREFIX_PATH ';'-joined, which cmake splits on ':' on Unix, so find_package sees no store dep
       # (game-music-emu: "ZLib library not found", dixa). x86's cmakeX joins with ':'; per recipe here, so no served aarch64 drv moves.

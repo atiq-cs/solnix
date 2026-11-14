@@ -138,6 +138,10 @@ in
     libunibreak libdivsufsort pegtl libssh rtrlib libyubikey clipper2 codec2 lunasvg seqtk protozero enet sparsehash libmpcdec samtools
     immer libb64 jsoncons small primesieve primecount qrcodegen fstrm libedit capnproto msgpack-cxx abseil-cpp muparser libunistring
     jsoncpp;
+  # a64x b4
+  inherit (cliQ) byacc miniupnpc zlib-ng eigen imath libev loguru protobuf libidn2 libtasn1 lzo termcolor libssh2 jansson
+    jemalloc libxcrypt srt cli11 verdict exprtk asio robin-map vo-amrwbenc hdrhistogram_c uavs3d http-parser rhash yyjson nbytes nghttp3
+    argtable heatshrink linenoise msgpack-c libz celt bbe cadical chmlib dash discount fcgi judy kytea;
   inherit (cli) which;   # c-recipes3.nix: wdiff's test suite runs it (./default.nix perPkg); its own aarch64 job
 } // builtins.mapAttrs (_: retarget) {
   inherit (desk) sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts noto-fonts-color-emoji cosmic-wallpapers;
