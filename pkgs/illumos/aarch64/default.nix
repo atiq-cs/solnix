@@ -361,7 +361,17 @@ let
       # wdiff's test suite runs `which` (x86: the world's); cli/c-recipes3.nix's store which (its own aarch64 job), as nixpkgs' nativeCheckInputs
       wdiff = { nativeTools = [ homePkgs.cliSet.which ] ++ args.nativeTools; };
       ecdsautils = { build = rep1 "ecdsautils" "-DLIB_SUFFIX=/amd64" "-DLIB_SUFFIX=" args.build; };
+      # a64x: quut.com answers `Content-Encoding: identity`, which the builders' nix 2.24 builtin:fetchurl rejects ("No such filter
+      # 'identity'", dixa). Fedora's lookaside copy, the same sha256: the same fixed-output path (name = the URL's base name).
+      gsm = { src = args.src // { url = "https://src.fedoraproject.org/repo/pkgs/gsm/gsm-1.0.24.tar.gz/sha512/d9563a81f0911ac01c7dd2b9c33a18f57c2978d0f446f942d89718286c552fce353c2a2b38e5587d9c51d01c08f4f53fd4c2f8ebff99597dd8488a7c2c5c064f/gsm-1.0.24.tar.gz"; }; };
+      game-music-emu = cmakePP;
+      # opencl-headers' CMakeLists.txt runs find_package(Python3) (its tests' generator, BUILD_TESTING=OFF here), which found the stage0
+      # devroot's /bin/python3.13 (gate L5, dixa; x86's host has none). Off: the headers do not need it.
+      opencl-headers = { build = rep1 "opencl-headers" "-DBUILD_TESTING=OFF" "-DBUILD_TESTING=OFF -DCMAKE_DISABLE_FIND_PACKAGE_Python3=ON" args.build; };
     }.${args.pname} or { };
+      # a64x: the a64h path exports CMAKE_PREFIX_PATH ';'-joined, which cmake splits on ':' on Unix, so find_package sees no store dep
+      # (game-music-emu: "ZLib library not found", dixa). x86's cmakeX joins with ':'; per recipe here, so no served aarch64 drv moves.
+      cmakePP = { build = "export CMAKE_PREFIX_PATH=\"\${CMAKE_PREFIX_PATH//;/:}\"\n" + args.build; };
       a64Tool = t: if (t.pname or "") == "bison" then final.bison else if (t.pname or "") == "autoconf-archive" then final.autoconf-archive else t;
       rep1 = what: a: b: s: let r = builtins.replaceStrings [ a ] [ b ] s; in if r == s then throw "a64w ${what}: anchor not found: ${a}" else r;
       # a64t: the security/version bumps (./bumps.nix), on top of the fixes above (they see the recipe as fixed here)

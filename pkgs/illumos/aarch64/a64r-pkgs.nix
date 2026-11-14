@@ -45,7 +45,10 @@ let
   # which aarch64 has none of (no aarch64 binutils upstream): sh, already on every a64h PATH. zipHeaders (tnt, jama): this system, the
   # set's gcc wrapper and a64.plain (store-only builder and PATH, as hunspell-dict-en-us).
   cliQ = homePkgs.cliWith { inherit (gtkTools) meson gperf; inherit (gtools) samurai; inherit (gtkBase) libpng; nasm = null; gtkTools = a64.shAlias;
-    inherit system; inherit (srcPkgs) gccWrapper; zipDrv = a: derivation (a64.plain a); };
+    inherit system; inherit (srcPkgs) gccWrapper; zipDrv = a: derivation (a64.plain a);
+    # a64x: c-recipes4.nix's font/text recipes (libxft, woff2, libass, ...) on gtk/base.nix's set (freetype 2.14.3 + fontconfig 2.18.1, the
+    # served aarch64 rows) and the .zip noto-sans; c-qnew7.nix's libjpeg-turbo users on gtk/base.nix's (served)
+    inherit (gtkBase) freetype fontconfig harfbuzz fribidi glib pcre2 libjpeg-turbo ftPriv; noto-sans = cosmicData'.noto-sans; };
   # solnix-torrent.nix's libtorrent-rasterbar (the community seeder's client library): the set's openssl, nixChain's boost (headers)
   torrent = import ../solnix-torrent.nix { inherit mkSrcPkg; inherit (srcPkgs) openssl gccWrapper; inherit (srcPkgs.nixChain) boost; inherit (cli) cmake;
     inherit (base) pkgconf; binutils = null; gcc = null; gate = null; libc = null; inherit system; };
@@ -120,6 +123,11 @@ in
     libilbm dns-root-data lrzsz libdicom cyclonedds easel libtommath libkate libhubbub ncompress pbzip2 memtailor curlpp gnulib libdatrie
     libmediainfo expected-lite libuecc libtomcrypt pigz mathic libthai mediainfo ecdsautils;
   inherit (cliQ) lzip uthash netsurf-buildsystem libparserutils libzen libogg check gtest;
+  # a64x: c-recipes3.nix / c-recipes4.nix (a64w next-batch2) and c-qnew7.nix / c-qnew8.nix attrs with an aarch64 queue job at the
+  # x86 version, by queue priority (b1)
+  inherit (cliQ) libxau libxdmcp spdlog xtrans libpthread-stubs doctest lerc libnet libpipeline game-music-emu vulkan-headers util-macros amf-headers
+    opencl-headers cjson utf8proc zimg nv-codec-headers spirv-headers libargon2 soundtouch libmpg123 libconfig soxr ladspa-header libfontenc
+    popt yasm cereal font-util cmocka libmodplug gsm llhttp zopfli libxshmfence openapv libxfont_2 libvorbis libmd libbsd;
   inherit (cli) which;   # c-recipes3.nix: wdiff's test suite runs it (./default.nix perPkg); its own aarch64 job
 } // builtins.mapAttrs (_: retarget) {
   inherit (desk) sound-theme-freedesktop adwaita-icon-theme dejavu-fonts liberation-fonts noto-fonts-color-emoji cosmic-wallpapers;
