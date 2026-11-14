@@ -88,6 +88,10 @@ tracing the actual dependency or measuring the actual value.
   statement: `bash -n x.sh || exit 1; setsid nohup bash x.sh > out 2>&1 < /dev/null &`.
   Spot it with `get_subagent_result`'s "Last progress: N s ago" and a long-lived `ssh ... nohup`
   on the orchestrator host; killing that ssh pid frees the agent.
+* **Never `pkill` on a shared or human machine; `pkill -T ""` matches everything.** desk7 ran `pkill -T "$id"` on lixi with
+  `$id` empty (`newtask -v` failed for an unprivileged user) and killed every process gburd owned. The maintainer had
+  logged out five hours earlier, so only ssh sessions died. Kill only PIDs your own script started (`$!`), and check
+  an id or pgid is a non-empty number before signalling it.
 * **`$(...)` inside a double-quoted remote command runs on the LOCAL host.** desk7 wedged 4.8 h on
   `lx.sh "... prstat -m -p $(ps -eo pid,comm | awk ...) 1 2"`: werk ran the `ps`, found no cosmic-comp, and lixi got
   `prstat -m -p 1 2`, which samples forever. Put remote logic in a script file, or single-quote it, and bound every
