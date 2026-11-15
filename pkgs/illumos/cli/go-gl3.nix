@@ -429,4 +429,132 @@ in {
   onmetal-image = pkg { pname = "onmetal-image"; version = "0.1.1"; src = gh "onmetal/onmetal-image" "v0.1.1" "51ec2bbf747c016177ad7d8f3c2c9fbe62833754278e4763f510c763974f0911";
     vendorHash = "sha256-naXpuKjSXAIu/qykk/HuMa1NjeAu6IFsgSZT0smogQg="; subPkgs = "./cmd";
     check = chk ''"$out/bin/cmd" --help'' "[-]-docker-config-path"; };
+  # openfga-cli (Apache-2.0): cross-platform CLI to interact with an OpenFGA server.
+  openfga-cli = pkg { pname = "openfga-cli"; version = "0.8.2"; src = gh "openfga/cli" "v0.8.2" "03927ed2b878e98f3239603ec0bc0b1c1bcc50a6372dcf2f5c471d135dbacf05";
+    vendorHash = "sha256-pnaPy4yv4SEPe2/aqWA33xHIF6NQMIIEcHadrpHG/u8="; subPkgs = "./cmd/fga"; ldflags = "-s -w -X github.com/openfga/cli/internal/build.Version=0.8.2 -X github.com/openfga/cli/internal/build.Commit=0.8.2 -X github.com/openfga/cli/internal/build.Date=19700101";
+    check = chk ''"$out/bin/fga" --version'' "0\\.8\\.2"; };
+  # popeye (Apache-2.0): kubernetes cluster resource sanitizer.
+  popeye = pkg { pname = "popeye"; version = "0.22.1"; src = gh "derailed/popeye" "v0.22.1" "f8eef3d6b9cda24f4d9bdc24620c1368cd6a749f1321a499e88b339258e01d92";
+    vendorHash = "sha256-u5UwJmWtiYuyZavrWCugl26chAwRmq5m5Cxn6D3nbiQ="; subPkgs = "."; ldflags = "-s -w -X github.com/derailed/popeye/cmd.version=0.22.1 -X github.com/derailed/popeye/cmd.commit=0.22.1";
+    check = chk ''"$out/bin/popeye" version'' "0\\.22\\.1"; };
+  # promql-cli (Apache-2.0): command-line tool to query a Prometheus server with PromQL and visualize the output.
+  promql-cli = pkg { pname = "promql-cli"; version = "0.3.0"; src = gh "nalbury/promql-cli" "v0.3.0" "0c25f86dfba38ffb932959b57b2b88fbd3f0a111116d2cf18288b5b1c4a7d151";
+    vendorHash = "sha256-9rPIGhokd1jEIzkldaAf/w7U9UYicDqrvV8pGIhitzA="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/promql-cli" --help'' "[-]-auth-credentials-file"; };
+  # proxyt (MIT): simple proxy for the Tailscale control plane.
+  proxyt = pkg { pname = "proxyt"; version = "0.0.7"; src = gh "jaxxstorm/proxyt" "refs/tags/v0.0.7" "8803d01e5731c2c2bc7c95c32f7e89ed2a07b9ace2cddd8db2d87d24d05d42ee";
+    vendorHash = "sha256-jzQOSXhx3apLPASExTnj6jT9z3aXkqI7CfLHV1dM4PQ="; subPkgs = "."; ldflags = "-s -w -X=github.com/jaxxstorm/proxyt/cmd.Version=0.0.7";
+    check = chk ''"$out/bin/proxyt" --version'' "0\\.0\\.7"; };
+  # pv-migrate (AFL-2.0): CLI tool to easily migrate Kubernetes persistent volumes.
+  pv-migrate = pkg { pname = "pv-migrate"; version = "3.6.1"; src = gh "utkuozdemir/pv-migrate" "refs/tags/v3.6.1" "23c6811740ccb3135151e3083bd5500f336161d0a70e76c68d8b9f87d85d071a";
+    vendorHash = "sha256-bYcNX3cYvOVDt2nh6S/GVgowabZPISY7Fk2996DlZTg="; subPkgs = "./cmd/pv-migrate"; ldflags = "-s -w -X main.version=3.6.1 -X main.commit=3.6.1 -X main.date=1970-01-01-00:00:01";
+    check = chk ''"$out/bin/pv-migrate" --version'' "3\\.6\\.1"; };
+  # rancher (Apache-2.0): CLI tool for interacting with your Rancher Server.
+  rancher = pkg { pname = "rancher"; version = "2.15.3"; src = gh "rancher/cli" "refs/tags/v2.15.3" "c9ea33994de4c4600a403fd6c90545d3481b60fe4e5e96318dbc28c40faa7c68";
+    vendorHash = "sha256-ruWlBe10Rn7PX/SW/1QStGxoGeEO5MlcYWzgalb6Cdk="; subPkgs = "."; ldflags = "-w -s -X main.VERSION=2.15.3 -extldflags -static";
+    check = chk ''"$out/bin/cli" --version'' "2\\.15\\.3"; };
+  # readium (BSD-3-Clause): CLI utility with support for a wide range of commands for ebooks, comics and audiobooks.
+  readium = pkg { pname = "readium"; version = "0.10.1"; src = gh "readium/cli" "refs/tags/v0.10.1" "6ef3d7bbfe533b5b2a69da9babf0bef11f4fc26f17798941481737166bb822c9";
+    vendorHash = "sha256-oumpZvlR/RM3S/AbYWzPkEx6hQtuXDoRG+htkoKxRNU="; subPkgs = "./cmd"; ldflags = "-X=github.com/readium/cli/internal/version.Version=v0.10.1";
+    check = chk ''"$out/bin/cmd" --version'' "0\\.10\\.1"; };
+  # spicedb (Apache-2.0): open source permission database.
+  spicedb = pkg { goPkgs = go_1_27; pname = "spicedb"; version = "1.57.0"; src = gh "authzed/spicedb" "refs/tags/v1.57.0" "d9ef895cd0544ac43af5773d68d08c8e7c6bc02ac4fd21357e037715824759df";
+    vendorHash = "sha256-JL+qlRpCE0tTs6c1TRcrc7LL2eXlvo52Ow7K3TcRnec="; subPkgs = "./cmd/spicedb"; ldflags = "-X 'github.com/jzelinskie/cobrautil/v2.Version=v1.57.0'";
+    check = chk ''"$out/bin/spicedb" version'' "1\\.57\\.0"; };
+  # totp-cli (MIT): authy/Google Authenticator like TOTP CLI tool written in Go.
+  totp-cli = pkg { pname = "totp-cli"; version = "1.9.2"; src = gh "yitsushi/totp-cli" "refs/tags/v1.9.2" "c8b87c7854f373423dba2f8c6167c2836b6ae1f66b29b1becb505c277a00c54f";
+    vendorHash = "sha256-B2Qn6ZAGlJ1dG4KiAPC+G+AzrwfugnISVbdjwhjiBr8="; subPkgs = ".";
+    check = chk ''"$out/bin/totp-cli" --help'' "totp-cli - Authy/Google Authenticator li"; };
+  # uplosi (Apache-2.0): upload OS images to cloud provider.
+  uplosi = pkg { pname = "uplosi"; version = "0.4.0"; src = gh "edgelesssys/uplosi" "refs/tags/v0.4.0" "c3edfb08f1198e110c1ed08d19fc02b8abb9849088b503d486d7a557a5ba6af5";
+    vendorHash = "sha256-Ne2qgWQaV9ED0IWX9TNVzsVDhK8iyJ5uklkzQKbX5q0="; subPkgs = "."; ldflags = "-s -X main.version=0.4.0";
+    check = chk ''"$out/bin/uplosi" --version'' "0\\.4\\.0"; };
+  # usque (MIT): open-source reimplementation of the Cloudflare WARP client's MASQUE protocol.
+  usque = pkg { pname = "usque"; version = "4.2.1"; src = gh "Diniboy1123/usque" "refs/tags/v4.2.1" "cd0e9c89353915cb74a0877ab6fc68ee158adf8724ef9aab878a4d90edcb1d72";
+    vendorHash = "sha256-Ti4hhkaiHiHmyZfgT0fitVndcoT/0IjNBr/S4U7QQDE="; subPkgs = "."; ldflags = "-s -w -X github.com/Diniboy1123/usque/cmd.version=4.2.1";
+    check = chk ''"$out/bin/usque" version'' "4\\.2\\.1"; };
+  # witness (Apache-2.0): pluggable framework for software supply chain security. Witness prevents tampering of build materials and verifies the integrity of the build process from source to target.
+  witness = pkg { pname = "witness"; version = "0.12.0"; src = gh "in-toto/witness" "refs/tags/v0.12.0" "76c571202fda4a586da857322ec2a0ac8a96659ace455902bbd75e4b62c785ea";
+    vendorHash = "sha256-ouREYN908QAffm0aFNL+yyVjxspbbcnYNDS6J41fRoE="; subPkgs = "."; ldflags = "-s -w -X github.com/in-toto/witness/cmd.Version=v0.12.0";
+    check = chk ''"$out/bin/witness" version'' "0\\.12\\.0"; };
+  # changelogger (MIT): tool to manage your changelog file in Markdown.
+  changelogger = pkg { pname = "changelogger"; version = "0.7.0"; src = gh "MarkusFreitag/changelogger" "refs/tags/v0.7.0" "b2464c84ee3431666a98ecf0003423ceb8279727d0c66c446997d077a2aa5f35";
+    vendorHash = "sha256-pYYRTcufYQsGqRD3dEDWtSnEaQSbLdE9vz+LReUOtJ8="; subPkgs = "."; ldflags = "-s -w -X github.com/MarkusFreitag/changelogger/cmd.BuildVersion=0.7.0 -X github.com/MarkusFreitag/changelogger/cmd.BuildDate=1970-01-01T00:00:00";
+    prep = ''
+      ${fix} vendor/gopkg.in/AlecAivazis/survey.v1/terminal/runereader_posix.go terminal ${termios}
+    '';
+    check = chk ''"$out/bin/changelogger" version'' "0\\.7\\.0"; };
+  # dive (MIT): tool for exploring each layer in a docker image.
+  dive = pkg { pname = "dive"; version = "0.13.1"; src = gh "wagoodman/dive" "v0.13.1" "2a9666e9c3fddd5e2e5bad81dccda520b8102e7cea34e2888f264b4eb0506852";
+    vendorHash = "sha256-N++2yWc7wrdqKprve2cRw/8pfdYX04x8y576dM+J0lY="; subPkgs = "."; ldflags = "-s -w -X main.version=0.13.1";
+    prep = ''
+      ${fix} vendor/github.com/awesome-gocui/gocui/gui_others.go gocui
+    '';
+    check = chk ''"$out/bin/dive" --version'' "0\\.13\\.1"; };
+  # arkade (MIT): open Source Kubernetes Marketplace.
+  arkade = pkg { pname = "arkade"; version = "0.11.116"; src = gh "alexellis/arkade" "refs/tags/0.11.116" "39ec737fe61f008e85ec34268116bfb68fa3f5018afad55be499081fd6fe54f3";
+    vendorHash = null; subPkgs = "."; ldflags = "-s -w -X github.com/alexellis/arkade/pkg.GitCommit=ref/tags/0.11.116 -X github.com/alexellis/arkade/pkg.Version=0.11.116";
+    check = chk ''"$out/bin/arkade" version'' "0\\.11\\.116"; };
+  # wrtag (GPL-3.0-only): fast automated music tagging and organization based on MusicBrainz.
+  wrtag = pkg { pname = "wrtag"; version = "0.33.0"; src = gh "sentriz/wrtag" "refs/tags/v0.33.0" "ac795072fd83dc609e2bd438d1cee175dbdfe89f7a699e214de3d3355e26140e";
+    vendorHash = "sha256-1VKwj5Gr0BoVp6faCHQh3IDVSDbs2kMxc5LPG2COi9M="; subPkgs = "./cmd/metadata ./cmd/wrtag ./cmd/wrtagweb";
+    check = chk ''"$out/bin/wrtag" --version'' "0\\.33\\.0"; };
+  # gocode-gomod (MIT): autocompletion daemon for the Go programming language.
+  gocode-gomod = pkg { pname = "gocode-gomod"; version = "1.0.0"; src = gh "stamblerre/gocode" "v1.0.0" "cf9d9c1e76b3e4d970e7bb848a508e1642506db4e9829dc1f04d6081717a418e";
+    vendorHash = null; subPkgs = ".";
+    check = chk ''"$out/bin/gocode" --help'' "[-]fallback-to-source"; };
+  # algolia-cli (MIT): algolia’s official CLI devtool.
+  algolia-cli = pkg { pname = "algolia-cli"; version = "1.18.0"; src = gh "algolia/cli" "refs/tags/v1.18.0" "aaf4870c8b64e4c3a3fbbd3a6650424924e5dac2b3a9900ce7b96f89905a751b";
+    vendorHash = "sha256-k5+QU+cclzk3b9ts942OsWVglL3HkfPYCAnfwLSKuDM="; subPkgs = "./cmd/algolia"; ldflags = "-s -w -X github.com/algolia/cli/pkg/version.Version=1.18.0";
+    prep = ''
+      ${fix} vendor/github.com/AlecAivazis/survey/v2/terminal/runereader_posix.go terminal ${termios}
+    '';
+    check = chk ''"$out/bin/algolia" --version'' "1\\.18\\.0"; };
+  # jcli (MIT): jenkins CLI allows you to manage your Jenkins in an easy way.
+  jcli = pkg { pname = "jcli"; version = "0.0.47"; src = gh "jenkins-zh/jenkins-cli" "refs/tags/v0.0.47" "4e78600e214c357c08a0a83fe9cc59214b0d050de07dbb469d9f226c8c37eabc";
+    vendorHash = "sha256-4zTUjklupc+kKSdsIejE/i0gbgCoXR+wRlFniNwVuxs="; subPkgs = "."; ldflags = "-s -w -X github.com/linuxsuren/cobra-extension/version.version=0.0.47";
+    prep = ''
+      ${fix} vendor/github.com/AlecAivazis/survey/v2/terminal/runereader_posix.go terminal ${termios}
+    '';
+    check = chk ''"$out/bin/jenkins-cli" version'' "0\\.0\\.47"; };
+  # leetgo (MIT): command-line tool for LeetCode.
+  leetgo = pkg { pname = "leetgo"; version = "1.4.19"; src = gh "j178/leetgo" "v1.4.19" "39537b3d2e221c5cec3826c845711903223fb878e93f81a1b452d814c806c819";
+    vendorHash = "sha256-eLxNbeXG8uAafrUuyZa46qw7g9dM+96SQe7+ZzWBIUQ="; subPkgs = "."; ldflags = "-s -w -X=github.com/j178/leetgo/constants.Version=1.4.19";
+    prep = ''
+      ${fix} vendor/github.com/AlecAivazis/survey/v2/terminal/runereader_posix.go terminal ${termios}
+    '';
+    check = chk ''"$out/bin/leetgo" --version'' "1\\.4\\.19"; };
+  # mongodb-cli (Apache-2.0): manage your MongoDB via ops manager and cloud manager.
+  mongodb-cli = pkg { pname = "mongodb-cli"; version = "2.0.9"; src = gh "mongodb/mongodb-cli" "refs/tags/mongocli/v2.0.9" "87ec0735839eba17d68d8690d3749144f9ad1eab2614a5861c41befe79f03cde";
+    vendorHash = "sha256-ug9p+17bMnDaNkJWsMjAp20J5XAET6QhPxrp/Fp+G64="; subPkgs = "./cmd/mongocli";
+    prep = ''
+      ${fix} vendor/github.com/AlecAivazis/survey/v2/terminal/runereader_posix.go terminal ${termios}
+    '';
+    check = chk ''"$out/bin/mongocli" --help'' "[Uu]sage"; };
+  # tektoncd-cli-pac (Apache-2.0): CLI for interacting with Tekton Pipelines as Code.
+  tektoncd-cli-pac = pkg { pname = "tektoncd-cli-pac"; version = "0.41.1"; src = gh "tektoncd/pipelines-as-code" "refs/tags/v0.41.1" "22d88cbc59272bd1dca26dc14ba7e30570dffe9cfa69393386985a1ee6724d49";
+    vendorHash = null; subPkgs = "./cmd/tkn-pac"; ldflags = "-s -w -X github.com/openshift-pipelines/pipelines-as-code/pkg/params/version.Version=0.41.1";
+    prep = ''
+      ${fix} vendor/github.com/AlecAivazis/survey/v2/terminal/runereader_posix.go terminal ${termios}
+    '';
+    check = chk ''"$out/bin/tkn-pac" version'' "0\\.41\\.1"; };
+  # glooctl (Apache-2.0): unified CLI for Gloo, the feature-rich, Kubernetes-native, next-generation API gateway built on Envoy.
+  glooctl = pkg { pname = "glooctl"; version = "1.22.0"; src = gh "solo-io/gloo" "v1.22.0" "22249bc9b0caa7316f899eb8ced5723b38c2028cdf833d5152348641100c7581";
+    vendorHash = "sha256-XWmFT0jFllGBk4EqUA8bODY3JNdhPV7w3uCs5HyUqLA="; subPkgs = "./projects/gloo/cli/cmd"; ldflags = "-s -X github.com/solo-io/gloo/pkg/version.Version=1.22.0";
+    prep = ''
+      ${fix} vendor/gopkg.in/AlecAivazis/survey.v1/terminal/runereader_posix.go terminal ${termios}
+    '';
+    check = chk ''"$out/bin/cmd" version'' "1\\.22\\.0"; };
+  # transifex-cli (Apache-2.0): transifex command-line client.
+  transifex-cli = pkg { pname = "transifex-cli"; version = "1.6.17"; src = gh "transifex/cli" "v1.6.17" "759320acd621991046533089bb77320202853cc97b860ab7783040d0e4d5e34f";
+    vendorHash = "sha256-BCXs9MZNcfDVE//7RQlIpIfM2aZpv4qZdgx3sv9w6f8="; subPkgs = "."; ldflags = "-s -w -X 'github.com/transifex/cli/internal/txlib.Version=1.6.17'";
+    prep = ''
+      ${fix} vendor/github.com/gosuri/uilive/terminal_size.go uilive
+      sed -i "s/int(fd), int(req)/int(fd), uint(req)/" vendor/github.com/gosuri/uilive/zz_hlcli_ioctl_illumos.go   # this x/sys/unix takes req uint
+    '';
+    check = chk ''"$out/bin/cli" --version'' "1\\.6\\.17"; };
+  # lf (MIT): terminal file manager written in Go and heavily inspired by ranger.
+  lf = pkg { pname = "lf"; version = "42"; src = gh "gokcehan/lf" "refs/tags/r42" "7a8f7c2c86419270b713b6235dced7b9d0e68732e74a1e0f375f774fff4023ca";
+    vendorHash = "sha256-K7jtAJgvd5p5FWbF9aAjP6PFweUzCQ3Sn4ZhS2Ze130="; subPkgs = "."; ldflags = "-s -w -X main.gVersion=r42";
+    check = chk ''"$out/bin/lf" --version'' "42"; };
 }
