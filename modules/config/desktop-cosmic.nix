@@ -40,7 +40,9 @@ in
     };
     fonts = mkOption {
       type = types.listOf types.package;
-      default = with s; [ fira-mono noto-sans noto-sans-mono open-sans dejavu-fonts freefont-ttf liberation-fonts noto-fonts-color-emoji ];
+      default = with s; [ fira noto-sans noto-sans-mono open-sans dejavu-fonts freefont-ttf gyre-fonts liberation-fonts
+        noto-fonts-cjk-sans noto-fonts-cjk-serif noto-fonts-color-emoji ];
+      # not yet: unifont (nixpkgs builds it from source) and all of noto-fonts (noto-sans + noto-sans-mono stand in)
       description = "Fonts on the fontconfig path (NixOS: fonts.packages = [ fira noto-fonts open-sans ] + fonts.enableDefaultPackages).";
     };
     greeter = mkOption {
