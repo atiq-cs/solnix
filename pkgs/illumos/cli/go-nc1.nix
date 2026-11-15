@@ -39,6 +39,63 @@ in {
   curlie = pkg { pname = "curlie"; version = "1.8.2"; src = gh "rs/curlie" "refs/tags/v1.8.2" "846ca3c5f2cca60c15eaef24949cf49607f09bdd68cbe9d81a2a026e434fa715";
     vendorHash = "sha256-Oa3fMOurGCqrD1qEpaqTfmAI+XkIJwTyzc1eX6aN6v4="; subPkgs = "."; ldflags = "-s -w -X main.version=1.8.2";
     check = chk ''"$out/bin/curlie" version'' "1\\.8\\.2"; };
+  # docker-buildx (Apache-2.0): docker CLI plugin for extended build capabilities with BuildKit.
+  docker-buildx = pkg { pname = "docker-buildx"; version = "0.38.1"; src = gh "docker/buildx" "refs/tags/v0.38.1" "bfd908c66d13c88cb6dccbc6d0fbb68aab17446901ba24203b5019ebf9d32f67";
+    vendorHash = null; subPkgs = "./cmd/buildx"; ldflags = "-X github.com/docker/buildx/version.Version=v0.38.1";
+    man = "mkdir -p $out/libexec/docker/cli-plugins; mv $out/bin/buildx $out/libexec/docker/cli-plugins/docker-buildx; ln -s ../libexec/docker/cli-plugins/docker-buildx $out/bin/docker-buildx";
+    prep = ''
+      d=vendor/github.com/moby/buildkit/util/disk   # illumos has statvfs, not statfs: GetDiskStat on unix.Statvfs (f_frsize units)
+      grep -qx '//go:build !windows && !freebsd && !netbsd && !openbsd' $d/disk_unix.go || { echo "FATAL: buildkit disk tag anchor" >&2; exit 1; }
+      sed -i 's#^//go:build !windows && !freebsd && !netbsd && !openbsd$#& \&\& !illumos#' $d/disk_unix.go
+      printf '%s\n' '//go:build illumos' \
+        'package disk' \
+        'import (' \
+        '	"github.com/pkg/errors"' \
+        '	"golang.org/x/sys/unix"' \
+        ')' \
+        'func GetDiskStat(root string) (DiskStat, error) {' \
+        '	var st unix.Statvfs_t' \
+        '	if err := unix.Statvfs(root, &st); err != nil { return DiskStat{}, errors.Wrapf(err, "could not stat fs at %s", root) }' \
+        '	return DiskStat{Total: int64(st.Frsize) * int64(st.Blocks), Free: int64(st.Frsize) * int64(st.Bfree), Available: int64(st.Frsize) * int64(st.Bavail)}, nil' \
+        '}' > $d/disk_illumos.go
+      c=vendor/github.com/tonistiigi/fsutil/copy/copy_otherbsd.go   # copyFile/mknod on io + unix.Mknod only: illumos takes the openbsd/netbsd arm
+      grep -qx '//go:build openbsd || netbsd' $c || { echo "FATAL: fsutil copy tag anchor" >&2; exit 1; }
+      sed -i 's#^//go:build openbsd || netbsd$#& || illumos#' $c
+    '';
+    check = chk ''"$out/libexec/docker/cli-plugins/docker-buildx" docker-cli-plugin-metadata'' "SchemaVersion" + chk ''"$out/bin/docker-buildx" version'' "0\\.38\\.1"; };
+  # docker-compose (Apache-2.0): docker CLI plugin to define and run multi-container applications with Docker.
+  docker-compose = pkg { pname = "docker-compose"; version = "5.6.0"; src = gh "docker/compose" "refs/tags/v5.6.0" "51ad60cc28d38a0850678053f0a259dfee931d150dd1d50ee9e6d758125b1d47";
+    vendorHash = "sha256-iV2hcTqlEIF7735hQn5n1kveD9At0G6nobyg+GmdbO4="; subPkgs = "./cmd"; ldflags = "-X github.com/docker/compose/v5/internal.Version=5.6.0 -s";
+    man = "mkdir -p $out/libexec/docker/cli-plugins; mv $out/bin/cmd $out/libexec/docker/cli-plugins/docker-compose; ln -s ../libexec/docker/cli-plugins/docker-compose $out/bin/docker-compose";
+    prep = ''
+      for f in internal/locker/runtime_unix.go pkg/remote/cache_unix.go; do   # XDG-path code whose tags omit illumos
+        grep -qx '//go:build linux || openbsd || freebsd' $f || { echo "FATAL: compose tag anchor" >&2; exit 1; }
+        sed -i 's#^//go:build linux || openbsd || freebsd$#& || illumos#' $f; done
+      k=vendor/github.com/eiannone/keyboard   # illumos termios ioctls are TCGETS/TCSETS, as on Linux: use the linux file
+      grep -qx '//go:build !windows && !linux' $k/syscalls.go || { echo "FATAL: keyboard tag anchor" >&2; exit 1; }
+      sed -i -e 's#^//go:build !windows && !linux$#& \&\& !illumos#' -e 's#^// +build !windows,!linux$#&,!illumos#' $k/syscalls.go
+      cp $k/syscalls_linux.go $k/syscalls_illumos.go
+      # illumos has no O_ASYNC (SIGIO on tty input): keyboard reads the tty non-blocking and a once-started 20 ms poller
+      # feeds its sigio channel, so the read-until-EAGAIN loop runs as on Linux. F_SETOWN (only for SIGIO) becomes F_GETFL.
+      g=$k/keyboard.go
+      grep -qF 'unix.FcntlInt(uintptr(in), unix.F_SETFL, unix.O_ASYNC|unix.O_NONBLOCK)' $g && grep -qF 'unix.FcntlInt(uintptr(in), unix.F_SETOWN, unix.Getpid())' $g \
+        && grep -qx '	signal.Notify(sigio, unix.SIGIO)' $g || { echo "FATAL: keyboard async anchor" >&2; exit 1; }
+      sed -i -e 's/unix.O_ASYNC|unix.O_NONBLOCK/unix.O_NONBLOCK/' -e 's/unix.F_SETOWN, unix.Getpid()/unix.F_GETFL, 0/' \
+        -e 's/^	signal.Notify(sigio, unix.SIGIO)$/&\n	illumosSigioPoll(sigio)/' $g
+      printf '%s\n' '//go:build illumos' \
+        'package keyboard' \
+        'import (' \
+        '	"os"' \
+        '	"sync"' \
+        '	"time"' \
+        '	"golang.org/x/sys/unix"' \
+        ')' \
+        'var illumosPollOnce sync.Once' \
+        'func illumosSigioPoll(ch chan os.Signal) {' \
+        '	illumosPollOnce.Do(func() { go func() { for { select { case ch <- unix.SIGIO: default: }; time.Sleep(20 * time.Millisecond) } }() })' \
+        '}' > $k/keyboard_poll_illumos.go
+    '';
+    check = chk ''"$out/libexec/docker/cli-plugins/docker-compose" docker-cli-plugin-metadata'' "SchemaVersion" + chk ''"$out/bin/docker-compose" --version'' "5\\.6\\.0"; };
   # gh-markdown-preview (MIT): gh extension to preview Markdown looking like on GitHub.
   gh-markdown-preview = pkg { pname = "gh-markdown-preview"; version = "1.12.1"; src = gh "yusukebe/gh-markdown-preview" "v1.12.1" "3292a52a1b24e469f3439f78087b43b97baf2d071da9ce6852dacea9f6f2bce9";
     vendorHash = "sha256-Pgq+aoYmDW/uspVzDyOqa0uPJFQQotif1k96GI8zwD8="; subPkgs = "."; ldflags = "-s -w -X github.com/yusukebe/gh-markdown-preview/cmd.Version=1.12.1";
