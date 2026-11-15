@@ -97,7 +97,8 @@ let
     // import ./go-recipes3.nix { inherit (goChain) goPkg; inherit chk; }   # recipes3 (a new file: no served drv moves)
     // import ./go-gl1.nix { inherit (goChain) goPkg go_1_27; inherit chk; }   # gl1: Go queue leaves (a new file: no served drv moves)
     // import ./go-gl2.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }   # gl2: more Go queue leaves (a new file)
-    // import ./go-gl3.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; };   # gl3: Go tier-B queue leaves (a new file)
+    // import ./go-gl3.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; }   # gl3: Go tier-B queue leaves (a new file)
+    // import ./go-nc1.nix { inherit (goChain) goPkg go_1_27; inherit chk; inherit (c5) python3; };   # nc1: Go tools the maintainer's nix-config uses (a new file)
   # qnew5: idle1's ranked leaves (a new file, so no served drv moves); x86 only, as c11
   c12 = if gtkMeson == null then { } else import ./c-qnew5.nix (h // { inherit (c5) cmake python3 gnupatch; inherit (c4) perl; inherit (ti) texinfo;
     inherit (c10) lzip; inherit (c7) groff; inherit gtkMeson; });
