@@ -169,4 +169,84 @@ in {
   woke = pkg { pname = "woke"; version = "0.19.0"; src = gh "get-woke/woke" "refs/tags/v0.19.0" "d17c7e4e846a409af14e65a001d2ddb1657fd82f562704e0c10ced4dadcfd31c";
     vendorHash = "sha256-IBexo0Sqondd3zXXHnyYrmGw8Jy44O8/urBLwaFM9lA="; subPkgs = ". ./cmd/docs"; ldflags = "-s -w -X=github.com/get-woke/woke/cmd.Version=0.19.0 -X=github.com/get-woke/woke/cmd.Commit=v0.19.0 -X=github.com/get-woke/woke/cmd.Date=1970-01-01T00:00:00Z";
     check = chk ''"$out/bin/woke" --version'' "0\\.19\\.0"; };
+  # astartectl (Apache-2.0): astarte command line client utility.
+  astartectl = pkg { pname = "astartectl"; version = "26.5.0"; src = gh "astarte-platform/astartectl" "v26.5.0" "f87ef2c89234883e763fe75ed35d457b45d80dc23b0d96414a72c2759d5316c5";
+    vendorHash = "sha256-QdPBo4SL8g8V/KYgY5vdJwIKKeND+wSK8gIC53W6YGg="; subPkgs = ".";
+    check = chk ''"$out/bin/astartectl" version'' "26\\.5\\.0"; };
+  # aws-nuke (MIT): remove all the resources from an AWS account.
+  aws-nuke = pkg { pname = "aws-nuke"; version = "3.68.3"; src = gh "ekristen/aws-nuke" "refs/tags/v3.68.3" "2f06b307aa1addccf9231f0fd1f394c63507a8c7438e8113a91386066be0d6aa";
+    vendorHash = "sha256-ORMAUHwkVkI7kdhZ675wN/RpHkOP+RJMb3PpQcOx0X8="; subPkgs = "."; ldflags = "-s -w -X=github.com/ekristen/aws-nuke/v3/pkg/common.SUMMARY=3.68.3";
+    check = chk ''"$out/bin/aws-nuke" --version'' "3\\.68\\.3"; };
+  # baidupcs-go (Apache-2.0): baidu Netdisk commandline client, mimicking Linux shell file handling commands.
+  baidupcs-go = pkg { pname = "baidupcs-go"; version = "4.0.2"; src = gh "qjfoidnh/BaiduPCS-Go" "v4.0.2" "12904ec8daee445b357f59d604103108a324f5b1c60cb0d8324f5df216683553";
+    vendorHash = "sha256-6Q+p9d4RoXyXbtxfk5eq7X0+YK38qlxN7sZiTSDBcbQ="; subPkgs = ". ./cmd/AndroidNDKBuild"; ldflags = "-X main.Version=4.0.2";
+    check = chk ''"$out/bin/BaiduPCS-Go" --version'' "4\\.0\\.2"; };
+  # chain-bench (Apache-2.0): open-source tool for auditing your software supply chain stack for security compliance based on a new CIS Software Supply Chain benchmark.
+  chain-bench = pkg { pname = "chain-bench"; version = "0.1.10"; src = gh "aquasecurity/chain-bench" "v0.1.10" "5bfeaacd9cf7d272e88597135bff7f329d455a810aaf2b6a763ac55e18d383c1";
+    vendorHash = "sha256-p3PM7GsIotPggsdBAxilAoN8dYhQYUi7vVxPVhqI5WQ="; subPkgs = "./cmd/chain-bench"; ldflags = "-s -w -X main.version=v0.1.10";
+    check = chk ''"$out/bin/chain-bench" --version'' "0\\.1\\.10"; };
+  # coze (BSD-3-Clause): CLI client for Coze, a cryptographic JSON messaging specification.
+  coze = pkg { pname = "coze"; version = "0.0.3"; src = gh "Cyphrme/CozeCLI" "v0.0.3" "ce692d1cdf75d3c0e9aa9774a6dc2aec2db2362393a1fe1d7daaac998df2fcda";
+    vendorHash = "sha256-xTT9mNWwHjLma1XtYeMYbQyMbXPIwgiboLvShFknZfE="; subPkgs = ".";
+    check = chk ''"$out/bin/coze_cli" --help'' "[Uu]sage"; };
+  # docker-color-output (MIT): add color to the Docker CLI.
+  docker-color-output = pkg { pname = "docker-color-output"; version = "3.0.1"; src = gh "devemio/docker-color-output" "refs/tags/v3.0.1" "12bfdbfcccf493e8e8f89ddfe89a4de99c97c9283c1fd3172c423295efdf1d0c";
+    vendorHash = "sha256-iilIeSduL8b74CSvskMxYCBSYKsv+xDcS8GNyyWyAGM="; subPkgs = "./cmd/cli";
+    check = chk ''"$out/bin/cli" --version'' "3\\.0\\.1"; };
+  # doggo (GPL-3.0-only): command-line DNS Client for Humans. Written in Golang.
+  doggo = pkg { pname = "doggo"; version = "1.4.0"; src = gh "mr-karan/doggo" "v1.4.0" "e0d043aa34fb8daa44df07558fd32fe2686eba6644d5f6834edbc8a789d42e1d";
+    vendorHash = "sha256-8At1Py4VW81UNBtXy1r01AR6TKVUXLWf9J7LrvGeF8o="; subPkgs = "./cmd/doggo"; ldflags = "-s -X main.buildVersion=v1.4.0";
+    check = chk ''"$out/bin/doggo" --version'' "1\\.4\\.0"; };
+  # exercism (MIT): go based command line tool for exercism.io.
+  exercism = pkg { pname = "exercism"; version = "3.5.9"; src = gh "exercism/cli" "refs/tags/v3.5.9" "8595fc3e8b0ff3fcff7cc56a67bee58156665e71eee1ff9eace593568ec8debf";
+    vendorHash = "sha256-bmTiunVU3nADr8/PWw7/wnuq2+lXcwP7jb43EjqWuFU="; subPkgs = "./exercism";
+    check = chk ''"$out/bin/exercism" version'' "3\\.5\\.9"; };
+  # geek-life (MIT): todo List / Task Manager for Geeks in command line.
+  geek-life = pkg { pname = "geek-life"; version = "0.1.3"; src = gh "ajaxray/geek-life" "v0.1.3" "e9299c71539b5b67be107ad8d3a574ad16a6251c9294b61e97f2b9b59c0b9322";
+    vendorHash = "sha256-Ok+86tOfq68lKbxupISzB9/GThotCMynqJsfTT95xrM="; subPkgs = "./app";
+    check = chk ''"$out/bin/app" --help'' "[-]-db-file"; };
+  # ghatm (MIT): set timeout-minutes to all GitHub Actions jobs.
+  ghatm = pkg { pname = "ghatm"; version = "1.0.0"; src = gh "suzuki-shunsuke/ghatm" "refs/tags/v1.0.0" "efa1ba94caa5e138a59408ad505252e62603e89738fb1e0ba8072be9db5992da";
+    vendorHash = "sha256-rg6MR7zl6mN75HPySdeeUVnTMjW2/5mI1UFKc8q5WpY="; subPkgs = "./cmd/ghatm"; ldflags = "-s -w -X main.version=1.0.0 -X main.commit=v1.0.0";
+    check = chk ''"$out/bin/ghatm" --version'' "1\\.0\\.0"; };
+  # globalping-cli (MPL-2.0): simple CLI tool to run networking commands remotely from hundreds of globally distributed servers.
+  globalping-cli = pkg { pname = "globalping-cli"; version = "1.6.1"; src = gh "jsdelivr/globalping-cli" "v1.6.1" "137c51116f8975ee17813ce68667aed89c05a13d1121fae31a11683cb4838b01";
+    vendorHash = "sha256-MNHg0fPJf21vl3M+0XKM8Al+05FhhGzy0F3BLXEEimg="; subPkgs = "."; ldflags = "-s -w -X main.version=1.6.1";
+    check = chk ''"$out/bin/globalping-cli" version'' "1\\.6\\.1"; };
+  # go-autoconfig (MIT): IMAP/SMTP autodiscover feature for Thunderbird, Apple Mail and Microsoft Outlook.
+  go-autoconfig = pkg { pname = "go-autoconfig"; version = "0.0.1-unstable-2022-08-03"; src = gh "savely-krasovsky/go-autoconfig" "b1b182202da82cc881dccd715564853395d4f76a" "ac244d1c7965908d613a241eeeae0f57ede857581d457891d8a17da80cf5d0f0";
+    vendorHash = "sha256-KJ4iUuB7c2mfWS5MMEcbZKlSf5lSiQp50yQarlloBYM="; subPkgs = ".";
+    check = chk ''"$out/bin/go-autoconfig" --help'' "[Uu]sage"; };
+  # goodhosts (MIT): CLI tool for managing hostfiles.
+  goodhosts = pkg { pname = "goodhosts"; version = "1.1.3"; src = gh "goodhosts/cli" "v1.1.3" "66dc0e43522006feba1c9f73b4a9c9620ac615996c13a28c9a26bf8e8618a4ab";
+    vendorHash = "sha256-JqB8fewJ7jnMPZMhCXH2fGnS4TewDveOe7xAp2MgmLw="; subPkgs = "."; ldflags = "-s -w -X main.version=1.1.3";
+    check = chk ''"$out/bin/cli" version'' "1\\.1\\.3"; };
+  # gotify-cli (MIT): command line interface for pushing messages to gotify/server.
+  gotify-cli = pkg { pname = "gotify-cli"; version = "2.4.0"; src = gh "gotify/cli" "v2.4.0" "d33622db87549355b8ccc3d4a4e342cfc769fa96c45213e682b53a0971c8c41d";
+    vendorHash = "sha256-Uso3YiauncEXaGl+iB9y2yQ3+kMq3SaX+5dO+hBEnm8="; subPkgs = "."; ldflags = "-X main.Version=2.4.0 -X main.Commit=2.4.0 -X main.BuildDate=1970-01-01";
+    check = chk ''"$out/bin/cli" --version'' "2\\.4\\.0"; };
+  # gotmplfmt (GPL-3.0-or-later): fmt Go HTML templates.
+  gotmplfmt = pkg { pname = "gotmplfmt"; version = "1.0.25"; src = gh "miekg/gotmplfmt" "refs/tags/v1.0.25" "87b80b40607d0eb1ef828b8443e38776feec1c139b4b0ab879b464d898fe2e3f";
+    vendorHash = "sha256-H5oVRehDUNcXQmBanothJ2fxgR5/VLodrcnJxdcbPrM="; subPkgs = ".";
+    check = chk ''"$out/bin/gotmplfmt" --help'' "[Uu]sage"; };
+  # grafanactl (Apache-2.0): tool designed to simplify interaction with Grafana instances.
+  grafanactl = pkg { pname = "grafanactl"; version = "0.1.10"; src = gh "grafana/grafanactl" "refs/tags/v0.1.10" "c3a3fef02f073aa92fb7b62c6f60a26e80fe794cf158f86830fe38ff053035fd";
+    vendorHash = "sha256-FVvmkwAaX1WTptUyfaTF6VRgm4NohZpOXo58UoZUaSo="; subPkgs = "./cmd/grafanactl ./scripts/cmd-reference ./scripts/config-reference ./scripts/env-vars-reference"; ldflags = "-X main.version=v0.1.10 -X main.commit=unknown -X main.date=unknown";
+    check = chk ''"$out/bin/grafanactl" --version'' "0\\.1\\.10"; };
+  # gum (MIT): tasty Bubble Gum for your shell.
+  gum = pkg { pname = "gum"; version = "2.0.2"; src = gh "charmbracelet/gum" "v2.0.2" "06403707671e9b2af386640d8b9f6079efc0aadf77e8f6b091bd191fe16c1264";
+    vendorHash = "sha256-VyQpJ2lW9XiYsFtCSRtVM9pEewGSfv6uknvYLMcCaZQ="; subPkgs = "."; ldflags = "-s -w -X=main.Version=2.0.2";
+    check = chk ''"$out/bin/gum" --version'' "2\\.0\\.2"; };
+  # hyprkeys (GPL-3.0-only): simple, scriptable keybind retrieval utility for Hyprland.
+  hyprkeys = pkg { pname = "hyprkeys"; version = "1.0.3"; src = gh "hyprland-community/Hyprkeys" "v1.0.3" "90692f3531e51a9fe97ab01e5a6d3c0ba5f991d81c0106bfbea67c52f0eddb57";
+    vendorHash = "sha256-CNg5YCX8qPujV2KcpHg5/nDnh8zozZUhfRKe/vMX7gU="; subPkgs = "."; ldflags = "-s -w -X main.version=v1.0.3";
+    check = chk ''"$out/bin/hyprkeys" version'' "1\\.0\\.3"; };
+  # jump (MIT): navigate directories faster by learning your habits.
+  jump = pkg { pname = "jump"; version = "0.69.0"; src = gh "gsamokovarov/jump" "v0.69.0" "17567f7acd305e2e8093f49e591aa03d74bc5c94204b0461550b0bd8055490af";
+    vendorHash = "sha256-FZATKw7/mOHmB1s8tyuWDRaShzeTNnIduSH5g5W728A="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/jump" --version'' "0\\.69\\.0"; };
+  # kconf (MIT): opinionated command line tool for managing multiple kubeconfigs.
+  kconf = pkg { pname = "kconf"; version = "2.0.0"; src = gh "particledecay/kconf" "v2.0.0" "e7fe6750c719caf227890a31e2fd5446972ec3e1e5492180d0a387fe1c3394c0";
+    vendorHash = "sha256-6ZLEfm1BnheevU+ZwYmIpUNnpcckYlVJgn6Fu6UPoEU="; subPkgs = "."; ldflags = "-s -w -X github.com/particledecay/kconf/build.Version=2.0.0";
+    check = chk ''"$out/bin/kconf" version'' "2\\.0\\.0"; };
 }
