@@ -40,6 +40,29 @@ in rec {
     url = "https://carrois.com/downloads/Fira/Fira_Mono_3_2.zip";
     sha256 = "77b83feda1f1c5b8e8da07498aff6fa0f9d2d16bbfa2095dd7e7696c887c6128"; })
     "${fonts "opentype"} Fira_Mono_3_2/Fonts/FiraMono_OTF_32/*.otf";
+  # fira-sans: the OTFs of all three widths (nixpkgs' installFonts also adds the TTFs and a webfont output); pkgs.fira
+  # (default.nix) joins it with fira-mono, as nixpkgs' symlinkJoin does. The count catches two widths sharing a file name.
+  fira-sans = data "fira-sans-4.301" (fetchurl {
+    url = "https://carrois.com/downloads/Fira/Download_Folder_FiraSans_4301.zip";
+    sha256 = "ff966173d53fc55cca9661fbdedb08a91a2f3984d5415b51cfb31c2bc4c18f19"; }) ''
+      ${fonts "opentype"} Download_Folder_FiraSans_4301/Fonts/Fira_Sans_OTF_4301/*/*/*.otf
+      [ "$(ls "$out/share/fonts/opentype" | wc -l)" -eq 92 ] || { echo "FATAL: fira-sans: want 92 OTFs" >&2; exit 1; }
+    '';
+  # TeX Gyre (nixpkgs gyre-fonts, in NixOS's fonts.enableDefaultPackages): metric substitutes for the PostScript base fonts.
+  gyre-fonts = data "gyre-fonts-2.501" (fetchurl {
+    url = "https://www.gust.org.pl/projects/e-foundry/tex-gyre/whole/tg2_501otf.zip";
+    sha256 = "d7f8be5317bec4e644cf16c5abf876abeeb83c43dbec0ccb4eee4516b73b1bbe"; })
+    "${fonts "opentype"} tg2_501otf/*.otf";
+  # Noto CJK (NixOS's fonts.enableDefaultPackages): nixpkgs installs the tag's {Sans,Serif}/Variable/OTC/*.otf.ttc; the
+  # release's OTF-VF zip carries the same files under Variable/OTC (one 225-260 MB zip instead of a sparse git checkout).
+  noto-fonts-cjk-sans = data "noto-fonts-cjk-sans-2.004" (fetchurl {
+    url = "https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/01_NotoSansCJK-OTF-VF.zip";
+    sha256 = "d5e33aebad9f8a0c0896a4a29199ef85ca966134db164426c74e83e6f13c43cd"; })
+    "${fonts "opentype/noto-cjk"} Variable/OTC/*.otf.ttc";
+  noto-fonts-cjk-serif = data "noto-fonts-cjk-serif-2.003" (fetchurl {
+    url = "https://github.com/notofonts/noto-cjk/releases/download/Serif2.003/02_NotoSerifCJK-OTF-VF.zip";
+    sha256 = "7898cfb54156cc0d8a2f2c00d5645c573ff367d03d29085bb495966d99d2529e"; })
+    "${fonts "opentype/noto-cjk"} Variable/OTC/*.otf.ttc";
 
   # GNU FreeFont (nixpkgs freefont_ttf: the same zip, and in NixOS's fonts.enableDefaultPackages). cosmic-text (COSMIC
   # Terminal) draws braille (U+2800-28FF, btm's and htop's graphs) in FreeMono only. No other monospace font here has those
