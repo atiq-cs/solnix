@@ -13,6 +13,7 @@ pub struct Link {
     pub wifi: bool,
     pub up: bool,
     pub mac: String,
+    pub speed_mbps: u32,  // dladm show-phys SPEED (0 for wifi or no carrier)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,8 +64,15 @@ pub fn parse_scan(text: &str) -> Vec<Bss> {
     }).collect()
 }
 
-pub fn parse_phys(text: &str) -> Vec<(String, String, String)> {
-    text.lines().filter_map(|l| { let f = split_parsable(l); (f.len() >= 3).then(|| (f[0].clone(), f[1].clone(), f[2].clone())) }).collect()
+pub fn parse_phys(text: &str) -> Vec<(String, String, String, u32)> {
+    text.lines().filter_map(|l| { let f = split_parsable(l);
+        (f.len() >= 3).then(|| (f[0].clone(), f[1].clone(), f[2].clone(), f.get(3).and_then(|s| s.parse().ok()).unwrap_or(0))) }).collect()
+}
+
+/// `netstat -rn -f inet`: (interface, gateway) of each default route.
+pub fn parse_defaults(text: &str) -> Vec<(String, String)> {
+    text.lines().filter_map(|l| { let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() >= 6 && f[0] == "default").then(|| (f[5].to_string(), f[1].to_string())) }).collect()
 }
 
 pub fn parse_wifi_status(text: &str) -> WifiStatus {
@@ -91,11 +99,11 @@ pub async fn run(args: &[&str], secs: u64) -> Option<String> {
 }
 
 pub async fn links() -> Vec<Link> {
-    let phys = parse_phys(&run(&["dladm", "show-phys", "-p", "-o", "link,media,state"], 10).await.unwrap_or_default());
+    let phys = parse_phys(&run(&["dladm", "show-phys", "-p", "-o", "link,media,state,speed"], 10).await.unwrap_or_default());
     let macs: BTreeMap<String, String> = run(&["dladm", "show-phys", "-m", "-p", "-o", "link,address"], 10).await.unwrap_or_default()
         .lines().filter_map(|l| { let f = split_parsable(l); (f.len() >= 2).then(|| (f[0].clone(), norm_mac(&f[1]))) }).collect();
-    phys.into_iter().filter(|(_, m, _)| m == "WiFi" || m == "Ethernet")
-        .map(|(n, m, s)| Link { mac: macs.get(&n).cloned().unwrap_or_default(), wifi: m == "WiFi", up: s == "up", name: n }).collect()
+    phys.into_iter().filter(|(_, m, _, _)| m == "WiFi" || m == "Ethernet")
+        .map(|(n, m, s, sp)| Link { mac: macs.get(&n).cloned().unwrap_or_default(), wifi: m == "WiFi", up: s == "up", name: n, speed_mbps: sp }).collect()
 }
 
 pub async fn scan(link: &str) -> Option<Vec<Bss>> {
@@ -110,8 +118,22 @@ pub async fn addr(link: &str) -> Option<(String, u32)> {
     parse_addr(&run(&["ipadm", "show-addr", "-p", "-o", "addrobj,state,addr", &format!("{link}/")], 10).await?)
 }
 
-pub async fn has_default_route() -> bool {
-    run(&["netstat", "-rn", "-f", "inet"], 10).await.is_some_and(|t| t.lines().any(|l| l.starts_with("default")))
+pub async fn default_routes() -> Vec<(String, String)> {
+    parse_defaults(&run(&["netstat", "-rn", "-f", "inet"], 10).await.unwrap_or_default())
+}
+
+/// A wired link's IPv4 address objects off (disconnect: `disable-addr -t`, the active config only, so the link stays
+/// plumbed and keeps reporting carrier) or back on (`enable-addr -t` the disabled ones; solnix-netd runs DHCP on a
+/// link left with none). false: a disable failed.
+pub async fn wired_addrs(link: &str, on: bool) -> bool {
+    let t = run(&["ipadm", "show-addr", "-p", "-o", "addrobj,state,addr", &format!("{link}/")], 10).await.unwrap_or_default();
+    let mut ok = true;
+    for f in t.lines().map(split_parsable).filter(|f| f.len() >= 3 && !f[2].contains(':')) {   // IPv4 only (v6 has colons)
+        // enable-addr of a DHCP addrobj waits for a lease; dhcpagent keeps trying after a timeout, so the result is not an error
+        if on && f[1] == "disabled" { let _ = run(&["ipadm", "enable-addr", "-t", &f[0]], 10).await; }
+        if !on && f[1] != "disabled" { ok &= run(&["ipadm", "disable-addr", "-t", &f[0]], 10).await.is_some(); }
+    }
+    ok
 }
 
 // ---- saved networks -------------------------------------------------------------------------------------------
@@ -249,6 +271,10 @@ mod tests {
         assert!(!parse_wifi_status("disconnected::\n").connected);
         assert_eq!(parse_addr("iwx0/dhcp:ok:192.0.2.10/24\n"), Some(("192.0.2.10".into(), 24)));
         assert_eq!(parse_addr("usbecm1/dhcp:disabled:?\n"), None);
+        // as measured on lixi 2026-11-15
+        assert_eq!(parse_phys("iwx0:WiFi:up:0\nusbecm2:Ethernet:up:100\n")[1], ("usbecm2".into(), "Ethernet".into(), "up".into(), 100));
+        let r = "default              192.0.2.1          UG      704      79511 iwx0      \n192.0.2.0            192.0.2.10         U         3          0 iwx0\n";
+        assert_eq!(parse_defaults(r), vec![("iwx0".to_string(), "192.0.2.1".to_string())]);
     }
     #[test]
     fn names_and_store() {

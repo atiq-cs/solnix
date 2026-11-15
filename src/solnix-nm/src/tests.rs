@@ -8,12 +8,15 @@ use std::sync::Mutex as StdMutex;
 #[derive(Default)]
 struct Rec { joins: StdMutex<Vec<(String, String, Option<String>, Option<String>)>>, disconnects: StdMutex<Vec<String>>,
              holds: StdMutex<Vec<(String, bool)>>, uid: StdMutex<u32>, connected: StdMutex<Option<String>>, strength: StdMutex<u8>,
-             hidden: StdMutex<Vec<String>> }   // BSSIDs the scan also returns with an empty ESSID
+             hidden: StdMutex<Vec<String>>,   // BSSIDs the scan also returns with an empty ESSID
+             wired: bool, wired_on: StdMutex<bool>, wired_calls: StdMutex<Vec<(String, bool)>> }   // a USB NIC usbecm2, its address on
 
 struct RecBe(Arc<Rec>);
 impl backend::Backend for RecBe {
     fn links(&self) -> backend::Fut<'_, Vec<sys::Link>> {
-        Box::pin(async { vec![sys::Link { name: "iwx0".into(), wifi: true, up: true, mac: "00:00:5E:00:53:10".into() }] })
+        let mut v = vec![sys::Link { name: "iwx0".into(), wifi: true, up: true, mac: "00:00:5E:00:53:10".into(), speed_mbps: 0 }];
+        if self.0.wired { v.push(sys::Link { name: "usbecm2".into(), wifi: false, up: true, mac: "00:00:5E:00:53:20".into(), speed_mbps: 100 }); }
+        Box::pin(async move { v })
     }
     fn scan<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, Option<Vec<sys::Bss>>> {
         let st = match *self.0.strength.lock().unwrap() { 0 => 80, v => v };
@@ -31,11 +34,18 @@ impl backend::Backend for RecBe {
         let c = self.0.connected.lock().unwrap().clone();
         Box::pin(async move { match c { Some(e) => sys::WifiStatus { connected: true, essid: e, bssid: "00:00:5E:00:53:F3".into() }, None => sys::WifiStatus::default() } })
     }
-    fn addr<'a>(&'a self, _l: &'a str) -> backend::Fut<'a, Option<(String, u32)>> {
+    fn addr<'a>(&'a self, l: &'a str) -> backend::Fut<'a, Option<(String, u32)>> {
+        if l == "usbecm2" { let on = *self.0.wired_on.lock().unwrap(); return Box::pin(async move { on.then(|| ("192.0.2.20".into(), 24)) }); }
         let c = self.0.connected.lock().unwrap().is_some();
         Box::pin(async move { c.then(|| ("192.0.2.10".into(), 24)) })
     }
-    fn has_default_route(&self) -> backend::Fut<'_, bool> { Box::pin(async { true }) }
+    fn default_routes(&self) -> backend::Fut<'_, Vec<(String, String)>> {
+        let w = *self.0.wired_on.lock().unwrap();
+        Box::pin(async move { if w { vec![("usbecm2".into(), "192.0.2.1".into())] } else { vec![("iwx0".into(), "192.0.2.254".into())] } })
+    }
+    fn wired_addrs<'a>(&'a self, l: &'a str, on: bool) -> backend::Fut<'a, bool> {
+        self.0.wired_calls.lock().unwrap().push((l.into(), on)); *self.0.wired_on.lock().unwrap() = on; Box::pin(async { true })
+    }
     fn join<'a>(&'a self, link: &'a str, ssid: &'a str, psk_file: Option<&'a str>, _s: u64) -> backend::Fut<'a, bool> {
         // record what the radio would get: the file and its content at join time
         let content = psk_file.and_then(|f| std::fs::read_to_string(f).ok());
@@ -286,5 +296,74 @@ async fn hidden_bsses_are_not_listed_unless_connected() {
         .interface("org.freedesktop.NetworkManager.AccessPoint").unwrap()
         .cache_properties(zbus::proxy::CacheProperties::No).build().await.unwrap();
     assert_eq!(ap.get_property::<Vec<u8>>("Ssid").await.unwrap(), b"cafe".to_vec(), "the connected hidden AP is named by its association");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+async fn px(c: &Connection, dest: &str, path: &str, iface: &str) -> zbus::Proxy<'static> {
+    zbus::proxy::Builder::new(c).destination(dest.to_string()).unwrap().path(path.to_string()).unwrap()
+        .interface(iface.to_string()).unwrap().cache_properties(zbus::proxy::CacheProperties::No).build().await.unwrap()
+}
+
+/// COSMIC Settings' Wired page lists a device's saved 802-3-ethernet profiles (nmrs list_saved_connections, matched by
+/// type and interface-name) and shows nothing without one; its Disconnect and Connect go through DeactivateConnection
+/// and ActivateConnection. solnix-nm had no wired profile, and refused to disconnect a wired link.
+#[tokio::test(flavor = "current_thread")]
+async fn a_wired_link_has_a_profile_details_and_disconnects() {
+    let rec = Rec { wired: true, wired_on: StdMutex::new(true), ..Default::default() };
+    let (rec, client, d, ctx) = daemon_with("wired", rec).await;
+    refresh(&ctx, false).await; publish(&ctx).await;
+    let dest = dest_of("wired");
+    let set = px(&client, &dest, &format!("{NM}/Settings"), "org.freedesktop.NetworkManager.Settings").await;
+    let list: Vec<OwnedObjectPath> = set.call("ListConnections", &()).await.unwrap();
+    let mut prof = None;
+    for p in &list {
+        let c = px(&client, &dest, p.as_str(), "org.freedesktop.NetworkManager.Settings.Connection").await;
+        let s: Settings = c.call("GetSettings", &()).await.unwrap();
+        if settings_str(&s, "connection", "type").as_deref() == Some("802-3-ethernet") {
+            assert_eq!(settings_str(&s, "connection", "interface-name").as_deref(), Some("usbecm2"));
+            assert_eq!(settings_str(&s, "connection", "id").as_deref(), Some("Wired (usbecm2)"));
+            assert!(settings_str(&s, "connection", "uuid").is_some_and(|u| !u.is_empty()));
+            prof = Some(p.clone());
+        }
+    }
+    let prof = prof.expect("ListConnections has an 802-3-ethernet profile for usbecm2");
+    let dev = px(&client, &dest, &format!("{NM}/Devices/2"), "org.freedesktop.NetworkManager.Device").await;
+    assert_eq!(dev.get_property::<Vec<OwnedObjectPath>>("AvailableConnections").await.unwrap(), vec![prof.clone()], "the device offers its profile");
+    let ac: OwnedObjectPath = dev.get_property("ActiveConnection").await.unwrap();
+    assert_ne!(ac.as_str(), "/", "the leased link is active");
+    let a = px(&client, &dest, ac.as_str(), "org.freedesktop.NetworkManager.Connection.Active").await;
+    assert_eq!(a.get_property::<OwnedObjectPath>("Connection").await.unwrap(), prof, "the active connection names its profile");
+    assert_eq!(a.get_property::<String>("Type").await.unwrap(), "802-3-ethernet");
+    let w = px(&client, &dest, &format!("{NM}/Devices/2"), "org.freedesktop.NetworkManager.Device.Wired").await;
+    assert_eq!(w.get_property::<u32>("Speed").await.unwrap(), 100, "the link's measured speed, not a constant");
+    assert_eq!(w.get_property::<String>("HwAddress").await.unwrap(), "00:00:5E:00:53:20");
+    let ip4: OwnedObjectPath = dev.get_property("Ip4Config").await.unwrap();
+    let ip = px(&client, &dest, ip4.as_str(), "org.freedesktop.NetworkManager.IP4Config").await;
+    let ad: Vec<HashMap<String, OwnedValue>> = ip.get_property("AddressData").await.unwrap();
+    assert_eq!(String::try_from(ad[0]["address"].try_clone().unwrap()).unwrap(), "192.0.2.20");
+    assert_eq!(u32::try_from(ad[0]["prefix"].try_clone().unwrap()).unwrap(), 24);
+    assert_eq!(ip.get_property::<String>("Gateway").await.unwrap(), "192.0.2.1", "the link's default route");
+    let _: Vec<HashMap<String, OwnedValue>> = ip.get_property("NameserverData").await.unwrap();
+    // its settings are the system's: neither deleted nor rewritten over D-Bus
+    *rec.uid.lock().unwrap() = 0;
+    let c = px(&client, &dest, prof.as_str(), "org.freedesktop.NetworkManager.Settings.Connection").await;
+    let r: zbus::Result<()> = c.call("Delete", &()).await; assert!(r.is_err(), "a wired profile is not deletable");
+    // a non-member may not disconnect it
+    *rec.uid.lock().unwrap() = 1000;
+    let r: zbus::Result<()> = dev.call("Disconnect", &()).await; assert!(r.is_err(), "non-admin refused");
+    assert!(rec.wired_calls.lock().unwrap().is_empty(), "nothing done for a refused caller");
+    // Disconnect (Settings' "Disconnect": DeactivateConnection on its active connection) as a networkmanager member
+    *rec.uid.lock().unwrap() = 4242;
+    let root = px(&client, &dest, NM, "org.freedesktop.NetworkManager").await;
+    let r: zbus::Result<()> = root.call("DeactivateConnection", &(ac.clone(),)).await; r.expect("a wired link disconnects");
+    assert_eq!(rec.wired_calls.lock().unwrap().clone(), vec![("usbecm2".to_string(), false)], "its addresses went down");
+    assert!(rec.holds.lock().unwrap().contains(&("usbecm2".to_string(), true)), "solnix-netd holds it (no DHCP, no default)");
+    assert_eq!(dev.get_property::<OwnedObjectPath>("ActiveConnection").await.unwrap().as_str(), "/", "no longer active");
+    assert_eq!(dev.get_property::<Vec<OwnedObjectPath>>("AvailableConnections").await.unwrap(), vec![prof.clone()], "still offered, to connect again");
+    // Connect (ActivateConnection of the profile on the device)
+    let _: OwnedObjectPath = root.call("ActivateConnection", &(prof.clone(), op(&format!("{NM}/Devices/2")), op("/"))).await.expect("connects");
+    assert_eq!(rec.wired_calls.lock().unwrap().last().cloned(), Some(("usbecm2".to_string(), true)));
+    assert_eq!(rec.holds.lock().unwrap().last().cloned(), Some(("usbecm2".to_string(), false)), "hold released: netd may DHCP it");
+    assert_ne!(dev.get_property::<OwnedObjectPath>("ActiveConnection").await.unwrap().as_str(), "/", "active again");
     let _ = std::fs::remove_dir_all(&d);
 }

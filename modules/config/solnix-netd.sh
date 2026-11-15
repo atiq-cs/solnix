@@ -56,6 +56,9 @@ ensure_dhcp() {	# $1 link: an IPv4 DHCP address, unless it has an address alread
 	dpid[$1]=$!
 }
 
+# solnix-nm (services.solnix-nm) holds a link it disconnected (or a wifi link it is joining itself): netd leaves it alone
+held() { [ -n "$NETD_HOLD_DIR" ] && [ -e "$NETD_HOLD_DIR/$1.down" ]; }
+
 wifi_keep() {	# $1 link: rejoin while disconnected, backoff 10 s doubling to 5 min
 	wst[$1]=$(dladm show-wifi -p -o status "$1" 2>/dev/null)
 	if [ "${wst[$1]}" = connected ]; then
@@ -63,8 +66,7 @@ wifi_keep() {	# $1 link: rejoin while disconnected, backoff 10 s doubling to 5 m
 		wback[$1]=0 wnext[$1]=0; return
 	fi
 	[ -n "${wpid[$1]}" ] && kill -0 "${wpid[$1]}" 2>/dev/null && return
-	# solnix-nm (services.solnix-nm) holds a link it disconnected, or is joining itself
-	[ -n "$NETD_HOLD_DIR" ] && [ -e "$NETD_HOLD_DIR/$1.down" ] && return
+	held "$1" && return
 	(( SECONDS < ${wnext[$1]:-0} )) && return
 	log "$1: ${wst[$1]:-absent}: joining"
 	/bin/sh "${wjoin[$1]}" 2>&1 | while read -r x; do log "$1: $x"; done &
@@ -142,11 +144,11 @@ apply() {
 	scan_links
 	for l in "${!state[@]}"; do
 		! wireless "$l" && managed "$l" && plumb "$l"
-		[ "${state[$l]}" = up ] && managed "$l" && ensure_dhcp "$l"
+		[ "${state[$l]}" = up ] && managed "$l" && ! held "$l" && ensure_dhcp "$l"
 		[ -n "${seen[$l]}" ] && [ "${seen[$l]}" != "${state[$l]}" ] && log "$l: link ${state[$l]}"
 		seen[$l]=${state[$l]}
 	done
-	for l in "${!seen[@]}"; do [ -n "${state[$l]}" ] || { log "$l: link gone"; unset seen[$l] dgw[$l] armed[$l]; }; done
+	for l in "${!seen[@]}"; do [ -n "${state[$l]}" ] || { log "$l: link gone"; unset seen[$l] dgw[$l] armed[$l]; held "$l" && rm -f "$NETD_HOLD_DIR/$l.down"; }; done
 	for w in "${!wjoin[@]}"; do wifi_keep "$w"; done
 	unset fdef; typeset -A fdef
 	netstat -rn -f inet 2>/dev/null | awk '$1 == "default" { print $6, $2 }' |
@@ -155,9 +157,9 @@ apply() {
 	for w in "${!state[@]}"; do wireless "$w" && [ "${state[$w]}" = up ] && leased "$w" && alt=alt; done
 	for l in "${!state[@]}"; do
 		wireless "$l" && continue
-		if [ "${state[$l]}" != up ]; then
+		if [ "${state[$l]}" != up ] || held "$l"; then	# held: Settings disconnected it (the link stays plumbed)
 			unset dgw[$l]	# routes netd added are not dhcpagent's to remove
-			managed "$l" && [ -n "${fdef[$l]}" ] && { log "$l: link down: default route removed"; rt delete default "${fdef[$l]}" -ifp "$l"; }
+			managed "$l" && [ -n "${fdef[$l]}" ] && { log "$l: link ${state[$l]}$(held "$l" && echo ', held'): default route removed"; rt delete default "${fdef[$l]}" -ifp "$l"; }
 			continue
 		fi
 		leased "$l" && (( SECONDS >= ${pnext[$l]:-0} )) && { probe "$l" "$alt"; (( pnext[$l] = SECONDS + NETD_TICK )); }

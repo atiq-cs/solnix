@@ -13,6 +13,9 @@
 #      With a fake usbecm (create-if brings its link up), two applies plumb usbecm0, then DHCP it; skipped, wifi,
 #      unmanaged and already-plumbed links are left alone; a disabled persistent config is enabled. NEG: OLD_REV's apply()
 #      (DHCP only on a link already up, the same loop to 72d2cda7) never plumbs it. Needs ksh93 (NETD_KSH, else on PATH).
+#  (e) a wired link solnix-nm holds (Settings > Wired > Disconnect: <hold dir>/<link>.down, its addresses disabled) gets no
+#      DHCP and loses its default route, while it stays plumbed; without the hold it is DHCPed. NEG: OLD_REV's apply()
+#      runs DHCP on the held link again (the disconnect undone within a tick).
 #
 #   sh scripts/test-netd.sh [repo]   # floki: functions from the tree and OLD_REV (git), the start methods by nix eval
 #   NETD_FILES=dir sh scripts/test-netd.sh   # dir holds new.sh old.sh new.m old.m (an illumos host: NETD_SH=/sbin/sh)
@@ -179,6 +182,23 @@ dset un; plumbrun new un 0 ""; [ -s "$NB/calls" ] && { cat "$NB/calls" > "$T/log
 dset old; plumbrun old old 1 e1000g0; cat "$NB/calls" > "$T/log"
 ! has 'create-if -t usbecm0' && grep -qx 'usbecm0:Ethernet:down' "$NB/phys" && ! grep -q create-addr "$NB/calls" &&
   ok "(d) NEG $OLD_REV's apply() leaves usbecm0 unplumbed, down, with no DHCP" || no "(d) NEG the old apply() plumbed usbecm0"
+
+# (e) held wired link. $NB/routes: netstat -rn lines (a default via usbecm0); NETD_DRY=1 logs route changes
+mkdir -p "$T/ebin"; printf '#!/bin/sh\ncat "$NB/routes"\n' > "$T/ebin/netstat"; chmod +x "$T/ebin/netstat"
+erun() { # erun <new|old> <name> <held 0|1>
+  st "e-$2"; mkdir -p "$NB/hold"; : > "$NB/calls"; [ "$3" = 1 ] && : > "$NB/hold/usbecm0.down"
+  printf '%s\n' iwx0:WiFi:up usbecm0:Ethernet:up > "$NB/phys"; printf '%s\n' lo0:ok usbecm0:ok > "$NB/ifs"
+  echo 'usbecm0/dhcp:disabled' > "$NB/addrs"; echo 'default 192.0.2.1 UG 1 0 usbecm0' > "$NB/routes"
+  ( cd "$NB" && NB=$NB NETD_WIFI=iwx0=/bin/true NETD_DHCP_ALL=1 NETD_SKIP_LINKS= NETD_DHCP_LINKS= NETD_DRY=1 NETD_HOLD_DIR=$NB/hold \
+    "$KSH" -c ". '$T/$1.d'; PATH=$T/ebin:$T/dbin:\$PATH; apply; wait" > "$NB/log" 2>&1 ) ; }
+erun new held 1; cat "$NB/log" "$NB/calls" > "$T/log"
+! grep -q 'create-addr.* usbecm0/' "$NB/calls" && grep -q 'dry: route delete default 192.0.2.1 -ifp usbecm0' "$NB/log" &&
+  ok "(e) a held wired link gets no DHCP and loses its default route" || no "(e) held usbecm0 was DHCPed or kept its default"
+erun new free 0; cat "$NB/calls" > "$T/log"
+has 'create-addr -t -T dhcp -w 30 usbecm0/dhcp' && ! grep -q 'route delete' "$NB/log" &&
+  ok "(e) the same link without a hold is DHCPed and keeps its default" || no "(e) unheld usbecm0 not DHCPed"
+erun old held 1; cat "$NB/calls" > "$T/log"
+has 'create-addr -t -T dhcp -w 30 usbecm0/dhcp' && ok "(e) NEG $OLD_REV's apply() DHCPs the held link" || no "(e) NEG old apply() left it"
 fi
 
 [ $bad = 0 ] && echo "RESULT PASS" || echo "RESULT FAIL"

@@ -14,7 +14,8 @@ pub trait Backend: Send + Sync {
     fn scan<'a>(&'a self, link: &'a str) -> Fut<'a, Option<Vec<sys::Bss>>>;
     fn wifi_status<'a>(&'a self, link: &'a str) -> Fut<'a, sys::WifiStatus>;
     fn addr<'a>(&'a self, link: &'a str) -> Fut<'a, Option<(String, u32)>>;
-    fn has_default_route(&self) -> Fut<'_, bool>;
+    fn default_routes(&self) -> Fut<'_, Vec<(String, String)>>;   // (interface, gateway)
+    fn wired_addrs<'a>(&'a self, link: &'a str, on: bool) -> Fut<'a, bool>;
     /// Join `ssid` on `link` with the passphrase in `psk_file` (None: open); true once associated.
     fn join<'a>(&'a self, link: &'a str, ssid: &'a str, psk_file: Option<&'a str>, secs: u64) -> Fut<'a, bool>;
     fn disconnect<'a>(&'a self, link: &'a str) -> Fut<'a, bool>;
@@ -33,7 +34,8 @@ impl Backend for Real {
     fn scan<'a>(&'a self, link: &'a str) -> Fut<'a, Option<Vec<sys::Bss>>> { Box::pin(sys::scan(link)) }
     fn wifi_status<'a>(&'a self, link: &'a str) -> Fut<'a, sys::WifiStatus> { Box::pin(sys::wifi_status(link)) }
     fn addr<'a>(&'a self, link: &'a str) -> Fut<'a, Option<(String, u32)>> { Box::pin(sys::addr(link)) }
-    fn has_default_route(&self) -> Fut<'_, bool> { Box::pin(sys::has_default_route()) }
+    fn default_routes(&self) -> Fut<'_, Vec<(String, String)>> { Box::pin(sys::default_routes()) }
+    fn wired_addrs<'a>(&'a self, link: &'a str, on: bool) -> Fut<'a, bool> { Box::pin(sys::wired_addrs(link, on)) }
     fn join<'a>(&'a self, link: &'a str, ssid: &'a str, psk_file: Option<&'a str>, secs: u64) -> Fut<'a, bool> {
         Box::pin(sys::join(link, ssid, psk_file, secs))
     }

@@ -68,6 +68,7 @@ struct Model {
     next_active: u32,
     wireless_enabled: bool,
     connectivity: u32,
+    defaults: Vec<(String, String)>, // default routes: (interface, gateway)
     last_scan: HashMap<String, Instant>,
     boot: Option<Instant>,
 }
@@ -83,11 +84,18 @@ impl Model {
     fn saved_by_idx(&self, i: u32) -> Option<&sys::Saved> {
         self.conn_idx.iter().find(|(_, &v)| v == i).and_then(|(u, _)| self.saved.iter().find(|s| &s.uuid == u))
     }
+    /// Settings/<i> of a wired link: one profile per link, as NM's per-device "Wired connection" (solnix-netd runs it)
+    fn wired_by_idx(&self, i: u32) -> Option<&Dev> {
+        self.conn_idx.iter().find(|(_, &v)| v == i).and_then(|(u, _)| self.devs.iter().find(|d| !d.link.wifi && &wired_uuid(&d.link.name) == u))
+    }
     fn dev(&self, i: u32) -> Option<&Dev> { self.devs.iter().find(|d| d.idx == i) }
     fn last_scan_ms(&self, link: &str) -> i64 {
         match (self.last_scan.get(link), self.boot) { (Some(t), Some(b)) => (t.duration_since(b).as_millis() as i64).max(1), _ => -1 }
     }
 }
+
+fn wired_uuid(link: &str) -> String { sys::uuid_from(link.as_bytes()) }
+fn wired_id(link: &str) -> String { format!("Wired ({link})") }
 
 /// Rescan the system into the model. `scan`: also run dladm scan-wifi (slow: several seconds).
 async fn refresh(ctx: &Ctx, scan: bool) {
@@ -135,12 +143,14 @@ async fn refresh(ctx: &Ctx, scan: bool) {
             fresh.push((d, sys::WifiStatus::default()));
         }
     }
-    let route = ctx.be.has_default_route().await;
+    let defaults = ctx.be.default_routes().await;
     let mut m = ctx.m.lock().await;
     m.saved = ctx.store.load(&ctx.declared);
     let saved = m.saved.clone();
+    let wired: Vec<String> = fresh.iter().filter(|(d, _)| !d.link.wifi).map(|(d, _)| wired_uuid(&d.link.name)).collect();
     for s in &saved { m.conn_path(&s.uuid); }
-    m.conn_idx.retain(|u, _| saved.iter().any(|s| &s.uuid == u));
+    for u in &wired { m.conn_path(u); }
+    m.conn_idx.retain(|u, _| saved.iter().any(|s| &s.uuid == u) || wired.contains(u));
     // active connections: one per wifi link connected to an SSID we hold a profile for, one per wired link with an address
     let mut act = Vec::new();
     let mut devs = Vec::new();
@@ -150,7 +160,7 @@ async fn refresh(ctx: &Ctx, scan: bool) {
         let (uuid, id, conn) = match (&prof, d.link.wifi, d.state) {
             (Some(p), true, _) => (p.uuid.clone(), String::from_utf8_lossy(&p.ssid).into_owned(), m.conn_path(&p.uuid)),
             (None, true, s) if s >= DS_CONFIG => (sys::uuid_from(w.essid.as_bytes()), w.essid.clone(), 0),
-            (_, false, DS_ACTIVATED) => (sys::uuid_from(d.link.name.as_bytes()), format!("Wired ({})", d.link.name), 0),
+            (_, false, DS_ACTIVATED) => { let u = wired_uuid(&d.link.name); let c = m.conn_path(&u); (u, wired_id(&d.link.name), c) }
             _ => { devs.push(d); continue; }
         };
         let idx = m.active.iter().find(|a| a.uuid == uuid && a.dev == d.idx).map(|a| a.idx).unwrap_or_else(|| { m.next_active += 1; m.next_active });
@@ -166,7 +176,8 @@ async fn refresh(ctx: &Ctx, scan: bool) {
     }
     m.devs = devs;
     m.active = act;
-    m.connectivity = if route { CONN_FULL } else { CONN_NONE };
+    m.connectivity = if defaults.is_empty() { CONN_NONE } else { CONN_FULL };
+    m.defaults = defaults;
 }
 
 // ---- who may change things: root, or a member of the networkmanager group (NixOS's NM convention) ---------------
@@ -311,6 +322,8 @@ impl Root {
                                  _specific_object: ObjectPath<'_>) -> fdo::Result<OwnedObjectPath> {
         may_change(&self.0, &hdr).await?;
         let ci = idx_of(&connection, "Settings").ok_or_else(|| fdo::Error::UnknownObject("not a connection".into()))?;
+        let w = self.0.m.lock().await.wired_by_idx(ci).map(|d| d.idx);
+        if let Some(dev) = w { return up_wired(&self.0, dev).await; }
         let s = self.0.m.lock().await.saved_by_idx(ci).cloned().ok_or_else(|| fdo::Error::UnknownObject("no such connection".into()))?;
         let dev = dev_idx(&device).or(self.0.m.lock().await.devs.iter().find(|d| d.link.wifi).map(|d| d.idx)).ok_or_else(|| err("no wifi device"))?;
         Ok(self.activate(s.ssid, None, Some(s.uuid), dev).await?.1)
@@ -376,11 +389,24 @@ impl Root {
     #[zbus(signal, name = "StateChanged")] async fn nm_state_changed(e: &SignalEmitter<'_>, state: u32) -> zbus::Result<()>;
 }
 
+/// Connect a wired link (its profile activated): release solnix-netd's hold and re-enable the addresses a disconnect
+/// disabled; netd runs DHCP on a link left with none. The 5 s refresh shows the address and the active connection.
+async fn up_wired(ctx: &Arc<Ctx>, dev: u32) -> fdo::Result<OwnedObjectPath> {
+    let link = { let m = ctx.m.lock().await; m.dev(dev).filter(|d| !d.link.wifi).map(|d| d.link.name.clone()) }.ok_or_else(|| err("not a wired device"))?;
+    ctx.be.set_hold(&link, false);
+    ctx.be.wired_addrs(&link, true).await;
+    refresh(ctx, false).await;
+    publish(ctx).await;
+    let a = ctx.m.lock().await.dev(dev).map_or(0, |d| d.active);
+    Ok(if a == 0 { root() } else { op(&format!("{NM}/ActiveConnection/{a}")) })
+}
+
 async fn down_device(ctx: &Arc<Ctx>, dev: u32) -> fdo::Result<()> {
     let (link, wifi) = { let m = ctx.m.lock().await; let d = m.dev(dev).ok_or_else(|| fdo::Error::UnknownObject("no such device".into()))?; (d.link.name.clone(), d.link.wifi) };
-    if !wifi { return Err(fdo::Error::NotSupported("solnix-nm: wired links are solnix-netd's (networking.interfaces)".into())); }
-    ctx.be.set_hold(&link, true);
-    ctx.be.disconnect(&link).await;
+    ctx.be.set_hold(&link, true);   // solnix-netd leaves a held link alone: no rejoin, no DHCP, no default route
+    if wifi { ctx.be.disconnect(&link).await; }
+    // wired: drop its IPv4 addresses from the active config only; the link stays plumbed, so usbecm keeps carrier
+    else if !ctx.be.wired_addrs(&link, false).await { ctx.be.set_hold(&link, false); return Err(err("ipadm disable-addr failed")); }
     let aidx = { let m = ctx.m.lock().await; m.active.iter().find(|a| a.dev == dev).map(|a| a.idx) };
     refresh(ctx, false).await;
     if let Some(a) = aidx {
@@ -426,7 +452,11 @@ impl DevObj {
     #[zbus(property)] async fn device_type(&self) -> u32 { if self.d().await.link.wifi { DEV_WIFI } else { DEV_ETHERNET } }
     #[zbus(property)] async fn available_connections(&self) -> Vec<OwnedObjectPath> {
         let m = self.0.m.lock().await;
-        if !m.dev(self.1).is_some_and(|d| d.link.wifi) { return vec![]; }
+        match m.dev(self.1) {
+            Some(d) if !d.link.wifi => return m.conn_idx.get(&wired_uuid(&d.link.name)).map(|i| vec![op(&format!("{NM}/Settings/{i}"))]).unwrap_or_default(),
+            Some(_) => {}
+            None => return vec![],
+        }
         m.saved.iter().filter_map(|s| m.conn_idx.get(&s.uuid)).map(|i| op(&format!("{NM}/Settings/{i}"))).collect()
     }
     #[zbus(property)] async fn physical_port_id(&self) -> String { String::new() }
@@ -480,7 +510,7 @@ struct WiredObj(Arc<Ctx>, u32);
 impl WiredObj {
     #[zbus(property)] async fn hw_address(&self) -> String { self.0.m.lock().await.dev(self.1).map(|d| d.link.mac.clone()).unwrap_or_default() }
     #[zbus(property)] async fn perm_hw_address(&self) -> String { self.hw_address().await }
-    #[zbus(property)] async fn speed(&self) -> u32 { 1000 }
+    #[zbus(property)] async fn speed(&self) -> u32 { self.0.m.lock().await.dev(self.1).map_or(0, |d| d.link.speed_mbps) }
     #[zbus(property)] async fn s390_subchannels(&self) -> Vec<String> { vec![] }
     #[zbus(property)] async fn carrier(&self) -> bool { self.0.m.lock().await.dev(self.1).is_some_and(|d| d.link.up) }
 }
@@ -539,7 +569,10 @@ impl Ip4Obj {
         let a = self.0.m.lock().await.dev(self.1).and_then(|d| d.addr.clone());
         a.map(|(ad, p)| vec![HashMap::from([("address".to_string(), ov(ad)), ("prefix".to_string(), ov(p))])]).unwrap_or_default()
     }
-    #[zbus(property)] async fn gateway(&self) -> String { String::new() }
+    #[zbus(property)] async fn gateway(&self) -> String {
+        let m = self.0.m.lock().await;
+        m.dev(self.1).and_then(|d| m.defaults.iter().find(|(i, _)| *i == d.link.name)).map(|(_, g)| g.clone()).unwrap_or_default()
+    }
     #[zbus(property)] async fn route_data(&self) -> Vec<HashMap<String, OwnedValue>> { vec![] }
     #[zbus(property)] async fn nameserver_data(&self) -> Vec<HashMap<String, OwnedValue>> {
         std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default().lines().filter_map(|l| l.strip_prefix("nameserver ")).map(|a| HashMap::from([("address".to_string(), ov(a.trim().to_string()))])).collect()
@@ -578,7 +611,7 @@ impl SettingsObj {
     async fn reload_connections(&self) -> bool { refresh(&self.0, false).await; publish(&self.0).await; true }
     #[zbus(property)] async fn connections(&self) -> Vec<OwnedObjectPath> {
         let m = self.0.m.lock().await;
-        let mut v: Vec<u32> = m.saved.iter().filter_map(|s| m.conn_idx.get(&s.uuid).copied()).collect(); v.sort();
+        let mut v: Vec<u32> = m.conn_idx.values().copied().collect(); v.sort();   // the saved wifi profiles and one per wired link
         v.into_iter().map(|i| op(&format!("{NM}/Settings/{i}"))).collect()
     }
     #[zbus(property)] async fn hostname(&self) -> String { std::fs::read_to_string("/etc/nodename").unwrap_or_default().trim().into() }
@@ -588,11 +621,35 @@ impl SettingsObj {
 }
 
 struct ConnObj(Arc<Ctx>, u32);
+impl ConnObj {
+    async fn not_wired(&self) -> fdo::Result<()> {
+        if self.0.m.lock().await.wired_by_idx(self.1).is_some() {
+            return Err(fdo::Error::NotSupported("solnix-nm: a wired link's settings are its networking.interfaces config".into()));
+        }
+        Ok(())
+    }
+}
+
+/// A wired link's profile as NM's GetSettings shows a "Wired connection": ethernet, bound to the link, DHCP
+fn wired_settings(d: &Dev) -> Settings {
+    let mac: Vec<u8> = d.link.mac.split(':').filter_map(|o| u8::from_str_radix(o, 16).ok()).collect();
+    let mut eth: HashMap<String, OwnedValue> = HashMap::new();
+    if mac.len() == 6 { eth.insert("mac-address".into(), ov(mac)); }
+    HashMap::from([
+        ("connection".into(), HashMap::from([("id".into(), ov(wired_id(&d.link.name))), ("uuid".into(), ov(wired_uuid(&d.link.name))),
+            ("type".into(), ov("802-3-ethernet")), ("interface-name".into(), ov(d.link.name.clone())), ("autoconnect".into(), ov(true))])),
+        ("802-3-ethernet".into(), eth),
+        ("ipv4".into(), HashMap::from([("method".into(), ov("auto"))])),
+        ("ipv6".into(), HashMap::from([("method".into(), ov("ignore"))])),
+    ])
+}
+
 #[interface(name = "org.freedesktop.NetworkManager.Settings.Connection")]
 impl ConnObj {
     /// NM never returns secrets from GetSettings (GetSecrets does, to agents); neither does this.
     async fn get_settings(&self) -> fdo::Result<Settings> {
         let m = self.0.m.lock().await;
+        if let Some(d) = m.wired_by_idx(self.1) { return Ok(wired_settings(d)); }
         let s = m.saved_by_idx(self.1).ok_or_else(|| fdo::Error::UnknownObject("no such connection".into()))?;
         let id = String::from_utf8_lossy(&s.ssid).into_owned();
         let mut out: Settings = HashMap::new();
@@ -608,6 +665,7 @@ impl ConnObj {
     async fn get_secrets(&self, _setting_name: &str) -> fdo::Result<Settings> { Err(fdo::Error::AccessDenied("solnix-nm: secrets stay in /etc/wifi".into())) }
     async fn update(&self, #[zbus(header)] hdr: Header<'_>, properties: Settings) -> fdo::Result<()> {
         may_change(&self.0, &hdr).await?;
+        self.not_wired().await?;
         let psk = settings_str(&properties, "802-11-wireless-security", "psk").filter(|p| !p.is_empty());
         let mut m = self.0.m.lock().await;
         let s = m.saved_by_idx(self.1).cloned().ok_or_else(|| fdo::Error::UnknownObject("no such connection".into()))?;
@@ -623,6 +681,7 @@ impl ConnObj {
     async fn update_unsaved(&self, #[zbus(header)] hdr: Header<'_>, properties: Settings) -> fdo::Result<()> { self.update(hdr, properties).await }
     async fn delete(&self, #[zbus(header)] hdr: Header<'_>) -> fdo::Result<()> {
         may_change(&self.0, &hdr).await?;
+        self.not_wired().await?;
         let mut m = self.0.m.lock().await;
         let s = m.saved_by_idx(self.1).cloned().ok_or_else(|| fdo::Error::UnknownObject("no such connection".into()))?;
         if s.declared { return Err(err("declared in the system configuration (hardware.wirelessIwx.networks): remove it there")); }
