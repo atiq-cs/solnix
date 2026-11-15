@@ -349,4 +349,84 @@ in {
   envsubst = pkg { pname = "envsubst"; version = "1.4.3"; src = gh "a8m/envsubst" "v1.4.3" "01ca48a2beaeeda5b9fbca9c46bb9e9acc0e55354761d90e4beba5ca1c97aa8b";
     vendorHash = null; subPkgs = "./cmd/envsubst";
     check = chk ''"$out/bin/envsubst" --help'' "[-]fail-fast"; };
+  # brev-cli (MIT): connect your laptop to cloud computers.
+  brev-cli = pkg { pname = "brev-cli"; version = "0.6.316"; src = gh "brevdev/brev-cli" "v0.6.316" "095452684cb08ffc3b94d1415c17ba9ef25f1355d4d3105645bdc6ad498e2278";
+    vendorHash = "sha256-JK9ktJLJDtGU2r1YhHXqG7nlwnosJJjZxSxefM7kP0Q="; subPkgs = "."; ldflags = "-s -w -X github.com/brevdev/brev-cli/pkg/cmd/version.Version=v0.6.316";
+    check = chk ''"$out/bin/brev-cli" --version'' "0\\.6\\.316"; };
+  # butane (Apache-2.0): translates human-readable Butane configs into machine-readable Ignition configs.
+  butane = pkg { pname = "butane"; version = "2.28.0"; src = gh "coreos/ignition" "v2.28.0" "a2ff1a2aafc1a54fedd535487c4b0cf2afad5945a788edfb85140420a1f772de";
+    vendorHash = null; subPkgs = "./butane/internal"; ldflags = "-X github.com/coreos/ignition/v2/butane/internal/version.Raw=v2.28.0";
+    check = chk ''"$out/bin/internal" --version'' "2\\.28\\.0"; };
+  # cirrus-cli (MIT): CLI for executing Cirrus tasks locally and in any CI.
+  cirrus-cli = pkg { pname = "cirrus-cli"; version = "1.0.0"; src = gh "cirruslabs/cirrus-cli" "v1.0.0" "24d9464daf591d45b6ca9ce987d669da3db2e81341893204d557c2242e1e75bc";
+    vendorHash = "sha256-nlVUMNEjAzIdXDDxpxuF3V2atXfkjGL51o9LUeCyB8k="; subPkgs = "./cmd/cirrus"; ldflags = "-X github.com/cirruslabs/cirrus-cli/internal/version.Version=v1.0.0 -X github.com/cirruslabs/cirrus-cli/internal/version.Commit=v1.0.0";
+    check = chk ''"$out/bin/cirrus" --version'' "1\\.0\\.0"; };
+  # ctlptl (Apache-2.0): CLI for declaratively setting up local Kubernetes clusters.
+  ctlptl = pkg { pname = "ctlptl"; version = "0.9.6"; src = gh "tilt-dev/ctlptl" "v0.9.6" "51af2008cf435a808cb297c9564fe94a4207da541871739bde5062a2a8ede933";
+    vendorHash = "sha256-LzQ42NOGAe8xpyk37DS0yf3Qehx1krkU6AXexm3iDKI="; subPkgs = "./cmd/ctlptl"; ldflags = "-s -w -X main.version=0.9.6";
+    check = chk ''"$out/bin/ctlptl" version'' "0\\.9\\.6"; };
+  # driftctl (Apache-2.0): detect, track and alert on infrastructure drift.
+  driftctl = pkg { pname = "driftctl"; version = "0.40.0"; src = gh "snyk/driftctl" "v0.40.0" "30781d35092dd1dd1b34f22e63e3130a062cf4a3f511f61be013a0ff2a0c7767";
+    vendorHash = "sha256-8SBsEHW74N3jR6wcJSGPJY8gdUHTu1ZrSfJgju01B8g="; subPkgs = "."; ldflags = "-s -w -X github.com/snyk/driftctl/pkg/version.version=v0.40.0 -X github.com/snyk/driftctl/build.env=release -X github.com/snyk/driftctl/build.enableUsageReporting=false";
+    check = chk ''"$out/bin/driftctl" version'' "0\\.40\\.0"; };
+  # fission (Apache-2.0): cli used by end user to interact Fission.
+  fission = pkg { pname = "fission"; version = "1.27.0"; src = gh "fission/fission" "v1.27.0" "3e9be3fdbf7b8db8fbcf629e12260b30005a0c022f33a0d19b660ea59fc7f6bf";
+    vendorHash = "sha256-hoLf8Kpx4jr9W5D+KvLrH8uKHoW39bNQzYqCEA+hXio="; subPkgs = "./cmd/fission-cli"; ldflags = "-s -w -X info.Version=1.27.0";
+    check = chk ''"$out/bin/fission-cli" --help'' "Fission: Fast and Simple Serverless Func"; };
+  # fluxcd-operator (AGPL-3.0-only): kubernetes controller for managing the lifecycle of Flux CD.
+  fluxcd-operator = pkg { pname = "fluxcd-operator"; version = "0.58.1"; src = gh "controlplaneio-fluxcd/flux-operator" "refs/tags/v0.58.1" "8ecbaf050e63c26dc38702955425d03d3725d2b45f08e5506e8d24202be9c459";
+    vendorHash = "sha256-3X4QMUIgvsTUq3HWlZjdAtqYx/lNYpk7Pb9ISP8HQes="; subPkgs = "./cmd/cli"; ldflags = "-s -w -X main.VERSION=0.58.1";
+    check = chk ''"$out/bin/cli" --version'' "0\\.58\\.1"; };
+  # fluxcd-operator-mcp (AGPL-3.0-only): kubernetes controller for managing the lifecycle of Flux CD.
+  fluxcd-operator-mcp = pkg { pname = "fluxcd-operator-mcp"; version = "0.58.1"; src = gh "controlplaneio-fluxcd/flux-operator" "refs/tags/v0.58.1" "8ecbaf050e63c26dc38702955425d03d3725d2b45f08e5506e8d24202be9c459";
+    vendorHash = "sha256-3X4QMUIgvsTUq3HWlZjdAtqYx/lNYpk7Pb9ISP8HQes="; subPkgs = "./cmd/mcp"; ldflags = "-s -w -X main.VERSION=0.58.1";
+    check = chk ''"$out/bin/mcp" --version'' "0\\.58\\.1"; };
+  # gatekeeper (Apache-2.0): policy Controller for Kubernetes.
+  gatekeeper = pkg { pname = "gatekeeper"; version = "3.23.1"; src = gh "open-policy-agent/gatekeeper" "refs/tags/v3.23.1" "8d49585365c26e809754850b4119b0f97eaba608071b1c99bc3e68b41038272e";
+    vendorHash = "sha256-/cxQGuLC4LRpcg1EtbmTZdTe8rtvYL2D0QXQ3iM9blo="; subPkgs = "./cmd/gator"; ldflags = "-X github.com/open-policy-agent/gatekeeper/v3/pkg/version.Version=3.23.1";
+    check = chk ''"$out/bin/gator" --version'' "3\\.23\\.1"; };
+  # gcx (Apache-2.0): grafana Cloud CLI.
+  gcx = pkg { goPkgs = go_1_27; pname = "gcx"; version = "1.7.1"; src = gh "grafana/gcx" "refs/tags/v1.7.1" "9b5ec00327d457f0acba20c301e94d2e1085448da60b500d58dd9a8d415a18c8";
+    vendorHash = "sha256-8cOW2+d5LCy5cZi3a3pW8VMOBJNglbmqmVdXRozZ2vc="; subPkgs = "./cmd/gcx"; ldflags = "-w -X=main.version=1.7.1 -X=main.commit=refs/tags/v1.7.1 -X=main.date=1970-01-01T00:00:00Z";
+    check = chk ''"$out/bin/gcx" --version'' "1\\.7\\.1"; };
+  # grafana-dashboard-linter (Apache-2.0): linter for Grafana dashboards.
+  grafana-dashboard-linter = pkg { pname = "grafana-dashboard-linter"; version = "0.3.0"; src = gh "grafana/dashboard-linter" "refs/tags/v0.3.0" "50a2bb09217c55233581de9cf8bf1d5e29114e4e4b2bcb2a6425f5248e844d61";
+    vendorHash = "sha256-m1bQwtOi/Ur9MVS9a8bR9iJ0gZ+76Jy5OEf+lpn1ydQ="; subPkgs = "."; ldflags = "-s";
+    check = chk ''"$out/bin/dashboard-linter" --help'' "[Uu]sage"; };
+  # harbor-cli (Apache-2.0): command-line tool facilitates seamless interaction with the Harbor container registry.
+  harbor-cli = pkg { pname = "harbor-cli"; version = "0.0.27"; src = gh "goharbor/harbor-cli" "refs/tags/v0.0.27" "b8661164e532471e1cfcd74d5447c69648924a501a628a8b8322c4facaefb17b";
+    vendorHash = "sha256-wawC5/qHFcoPRNF+jNzZx1oPqdAN0pd9FQkNCisuTjE="; subPkgs = "./cmd/harbor"; ldflags = "-s -X github.com/goharbor/harbor-cli/cmd/harbor/internal/version.Version=0.0.27";
+    check = chk ''"$out/bin/harbor" --help'' "[Uu]sage"; };
+  # hcloud (MIT): command-line interface for Hetzner Cloud, a provider for cloud virtual private servers.
+  hcloud = pkg { pname = "hcloud"; version = "1.70.0"; src = gh "hetznercloud/cli" "refs/tags/v1.70.0" "022a610f22da8bb0f1206a23cbc5f62e1f1553fb52747388ad5624dc9ec37333";
+    vendorHash = "sha256-lm5aJ1lfTJeVxv9zMX/e9RdBlpN8xO5voc/Y/wNUl7w="; subPkgs = "./cmd/hcloud"; ldflags = "-s -w -X=github.com/hetznercloud/cli/internal/version.Version=1.70.0";
+    check = chk ''"$out/bin/hcloud" version'' "1\\.70\\.0"; };
+  # istioctl (Apache-2.0): istio configuration command line utility for service operators to debug and diagnose their Istio mesh.
+  istioctl = pkg { pname = "istioctl"; version = "1.31.3"; src = gh "istio/istio" "1.31.3" "aa1380bf3d59061c85c7704f1fb6c11cb922ea41131b6def42f9b6a9a7670eea";
+    vendorHash = "sha256-SNcI2+rM8PJlo/bpYFmgO69/cRoQk1PjfXEGVHmvV1s="; subPkgs = "./istioctl/cmd/istioctl"; ldflags = "-s -w -X istio.io/istio/pkg/version.buildVersion=1.31.3 -X istio.io/istio/pkg/version.buildStatus=Nix -X istio.io/istio/pkg/version.buildTag=1.31.3 -X istio.io/istio/pkg/version.buildHub=docker.io/istio";
+    check = chk ''"$out/bin/istioctl" --help'' "[Uu]sage"; };
+  # konstraint (MIT): policy management tool for interacting with Gatekeeper.
+  konstraint = pkg { pname = "konstraint"; version = "0.43.0"; src = gh "plexsystems/konstraint" "v0.43.0" "4e936f6fb84b32a5f95a76fcc368a113e8077275cee8f41adbbcb14a722187b2";
+    vendorHash = "sha256-ZTiVrtn1UH2Awm7dtxqfTOIXBOT4Wv2g2J4LwJnHMug="; subPkgs = "."; ldflags = "-s -w -X github.com/plexsystems/konstraint/internal/commands.version=0.43.0";
+    check = chk ''"$out/bin/konstraint" --version'' "0\\.43\\.0"; };
+  # kubecfg (Apache-2.0): tool for managing Kubernetes resources as code.
+  kubecfg = pkg { pname = "kubecfg"; version = "0.38.0"; src = gh "kubecfg/kubecfg" "v0.38.0" "367e06009a58a32e8c1be81f4b8433ad104d3fab23b835fe61e80ac3b1d99455";
+    vendorHash = "sha256-BpVZ+MnfOald8DsewmBTkn4PU4t0XYDlcouKRwZ+s74="; subPkgs = "."; ldflags = "-s -w -X main.version=v0.38.0";
+    check = chk ''"$out/bin/kubecfg" version'' "0\\.38\\.0"; };
+  # kubectl-ai (Apache-2.0): AI powered Kubernetes Assistant.
+  kubectl-ai = pkg { pname = "kubectl-ai"; version = "0.0.26"; src = gh "GoogleCloudPlatform/kubectl-ai" "refs/tags/v0.0.26" "fc1a31aca351f3f29859580f8167701e613ced5047ee2072b2d0e04b65be6027";
+    vendorHash = "sha256-iIgkZPBB/EhdDjIug/ZMq9E2f8jKcR1AqXECy9pOzrE="; subPkgs = "./cmd"; ldflags = "-s -w -X main.version=0.0.26";
+    check = chk ''"$out/bin/cmd" version'' "0\\.0\\.26"; };
+  # kubectl-rook-ceph (Apache-2.0): krew plugin to run kubectl commands with rook-ceph.
+  kubectl-rook-ceph = pkg { pname = "kubectl-rook-ceph"; version = "0.9.6"; src = gh "rook/kubectl-rook-ceph" "refs/tags/v0.9.6" "5e580a42f1fda40a0ec4db0af24bc09f2ec0fcb02393ffb6ba2d7b08ea5c99e2";
+    vendorHash = "sha256-jBAZrDg8J/z0m+rYmXg+hkl+xQxvgGqqqxNwofPUEw4="; subPkgs = "./cmd";
+    check = chk ''"$out/bin/cmd" --help'' "[Uu]sage"; };
+  # kyverno-chainsaw (Apache-2.0): declarative approach to test Kubernetes operators and controllers.
+  kyverno-chainsaw = pkg { pname = "kyverno-chainsaw"; version = "0.2.15"; src = gh "kyverno/chainsaw" "refs/tags/v0.2.15" "04f3fc7dd8e958e4fc7d73383bc22b05827240dd2fe7a8e32ee99d8c0332da2a";
+    vendorHash = "sha256-tEl09UfxkfBkKGaVPJlnqb1UsgBFj8luP7JGM6rGVXk="; subPkgs = "."; ldflags = "-s -w -X github.com/kyverno/chainsaw/pkg/version.BuildVersion=v0.2.15";
+    check = chk ''"$out/bin/chainsaw" version'' "0\\.2\\.15"; };
+  # onmetal-image (Apache-2.0): onmetal OCI Image Specification, Library and Tooling.
+  onmetal-image = pkg { pname = "onmetal-image"; version = "0.1.1"; src = gh "onmetal/onmetal-image" "v0.1.1" "51ec2bbf747c016177ad7d8f3c2c9fbe62833754278e4763f510c763974f0911";
+    vendorHash = "sha256-naXpuKjSXAIu/qykk/HuMa1NjeAu6IFsgSZT0smogQg="; subPkgs = "./cmd";
+    check = chk ''"$out/bin/cmd" --help'' "[-]-docker-config-path"; };
 }
