@@ -249,4 +249,104 @@ in {
   kconf = pkg { pname = "kconf"; version = "2.0.0"; src = gh "particledecay/kconf" "v2.0.0" "e7fe6750c719caf227890a31e2fd5446972ec3e1e5492180d0a387fe1c3394c0";
     vendorHash = "sha256-6ZLEfm1BnheevU+ZwYmIpUNnpcckYlVJgn6Fu6UPoEU="; subPkgs = "."; ldflags = "-s -w -X github.com/particledecay/kconf/build.Version=2.0.0";
     check = chk ''"$out/bin/kconf" version'' "2\\.0\\.0"; };
+  # krelay (MIT): drop-in replacement for `kubectl port-forward` with some enhanced features.
+  krelay = pkg { pname = "krelay"; version = "0.2.0"; src = gh "knight42/krelay" "v0.2.0" "7c01e033a3891dae9c476b1bcb0fe1d96a712ff19fce6df4989cf10024d56608";
+    vendorHash = "sha256-qaSf6j0RAX9MPVBLlvv9mSnxDAMXhWBVLEEe6yH/Pik="; subPkgs = "./cmd/client"; ldflags = "-s -w -X github.com/knight42/krelay/pkg/constants.ClientVersion=0.2.0";
+    check = chk ''"$out/bin/client" --help'' "[Uu]sage"; };
+  # kubeaudit (MIT): audit tool for Kubernetes.
+  kubeaudit = pkg { pname = "kubeaudit"; version = "0.22.2"; src = gh "Shopify/kubeaudit" "refs/tags/v0.22.2" "90752d42c4d502ab6776af3358ae87a02d2893fc2bb7a0364d6c1fdcd8ff0570";
+    vendorHash = "sha256-OsVqIg/Mn08xR+RkImyHlojv+RANOXvsXXwDBPs81RA="; subPkgs = "./cmd";
+    check = chk ''"$out/bin/cmd" version'' "0\\.22\\.2"; };
+  # kubectl-ktop (Apache-2.0): top-like tool for your Kubernetes clusters.
+  kubectl-ktop = pkg { pname = "kubectl-ktop"; version = "0.5.3"; src = gh "vladimirvivien/ktop" "refs/tags/v0.5.3" "f255733a56ce292cdf6ca543cf5ef85969814de8ccf60431d70b85dfe38f720f";
+    vendorHash = "sha256-kfuVZx6uG4PwEUBX9a2GuvAwD7ExOplqMgXn02otQl8="; subPkgs = "."; ldflags = "-s -w -X github.com/vladimirvivien/ktop/buildinfo.Version=v0.5.3 -X github.com/vladimirvivien/ktop/buildinfo.GitSHA=v0.5.3";
+    check = chk ''"$out/bin/ktop" --help'' "[-]-all-namespaces"; };
+  # kubectx (Apache-2.0): fast way to switch between clusters and namespaces in kubectl.
+  kubectx = pkg { pname = "kubectx"; version = "0.11.0"; src = gh "ahmetb/kubectx" "v0.11.0" "1c8eb6b30c0067f89e5b2f9480865b0e3229a221fadddb644ce192d663c63907";
+    vendorHash = "sha256-L99uY4ZwoBxfwLo0MsK66yksrMbHnQIv7qkBvDJX3nE="; subPkgs = "./cmd/kubectx ./cmd/kubens"; ldflags = "-s -w -X main.version=0.11.0";
+    check = chk ''"$out/bin/kubectx" --version'' "0\\.11\\.0"; };
+  # lazyssh (Apache-2.0): terminal-based SSH manager.
+  lazyssh = pkg { pname = "lazyssh"; version = "0.3.0"; src = gh "Adembc/lazyssh" "refs/tags/v0.3.0" "36cd630b3cd9447e88904171cbb64944aeacbbd62c15db66d8a0e4a4486ffe88";
+    vendorHash = "sha256-fUXfmcnd7uH8Pe6JS25CRkb/VHjKFUR3/vOHi4b6REo="; subPkgs = "./cmd"; ldflags = "-X=main.version=0.3.0 -X=main.gitCommit=v0.3.0";
+    check = chk ''"$out/bin/cmd" --help'' "[Uu]sage"; };
+  # logdy (Apache-2.0): web based real-time log viewer.
+  logdy = pkg { pname = "logdy"; version = "0.17.1"; src = gh "logdyhq/logdy-core" "refs/tags/v0.17.1" "bd5db124e736e42d3671697787a26b354e0be6e787a95e69c054ad873058fcec";
+    vendorHash = "sha256-8Aw0H4ofHcAhm5rOmOeelmpI0v79aVEWk8YN6smP8rY="; subPkgs = ". ./example-app"; ldflags = "-s -w";
+    check = chk ''"$out/bin/logdy-core" --help'' "[-]-append-to-file-raw"; };
+  # microplane (Apache-2.0): CLI tool to make git changes across many repos.
+  microplane = pkg { pname = "microplane"; version = "0.0.37"; src = gh "Clever/microplane" "v0.0.37" "437f65748272de89b8a6990f0f9fca57addf6ff6f8e4de077869976d2ce36154";
+    vendorHash = "sha256-GyhlrdJjLfOVYGGUMlRqZ0t95ipmU2FCmCz6hMUU+T0="; subPkgs = ". ./demo"; ldflags = "-s -w -X main.version=0.0.37";
+    check = chk ''"$out/bin/microplane" version'' "0\\.0\\.37"; };
+  # nvs (MIT): lightweight Neovim Version & Config Manager CLI tool to install, switch, list, uninstall, and reset Neovim versions.
+  nvs = pkg { pname = "nvs"; version = "1.15.0"; src = gh "y3owk1n/nvs" "refs/tags/v1.15.0" "1035ef21a2bf87bd736f66c8057c9491e57dfea99323083e4d8b0efddc8672c2";
+    vendorHash = "sha256-+scCySFs0+pxDEtP8Uw3MowULXW5UeDPvlJU3zIJac8="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/nvs" --help'' "[Uu]sage"; };
+  # open-in-mpv (GPL-3.0-only): simple web extension to open videos in mpv.
+  open-in-mpv = pkg { pname = "open-in-mpv"; version = "2.4.3"; src = gh "Baldomo/open-in-mpv" "v2.4.3" "d15dc21fb2875598500f4ab222bde20773674d3084216028532558b9d83499c1";
+    vendorHash = "sha256-sm8FXAM7YroIKlsSgu+FzOsSvn7oYXBK9TMpKMP0CGQ="; subPkgs = "./cmd/open-in-mpv"; ldflags = "-s -w";
+    check = chk ''"$out/bin/open-in-mpv" --help'' "[Uu]sage"; };
+  # phrase-cli (MIT): phraseApp API v2 Command Line Client.
+  phrase-cli = pkg { pname = "phrase-cli"; version = "2.68.0"; src = gh "phrase/phrase-cli" "2.68.0" "82abb47e48d45fd3fc2e667754502faf612f35db039c35c63a963c49376e200a";
+    vendorHash = "sha256-q3Y19zgMKvR19pF/bfIKCxNS7hBkg5KlnZreHeQZB74="; subPkgs = "."; ldflags = "-X=github.com/phrase/phrase-cli/cmd.PHRASE_CLIENT_VERSION=2.68.0";
+    check = chk ''"$out/bin/phrase-cli" version'' "2\\.68\\.0"; };
+  # pop (MIT): send emails from your terminal.
+  pop = pkg { pname = "pop"; version = "0.5.0"; src = gh "charmbracelet/pop" "v0.5.0" "c577d4f3edf403e34832013b79ddc159c1eec938e0bd452b2623c853f752a75c";
+    vendorHash = "sha256-5qNR4zdEhXzzw/nlacf5+KB6SqxcpbCjaBKrOltllrk="; subPkgs = "."; ldflags = "-s -w -X=main.Version=0.5.0";
+    check = chk ''"$out/bin/pop" --version'' "0\\.5\\.0"; };
+  # reader (GPL-3.0-or-later): lightweight tool offering better readability of web pages on the CLI.
+  reader = pkg { pname = "reader"; version = "0.6.1"; src = gh "mrusme/reader" "refs/tags/v0.6.1" "06a17a10f837e92c6a22b30bc3660520e93e70d03740f2ff03e57ba45d00d53d";
+    vendorHash = "sha256-vfyHViGlsxSvo/scftUA2+USqqLv5FKiqlAkRD1Xc2M="; subPkgs = ".";
+    check = chk ''"$out/bin/reader" --help'' "[-]-markdown-output"; };
+  # sbom-utility (Apache-2.0): utility that provides an API platform for validating, querying and managing BOM data.
+  sbom-utility = pkg { pname = "sbom-utility"; version = "0.19.2"; src = gh "CycloneDX/sbom-utility" "refs/tags/v0.19.2" "e1f49f1c69d231f19a16085a56ad187700cf712287412182442d6f1b000fd77e";
+    vendorHash = "sha256-5mJII+bEnPhQqUFS5S+A8z+GQcqJ6t6ss/TwPHJIPVE="; subPkgs = "."; ldflags = "-X main.Version=0.19.2";
+    check = chk ''"$out/bin/sbom-utility" --version'' "0\\.19\\.2"; };
+  # sift (GPL-3.0): fast and powerful alternative to grep.
+  sift = pkg { pname = "sift"; version = "0.9.2"; src = gh "svent/sift" "v0.9.2" "d6d8274e475f3f1235eb0118a89f981e0f7741b9f27243d679d3ecd76f68fe03";
+    vendorHash = "sha256-S3WONPc7Rkvgw+Fk84/XcTd7YtafA9C/lLkGJEKMDfQ="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/sift" --help'' "[-]-err-show-line-length"; };
+  # smug (MIT): tmux session manager.
+  smug = pkg { pname = "smug"; version = "0.3.19"; src = gh "ivaaaan/smug" "refs/tags/v0.3.19" "d1c43d84b5293cff1982437937367813f34cc1508d44da723b28649999147e3e";
+    vendorHash = "sha256-P3/sYdvXiUAI5ikdngrPl28rI82dlbbxZQsjnLSsjm4="; subPkgs = "."; ldflags = "-s -w -X=main.version=0.3.19";
+    check = chk ''"$out/bin/smug" --help'' "[-]-inside-current-session"; };
+  # splash-cli (MIT): add color to your logs.
+  splash-cli = pkg { pname = "splash-cli"; version = "0.9.5"; src = gh "joshi4/splash" "refs/tags/v0.9.5" "0b0e30ad4985e9a8079bd3a6f14b810cbeaa878e4c8d425f45b8a4c27e472b94";
+    vendorHash = "sha256-EvgApcRjpn51rKSuXxbmj/P0/X6g8TwZSJNxI01kWcM="; subPkgs = "."; ldflags = "-s -X=github.com/joshi4/splash/cmd.version=0.9.5 -X=github.com/joshi4/splash/cmd.externalUpdate=nix";
+    check = chk ''"$out/bin/splash" version'' "0\\.9\\.5"; };
+  # sttr (MIT): cross-platform cli tool to perform various operations on string.
+  sttr = pkg { pname = "sttr"; version = "0.2.30"; src = gh "abhimanyu003/sttr" "v0.2.30" "64c4ddd6f84c99f197053e96c489dea48c0bd83a33dfdd69ab209653bc38b9c8";
+    vendorHash = "sha256-tQz/YIjzlfo9bhucoGAz4EWmayA/J8zY8Gp4HjmyNrI="; subPkgs = "."; ldflags = "-s -w -X=main.version=0.2.30";
+    check = chk ''"$out/bin/sttr" version'' "0\\.2\\.30"; };
+  # swego (GPL-2.0-only): simple Webserver.
+  swego = pkg { pname = "swego"; version = "1.14"; src = gh "nodauf/Swego" "refs/tags/v1.14" "5aced7c116f6f84c8d643127db6b3b067ae1ad8c638c7e9efb30b8ebd07e04a6";
+    vendorHash = "sha256-fEHvMWsjwJe5VTxf7uawGO6cm3xzTO5k+gM5u/m7xR8="; subPkgs = "./src"; ldflags = "-w -s";
+    check = chk ''"$out/bin/src" --help'' "[Uu]sage"; };
+  # terraform-docs (MIT): utility to generate documentation from Terraform modules in various output formats.
+  terraform-docs = pkg { pname = "terraform-docs"; version = "0.24.0"; src = gh "terraform-docs/terraform-docs" "refs/tags/v0.24.0" "e3c971a1f2a02732d964e19e65c901b4e02cca62c4b748c05d22e9690d055540";
+    vendorHash = "sha256-Z/rP9MvSO8YxMEVGyOKHymdvwVT0CW4+RFrk+tu2eR8="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/terraform-docs" --version'' "0\\.24\\.0"; };
+  # topfew (GPL-3.0-only): finds the fields (or combinations of fields) which appear most often in a stream of records.
+  topfew = pkg { pname = "topfew"; version = "2.0.0"; src = gh "timbray/topfew" "refs/tags/v2.0.0" "89b9abe7304eb6bb50cc5b3152783e50600439955f73b6175c6db8aec75c0ac9";
+    vendorHash = null; subPkgs = "."; ldflags = "-s";
+    check = chk ''"$out/bin/topfew" --help'' "[Uu]sage"; };
+  # tt (MIT): typing test in the terminal written in Go.
+  tt = pkg { pname = "tt"; version = "0.4.2"; src = gh "lemnos/tt" "v0.4.2" "3f22aad820e64f41f6635cfec66efce4d4c45e903465434a222c44e134eb4397";
+    vendorHash = "sha256-lK/Yf+m0AaXcRfmWlYNdrV/ltBfvj/eBGRJRGZYGrE0="; subPkgs = "./src";
+    check = chk ''"$out/bin/src" --help'' "[Uu]sage"; };
+  # vultr-cli (Apache-2.0): official command line tool for Vultr services.
+  vultr-cli = pkg { pname = "vultr-cli"; version = "3.11.0"; src = gh "vultr/vultr-cli" "v3.11.0" "e29be650393530c424ea301b6d39092d2daceaa8059a4096bcfa3bbd54828fe2";
+    vendorHash = "sha256-ZIetgymqzqoOhpnvQgOdpXn354ncHQ27kYr9Ed6rd5s="; subPkgs = "."; ldflags = "-s -w";
+    check = chk ''"$out/bin/vultr-cli" version'' "3\\.11\\.0"; };
+  # wormhole-william (MIT): end-to-end encrypted file transfers.
+  wormhole-william = pkg { pname = "wormhole-william"; version = "1.0.8"; src = gh "psanford/wormhole-william" "v1.0.8" "42490f3c7e383d7d410e68a83fc18de1a5e9373934a9d71064e10948197759d1";
+    vendorHash = "sha256-9xfvK8cEd516cHYqd/yjBvJtATzFSQ0ITqAbvrr87fs="; subPkgs = ".";
+    check = chk ''"$out/bin/wormhole-william" --version'' "1\\.0\\.8"; };
+  # ytt (Apache-2.0): YAML templating tool that allows configuration of complex software via reusable templates with user-provided values.
+  ytt = pkg { pname = "ytt"; version = "0.55.4"; src = gh "carvel-dev/ytt" "refs/tags/v0.55.4" "4a970198c479330c49019be4ccb56513a58623e1e10300d1d188f30e14935a61";
+    vendorHash = null; subPkgs = "./cmd/ytt ./cmd/ytt-lambda-website"; ldflags = "-s -w -X carvel.dev/ytt/pkg/version.Version=0.55.4";
+    check = chk ''"$out/bin/ytt" --version'' "0\\.55\\.4"; };
+  # envsubst (MIT): environment variables substitution for Go.
+  envsubst = pkg { pname = "envsubst"; version = "1.4.3"; src = gh "a8m/envsubst" "v1.4.3" "01ca48a2beaeeda5b9fbca9c46bb9e9acc0e55354761d90e4beba5ca1c97aa8b";
+    vendorHash = null; subPkgs = "./cmd/envsubst";
+    check = chk ''"$out/bin/envsubst" --help'' "[-]fail-fast"; };
 }
