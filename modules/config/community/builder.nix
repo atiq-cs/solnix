@@ -149,6 +149,8 @@ in
   (lib.mkIf a.build { assertions = [ { assertion = cfg.queueAuth == "bearer" || idk;
     message = "solnix.cache.build.queueAuth = ${cfg.queueAuth} signs with the host's identity key: it needs solnix.builder.enable (an enrolled builder) and isolation = \"none\"."; } ]; })
   (lib.mkIf (a.build && config.solnix.builder.isolation == "none") {
+    # a machine someone works on gets the memory guard (services.solnix-memguard), which the builder then requires
+    services.solnix-memguard.enable = lib.mkDefault opp;
     assertions = [ { assertion = cfg.tickMin <= cfg.tickMax && cfg.busyTickMin <= cfg.busyTickMax;
       message = "solnix.cache.build: tickMin/busyTickMin must not exceed tickMax/busyTickMax."; }
       { assertion = cfg.evalAnchored != "on" || cfg.publish == "on";
@@ -166,7 +168,10 @@ in
       # (2026-11-05 00:53-00:59Z). The same reason as nix-daemon's in nix.nix (5ccd4fd).
       ignoreError = [ "core" "signal" ];
       requires = [ "svc:/milestone/network:default" "svc:/milestone/name-services:default" "svc:/system/filesystem/local:default" "svc:/system/nix-daemon:default" ];
-      dependencies = [ config.smf.networkOnline ];   # the DHCP lease and resolv.conf (solnix-net), not only network/physical
+      dependencies = [ config.smf.networkOnline ]   # the DHCP lease and resolv.conf (solnix-net), not only network/physical
+        # no build without the memory guard: it starts after it, and stops when the guard is disabled or fails (restart_on)
+        ++ lib.optional config.services.solnix-memguard.enable
+          { name = "solnix-memguard"; grouping = "require_all"; restartOn = "restart"; fmris = [ "svc:/site/solnix-memguard:default" ]; };
       environment = env // {
         BUILDER_PATH = path;
         CURL_CA_BUNDLE = "${s.nixChain.cacert}/etc/ssl/certs/ca-bundle.crt";

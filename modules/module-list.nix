@@ -35,6 +35,7 @@
   ./config/solnix-power.nix
   ./config/solnix-accounts.nix
   ./config/solnix-timedate.nix
+  ./config/solnix-memguard.nix
   ./config/tailscale.nix
   ./config/users.nix
   ./config/system-path.nix
